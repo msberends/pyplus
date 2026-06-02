@@ -1,0 +1,43 @@
+# Secrets and credentials — never commit
+.env
+*credentials*
+*.key
+
+# Database and user data
+data/
+*.db
+*.db-shm
+*.db-wal
+logs/
+
+# PLUS.nl API version cache (re-discovered automatically)
+~/.config/pyplus/
+api_versions.json
+
+# Systemd service file with real paths (use pyplus.service.example as template)
+*.service
+
+# Personal operational log (contains real account/server details)
+NOTES_FOR_ADMIN.md
+
+# ML artifacts and cache exports
+ml_artifacts/
+
+# Playwright
+trace.zip
+playwright-report/
+
+# Legacy test captures (not part of the app)
+*_capture.json
+*_result.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.venv/

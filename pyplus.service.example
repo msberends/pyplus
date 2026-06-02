@@ -1,0 +1,32 @@
+# PyPLUS systemd service — copy to /etc/systemd/system/pyplus.service and fill in the placeholders.
+#
+# Install:
+#   sudo cp pyplus.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now pyplus.service
+#
+# View logs:
+#   journalctl -u pyplus -f
+
+[Unit]
+Description=PyPLUS — personal PLUS.nl shopping assistant
+After=network.target
+
+[Service]
+Type=simple
+User=<USER>
+WorkingDirectory=<APP_DIR>
+
+# Loads all PYPLUS_* variables (copy .env.example → .env and fill in values)
+EnvironmentFile=<APP_DIR>/.env
+
+# stdout is not buffered so log lines appear immediately in journalctl
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=<APP_DIR>/.venv/bin/python -m pyplus
+
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
