@@ -41,6 +41,19 @@ async def _is_locked(user_id: int, resource: str) -> bool:
     return False
 
 
+async def _catalogue_is_stale(user_id: int, max_age_days: int = 7) -> bool:
+    """True when the product catalogue has never synced OK or is older than max_age_days."""
+    from pyplus.db import repo
+    from pyplus.db.engine import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        row = await repo.get_sync_state(db, user_id, "catalogue")
+    if not row or row.last_status != "ok" or not row.last_synced_at:
+        return True
+    age_days = (datetime.datetime.utcnow() - row.last_synced_at).total_seconds() / 86400
+    return age_days >= max_age_days
+
+
 async def _set_status(user_id: int, resource: str, status: str, detail: str | None = None) -> None:
     from pyplus.db import repo
     from pyplus.db.engine import AsyncSessionLocal
@@ -234,6 +247,7 @@ async def refresh_products(*, user_id: int, client, store_number: int) -> None:
                             sku,
                             name=match.name,
                             subtitle=match.subtitle,
+                            slug=getattr(match, "slug", "") or "",
                             image_url=match.image_url,
                             pack_size=existing.pack_size if existing else None,
                             pack_unit=existing.pack_unit if existing else None,
@@ -278,6 +292,42 @@ async def refresh_products(*, user_id: int, client, store_number: int) -> None:
     except Exception as exc:
         await _set_status(user_id, resource, "error", str(exc)[:500])
         log.error("[products] user=%d FAILED: %s", user_id, exc)
+        raise
+
+
+# ── Product catalogue (full store catalogue) ────────────────────────────────────
+
+
+async def refresh_product_catalogue(*, user_id: int, client, store_number: int) -> None:
+    """
+    Download the full store catalogue via direct API → product_cache.
+
+    Store-scoped and shared by all users at the same store (like promotions).
+    Powers instant local search without per-keystroke PLUS calls. Runs weekly —
+    the catalogue changes slowly; prices/availability are refreshed separately by
+    refresh_products for the user's own SKUs.
+    """
+    resource = "catalogue"
+    if await _is_locked(user_id, resource):
+        return
+
+    await _set_status(user_id, resource, "in_progress")
+    try:
+        products = await client.get_all_products_api(store_number=store_number)
+
+        from pyplus.db import repo
+        from pyplus.db.engine import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            written = await repo.upsert_product_cache(db, store_number, products)
+
+        await _set_status(user_id, resource, "ok", f"{written} products")
+        log.info(
+            "[catalogue] user=%d store=%d — %d products cached", user_id, store_number, written
+        )
+    except Exception as exc:
+        await _set_status(user_id, resource, "error", str(exc)[:500])
+        log.error("[catalogue] user=%d FAILED: %s", user_id, exc)
         raise
 
 
@@ -609,13 +659,27 @@ async def weekly_ntfy(*, user_id: int, client=None, store_number: int = 0) -> No
 async def full_preload(*, user_id: int, client, store_number: int) -> None:
     """Run all cache-warming jobs in dependency order for one user."""
     log.info("[full_preload] starting for user=%d store=%d", user_id, store_number)
-    for job, kwargs in [
+
+    jobs: list = [
         (refresh_purchase_catalogue, {"user_id": user_id, "client": client}),
         (refresh_orders, {"user_id": user_id, "client": client}),
         (refresh_promotions, {"user_id": user_id, "client": client, "store_number": store_number}),
         (refresh_products, {"user_id": user_id, "client": client, "store_number": store_number}),
-        (recompute_ml, {"user_id": user_id}),
-    ]:
+    ]
+
+    # The full catalogue changes slowly and is a heavy download — only refresh it
+    # when the cache is empty or older than ~7 days.
+    if await _catalogue_is_stale(user_id, max_age_days=7):
+        jobs.append(
+            (
+                refresh_product_catalogue,
+                {"user_id": user_id, "client": client, "store_number": store_number},
+            )
+        )
+
+    jobs.append((recompute_ml, {"user_id": user_id}))
+
+    for job, kwargs in jobs:
         try:
             await job(**kwargs)
         except Exception as exc:

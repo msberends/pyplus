@@ -1,0 +1,89 @@
+"""Unit tests for the product catalogue cache (upsert + search) on an in-memory DB."""
+
+import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from plus.models import Product
+from pyplus.db import repo
+from pyplus.db.models import Base
+
+
+@pytest_asyncio.fixture
+async def session_factory():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield async_sessionmaker(engine, expire_on_commit=False)
+    await engine.dispose()
+
+
+def _p(sku, name, brand="", available=True):
+    return Product(
+        sku=sku,
+        name=name,
+        subtitle="Per stuk",
+        brand=brand,
+        slug=f"{name.lower().replace(' ', '-')}-{sku}",
+        image_url=f"https://img/{sku}.png",
+        price=1.99,
+        is_available=available,
+    )
+
+
+@pytest.mark.asyncio
+async def test_upsert_then_search(session_factory):
+    products = [
+        _p("1", "Halfvolle melk", "Campina"),
+        _p("2", "Volle melk", "AH"),
+        _p("3", "Sinaasappelsap", "Appelsientje"),
+    ]
+    async with session_factory() as db:
+        written = await repo.upsert_product_cache(db, 720, products)
+    assert written == 3
+
+    async with session_factory() as db:
+        hits = await repo.search_product_cache(db, 720, "melk")
+        assert {h.sku for h in hits} == {"1", "2"}
+        # slug + image survive the round-trip (needed for clickable links + thumbnails)
+        assert hits[0].slug
+        assert hits[0].image_url
+
+        # Token-AND: both words must match
+        brand_hits = await repo.search_product_cache(db, 720, "melk campina")
+        assert {h.sku for h in brand_hits} == {"1"}
+
+        # Store isolation
+        assert await repo.search_product_cache(db, 999, "melk") == []
+
+
+@pytest.mark.asyncio
+async def test_upsert_is_idempotent(session_factory):
+    async with session_factory() as db:
+        await repo.upsert_product_cache(db, 720, [_p("1", "Melk")])
+        await repo.upsert_product_cache(db, 720, [_p("1", "Melk halfvol", available=False)])
+        assert await repo.count_product_cache(db, 720) == 1
+        hits = await repo.search_product_cache(db, 720, "melk")
+        assert hits[0].name == "Melk halfvol"
+        assert hits[0].is_available is False
+
+
+@pytest.mark.asyncio
+async def test_get_by_skus_flags_missing(session_factory):
+    async with session_factory() as db:
+        await repo.upsert_product_cache(db, 720, [_p("1", "Melk"), _p("2", "Brood")])
+        found = await repo.get_product_cache_by_skus(db, 720, ["1", "2", "999"])
+        assert set(found) == {"1", "2"}  # 999 is not carried → absent
+        assert await repo.get_product_cache_by_skus(db, 720, []) == {}
+
+
+@pytest.mark.asyncio
+async def test_available_sorts_first(session_factory):
+    async with session_factory() as db:
+        await repo.upsert_product_cache(
+            db,
+            720,
+            [_p("1", "Appel rood", available=False), _p("2", "Appel groen", available=True)],
+        )
+        hits = await repo.search_product_cache(db, 720, "appel")
+    assert hits[0].sku == "2"  # available first

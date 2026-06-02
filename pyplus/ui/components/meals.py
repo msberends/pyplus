@@ -190,7 +190,13 @@ async def create_meals_lane(session) -> None:
 
 
 def _render_all_slots(session, state: _MealsState, refresh_fn) -> None:
-    options = {d.id: d.name for d in state.dishes}
+    from pyplus.ui.format import dish_meta_chips
+
+    def _opt_label(d) -> str:
+        chips = dish_meta_chips(d)
+        return f"{d.name}   {'  '.join(chips)}" if chips else d.name
+
+    options = {d.id: _opt_label(d) for d in state.dishes}
 
     _section_header(t("lane.meals.dinner"))
     for slot in _DINNER_SLOTS:
@@ -222,7 +228,7 @@ def _slot_row(slot, day_label, date_str, state, options, session, refresh_fn) ->
             )
             if date_str:
                 ui.label(date_str).style(
-                    "font-size:9px;color:var(--c-text-4);line-height:1;margin-top:1px"
+                    "font-size:9px;color:var(--c-text-4);line-height:1;margin-top:1px;text-align:center"
                 )
 
         # Content
@@ -242,11 +248,20 @@ def _slot_row(slot, day_label, date_str, state, options, session, refresh_fn) ->
 
 
 def _filled_chip(slot, dish, state, session, refresh_fn) -> None:
+    from pyplus.ui.format import dish_meta_chips
+
     with ui.element("div").classes("sp-meals-chip"):
-        ui.label(dish.name).style(
-            "font-size:13px;font-weight:600;color:var(--c-text);flex:1;"
-            "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0"
-        )
+        with ui.element("div").style("flex:1;min-width:0;overflow:hidden"):
+            ui.label(dish.name).style(
+                "font-size:13px;font-weight:600;color:var(--c-text);"
+                "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            )
+            chips = dish_meta_chips(dish)
+            if chips:
+                ui.label("  ".join(chips)).style(
+                    "font-size:10px;color:var(--c-text-3);line-height:1.2;"
+                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                )
         with ui.element("div").style("display:flex;gap:1px;flex-shrink:0"):
             ui.button(
                 icon="swap_horiz",
@@ -333,38 +348,96 @@ async def _clear_slot(
 # ── Aggregation + cart add ─────────────────────────────────────────────────────
 
 
+@dataclass
+class _EffIng:
+    """A resolved ingredient fed to aggregate() (duck-types DishIngredient)."""
+
+    sku: str
+    display_name: str
+    amount: float
+    amount_unit: str
+    optional: bool = False
+
+
 async def _add_weekmenu_to_cart(session, state: _MealsState) -> None:
-    """Compute aggregation for all filled slots and show the confirmation dialog."""
+    """Resolve flexible/optional ingredients, then show the aggregation dialog."""
     filled = [(slot, dish) for slot, dish in state.slots.items() if dish is not None]
     if not filled:
         ui.notify("Geen gerechten geselecteerd", type="info", position="top")
         return
 
-    # Load ingredients + SKU facts from DB.
     dishes_with_ings: list[tuple[Dish, list]] = []
-    sku_set: set[str] = set()
-
     async with AsyncSessionLocal() as db:
-        seen_dish_ids: set[int] = set()
         for _, dish in filled:
-            if dish.id in seen_dish_ids:
-                # Dish appears in multiple slots — still aggregate double quantity.
-                ings = await repo.get_ingredients(db, dish.id)
-                dishes_with_ings.append((dish, ings))
-            else:
-                seen_dish_ids.add(dish.id)
-                ings = await repo.get_ingredients(db, dish.id)
-                dishes_with_ings.append((dish, ings))
-            sku_set.update(ing.sku for ing in ings if ing.sku)
+            ings = await repo.get_ingredients(db, dish.id)
+            dishes_with_ings.append((dish, ings))
 
-        sku_cache: dict[str, object] = {}
+    # Collect the ingredients that need a decision, deduped by row id (a dish in
+    # two slots shares the same DishIngredient rows).
+    flex_unique: dict[int, object] = {}
+    opt_unique: dict[int, object] = {}
+    for _, ings in dishes_with_ings:
+        for ing in ings:
+            if ing.flexible:
+                flex_unique.setdefault(ing.id, ing)
+            elif ing.optional and ing.sku:
+                opt_unique.setdefault(ing.id, ing)
+
+    if flex_unique or opt_unique:
+        _show_resolve_dialog(
+            session, dishes_with_ings, list(flex_unique.values()), list(opt_unique.values())
+        )
+    else:
+        await _finalize_aggregation(session, dishes_with_ings, {}, set())
+
+
+async def _finalize_aggregation(
+    session,
+    dishes_with_ings: list[tuple[Dish, list]],
+    flex_choice: dict[int, object],
+    opt_excluded: set[int],
+) -> None:
+    """Apply flexible/optional decisions, aggregate, and show the confirm dialog."""
+    resolved: list[tuple[Dish, list]] = []
+    for dish, ings in dishes_with_ings:
+        eff: list = []
+        for ing in ings:
+            if ing.flexible:
+                chosen = flex_choice.get(ing.id)
+                if chosen is not None:
+                    eff.append(
+                        _EffIng(
+                            sku=chosen.sku,
+                            display_name=chosen.name,
+                            amount=ing.amount,
+                            amount_unit=ing.amount_unit,
+                        )
+                    )
+            elif ing.optional:
+                if ing.id not in opt_excluded:
+                    eff.append(ing)
+            else:
+                eff.append(ing)
+        resolved.append((dish, eff))
+
+    sku_set = {e.sku for _, es in resolved for e in es if e.sku}
+    sku_cache: dict[str, object] = {}
+    async with AsyncSessionLocal() as db:
         for sku in sku_set:
             cached = await repo.get_ingredient_sku(db, session.user_id, sku)
             if cached:
                 sku_cache[sku] = cached
+        # Persist + cache any newly chosen flexible products so pack/price are known.
+        from pyplus.services.dishes import cache_ingredient_sku_from_product
 
-    agg = aggregate(dishes_with_ings, sku_cache)  # type: ignore[arg-type]
+        for prod in flex_choice.values():
+            if prod is not None and prod.sku and prod.sku not in sku_cache:
+                await cache_ingredient_sku_from_product(db, session.user_id, prod)
+                cached = await repo.get_ingredient_sku(db, session.user_id, prod.sku)
+                if cached:
+                    sku_cache[prod.sku] = cached
 
+    agg = aggregate(resolved, sku_cache, include_optional=True)  # type: ignore[arg-type]
     if not agg.lines:
         ui.notify(
             "Geen ingrediënten gevonden — controleer de product-koppelingen in Gerechten",
@@ -374,6 +447,193 @@ async def _add_weekmenu_to_cart(session, state: _MealsState) -> None:
         return
 
     _show_agg_dialog(session, agg)
+
+
+def _show_resolve_dialog(session, dishes_with_ings, flexibles: list, optionals: list) -> None:
+    """Ask the user to pick a product for each flexible ingredient and to
+    include/skip each optional one, before aggregating."""
+    flex_choice: dict[int, object] = {}  # ing.id → chosen Product
+    fstate: dict[int, dict] = {
+        f.id: {"query": "", "results": [], "searching": False} for f in flexibles
+    }
+    opt_excluded: set[int] = set()  # optional ing.ids the user unticked
+
+    with ui.dialog(value=True).props("persistent") as dlg:
+        with ui.card().style(
+            "min-width:360px;max-width:520px;width:100%;padding:0;overflow:hidden"
+        ):
+            with ui.element("div").style(
+                "display:flex;align-items:center;justify-content:space-between;"
+                "padding:1rem 1.25rem .75rem;border-bottom:1px solid var(--c-border)"
+            ):
+                ui.label("Ingrediënten kiezen").style(
+                    "font-size:17px;font-weight:700;color:var(--c-text);letter-spacing:-.2px"
+                )
+                ui.button(icon="close", on_click=dlg.close).props(
+                    "flat round dense size=sm color=grey"
+                )
+
+            with ui.scroll_area().style("max-height:62vh"):
+                with ui.element("div").style("padding:.75rem 1rem"):
+                    # ── Flexible ingredients ───────────────────────────────
+                    if flexibles:
+                        ui.label("Flexibele ingrediënten — kies een product").style(
+                            "font-size:12px;font-weight:600;color:var(--c-text-2);"
+                            "margin-bottom:.5rem;display:block"
+                        )
+
+                        @ui.refreshable
+                        def _flex_list() -> None:
+                            for f in flexibles:
+                                _render_flex_picker(
+                                    session, f, fstate[f.id], flex_choice, _flex_list
+                                )
+
+                        _flex_list()
+
+                    # ── Optional ingredients ───────────────────────────────
+                    if optionals:
+                        ui.label("Optionele ingrediënten — vink aan wat mee moet").style(
+                            "font-size:12px;font-weight:600;color:var(--c-text-2);"
+                            "margin:.75rem 0 .5rem;display:block"
+                        )
+                        for o in optionals:
+                            with ui.element("div").style(
+                                "display:flex;align-items:center;gap:.5rem;padding:.25rem 0"
+                            ):
+                                cb = ui.checkbox(value=True).props("dense")
+
+                                def _toggle(e, oid=o.id):
+                                    if e.value:
+                                        opt_excluded.discard(oid)
+                                    else:
+                                        opt_excluded.add(oid)
+
+                                cb.on("update:model-value", _toggle)
+                                ui.label(o.display_name).style(
+                                    "font-size:13px;color:var(--c-text);flex:1"
+                                )
+
+            with ui.element("div").style(
+                "display:flex;gap:.5rem;padding:.75rem 1rem;border-top:1px solid var(--c-border)"
+            ):
+                ui.button(t("action.cancel"), on_click=dlg.close).props(
+                    "flat rounded no-caps"
+                ).style("flex:1")
+
+                async def _continue() -> None:
+                    dlg.close()
+                    await _finalize_aggregation(
+                        session, dishes_with_ings, flex_choice, opt_excluded
+                    )
+
+                ui.button(
+                    "Doorgaan",
+                    icon="arrow_forward",
+                    on_click=lambda: asyncio.ensure_future(_continue()),
+                ).props("unelevated rounded color=primary no-caps").style("flex:2;font-weight:600")
+
+
+def _render_flex_picker(session, flex_ing, st: dict, flex_choice: dict, refresh_fn) -> None:
+    """One flexible-ingredient row: its label + a product search/select."""
+    chosen = flex_choice.get(flex_ing.id)
+    with ui.element("div").style(
+        "padding:.5rem .625rem;border:1px solid var(--c-border);border-radius:var(--r-md);"
+        "margin-bottom:.5rem;background:var(--c-surface)"
+    ):
+        with ui.element("div").style(
+            "display:flex;align-items:center;gap:.375rem;margin-bottom:.375rem"
+        ):
+            ui.icon("tune", size="15px").style("color:var(--c-brand-dark)")
+            ui.label(flex_ing.display_name).style(
+                "font-size:12px;font-weight:600;color:var(--c-text-2);flex:1;min-width:0"
+            )
+
+        if chosen is not None:
+            with ui.element("div").style("display:flex;align-items:center;gap:.5rem"):
+                if chosen.image_url:
+                    ui.image(chosen.image_url).style(
+                        "width:32px;height:32px;object-fit:contain;border-radius:4px;"
+                        "background:var(--c-border);flex-shrink:0"
+                    )
+                ui.label(chosen.name).style(
+                    "font-size:13px;color:var(--c-text);flex:1;min-width:0;"
+                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                )
+
+                def _clear(fid=flex_ing.id):
+                    flex_choice.pop(fid, None)
+                    refresh_fn.refresh()
+
+                ui.button("Wijzigen", on_click=_clear).props(
+                    "flat dense no-caps size=sm color=primary"
+                ).style("font-size:12px")
+            return
+
+        # Search input + results
+        with ui.element("div").style("position:relative"):
+            search_field = (
+                ui.input(placeholder=t("dishes.ingredient_search"), value=st["query"])
+                .props("outlined dense clearable")
+                .style("width:100%")
+            )
+
+            async def _on_search(e, fid=flex_ing.id, s=st):
+                s["query"] = e.value if hasattr(e, "value") else ""
+                if len((s["query"] or "").strip()) >= 2:
+                    s["searching"] = True
+                    refresh_fn.refresh()
+                    try:
+                        from pyplus.services.search import search_products
+
+                        s["results"] = await search_products(session, s["query"])
+                    except Exception:
+                        s["results"] = []
+                    s["searching"] = False
+                else:
+                    s["results"] = []
+                refresh_fn.refresh()
+
+            search_field.on("update:model-value", _on_search)
+
+            if st["searching"]:
+                ui.label("Zoeken…").style(
+                    "padding:.375rem .5rem;font-size:12px;color:var(--c-text-3)"
+                )
+            elif st["results"]:
+                with ui.element("div").style(
+                    "border:1px solid var(--c-border);border-radius:var(--r-md);"
+                    "margin-top:.25rem;max-height:180px;overflow-y:auto"
+                ):
+                    for prod in st["results"][:8]:
+
+                        def _pick(p=prod, fid=flex_ing.id, s=st):
+                            flex_choice[fid] = p
+                            s["results"] = []
+                            s["query"] = ""
+                            refresh_fn.refresh()
+
+                        with (
+                            ui.element("div")
+                            .style(
+                                "display:flex;align-items:center;gap:.5rem;padding:.375rem .5rem;"
+                                "cursor:pointer"
+                            )
+                            .on("click", _pick)
+                        ):
+                            if prod.image_url:
+                                ui.image(prod.image_url).style(
+                                    "width:28px;height:28px;object-fit:contain;border-radius:4px;"
+                                    "background:var(--c-border);flex-shrink:0"
+                                )
+                            ui.label(prod.name).style(
+                                "font-size:12px;flex:1;min-width:0;overflow:hidden;"
+                                "text-overflow:ellipsis;white-space:nowrap"
+                            )
+                            dot = "var(--c-brand-dark)" if prod.is_available else "var(--c-danger)"
+                            ui.element("div").style(
+                                f"width:6px;height:6px;border-radius:50%;background:{dot};flex-shrink:0"
+                            )
 
 
 def _show_agg_dialog(session, agg: AggResult) -> None:
@@ -593,12 +853,55 @@ async def _plan_week(session, state: "_MealsState", refresh_fn) -> None:
         ui.notify("Kan weekmenu niet plannen", type="warning", position="top")
 
 
-async def _show_ical_dialog(session, week_start: datetime.date) -> None:
-    """Show the iCal subscription URL dialog + one-off download option."""
+def render_ical_subscription_body(user_id: int) -> None:
+    """Render the iCal subscription URL widget (inline, no dialog wrapper).
+
+    Shared between the meals lane dialog and the settings page.
+    """
     from pyplus.security.tokens import make_ical_token
 
-    token = make_ical_token(session.user_id)
+    token = make_ical_token(user_id)
 
+    if token is None:
+        with ui.element("div").style(
+            "display:flex;align-items:flex-start;gap:.5rem;padding:.625rem .75rem;"
+            "background:#fffbeb;border-radius:var(--r-md);border:1px solid #fde68a"
+        ):
+            ui.icon("warning", size="16px").style("color:#92400e;flex-shrink:0;margin-top:1px")
+            ui.label(
+                "Geen PYPLUS_SECRET_KEY ingesteld. Stel deze in om abonneer-links te activeren."
+            ).style("font-size:13px;color:#92400e;line-height:1.5")
+        return
+
+    ui.label("Deze URL toevoegen aan je agenda-app:").style(
+        "font-size:13px;font-weight:600;color:var(--c-text);margin-bottom:.5rem;display:block"
+    )
+
+    with ui.element("div").style(
+        "display:flex;align-items:center;gap:.375rem;margin-bottom:.75rem"
+    ):
+        url_display = ui.input().props("outlined dense readonly").style("flex:1;font-size:12px")
+        ui.button(
+            icon="content_copy",
+            on_click=lambda: asyncio.ensure_future(_copy_ical_url(url_display.value)),
+        ).props("flat round dense size=sm color=primary").tooltip("URL kopiëren")
+
+    async def _set_url() -> None:
+        origin = await ui.run_javascript("window.location.origin")
+        url_display.set_value(f"{origin}/menu.ics?uid={user_id}&token={token}")
+
+    asyncio.ensure_future(_set_url())
+
+    ui.label(
+        "iOS: Agenda → Accounts → Voeg account toe → Andere → Agenda-abonnement\n"
+        "Android: Google Agenda → Andere agenda → Via URL"
+    ).style(
+        "font-size:11px;color:var(--c-text-3);line-height:1.5;white-space:pre-line;display:block"
+    )
+
+
+async def _show_ical_dialog(session, week_start: datetime.date) -> None:
+    """Show the iCal subscription URL dialog + one-off download option."""
     with ui.dialog(value=True) as dlg:
         with ui.card().style("max-width:460px;width:100%;padding:0;overflow:hidden"):
             # Header
@@ -614,71 +917,20 @@ async def _show_ical_dialog(session, week_start: datetime.date) -> None:
                 )
 
             with ui.element("div").style("padding:1rem"):
-                if token is None:
-                    # Secret key not configured
-                    with ui.element("div").style(
-                        "display:flex;align-items:flex-start;gap:.5rem;padding:.625rem .75rem;"
-                        "background:#fffbeb;border-radius:var(--r-md);border:1px solid #fde68a"
-                    ):
-                        ui.icon("warning", size="16px").style(
-                            "color:#92400e;flex-shrink:0;margin-top:1px"
-                        )
-                        ui.label(
-                            "Geen PYPLUS_SECRET_KEY ingesteld. "
-                            "Stel deze in om abonneer-links te activeren."
-                        ).style("font-size:13px;color:#92400e;line-height:1.5")
-                else:
-                    ui.label("Voeg deze URL toe aan je agenda-app:").style(
-                        "font-size:13px;font-weight:600;color:var(--c-text);margin-bottom:.5rem;display:block"
-                    )
+                render_ical_subscription_body(session.user_id)
 
-                    # URL display + copy
-                    url_box = ui.element("div").style(
-                        "display:flex;align-items:center;gap:.375rem;margin-bottom:.75rem"
-                    )
-                    with url_box:
-                        url_display = (
-                            ui.input()
-                            .props("outlined dense readonly")
-                            .style("flex:1;font-size:12px")
-                        )
-                        ui.button(
-                            icon="content_copy",
-                            on_click=lambda: asyncio.ensure_future(
-                                _copy_ical_url(url_display.value)
-                            ),
-                        ).props("flat round dense size=sm color=primary").tooltip("Kopieer URL")
-
-                    # Fill in URL using JS to get the current origin
-                    async def _set_url() -> None:
-                        origin = await ui.run_javascript("window.location.origin")
-                        url = f"{origin}/menu.ics?uid={session.user_id}&token={token}"
-                        url_display.set_value(url)
-
-                    asyncio.ensure_future(_set_url())
-
-                    ui.label(
-                        "iOS: Agenda → Accounts → Voeg account toe → Andere → Agenda-abonnement\n"
-                        "Android: Google Agenda → Andere agenda → Via URL"
-                    ).style(
-                        "font-size:11px;color:var(--c-text-3);line-height:1.5;"
-                        "white-space:pre-line;margin-bottom:.75rem;display:block"
-                    )
-
-                    ui.separator()
-
-                # One-off download always available
-                with ui.element("div").style("margin-top:.75rem"):
-                    ui.label("Of download eenmalig:").style(
-                        "font-size:12px;color:var(--c-text-3);margin-bottom:.375rem;display:block"
-                    )
-                    ui.button(
-                        f"Download .ics (week {week_start.strftime('%-d %b')})",
-                        icon="download",
-                        on_click=lambda ws=week_start, uid=session.user_id: asyncio.ensure_future(
-                            _one_off_download(uid, ws)
-                        ),
-                    ).props("flat rounded no-caps color=primary size=sm").style("font-size:12px")
+                # One-off download
+                ui.separator().style("margin:.75rem 0 .5rem")
+                ui.label("Of download eenmalig:").style(
+                    "font-size:12px;color:var(--c-text-3);margin-bottom:.375rem;display:block"
+                )
+                ui.button(
+                    f"Download .ics (week {week_start.strftime('%-d %b')})",
+                    icon="download",
+                    on_click=lambda ws=week_start, uid=session.user_id: asyncio.ensure_future(
+                        _one_off_download(uid, ws)
+                    ),
+                ).props("flat rounded no-caps color=primary size=sm").style("font-size:12px")
 
             # Footer
             with ui.element("div").style(

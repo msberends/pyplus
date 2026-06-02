@@ -41,6 +41,46 @@ def _sku_cache(sku: str, pack_size: float, pack_unit: str, price: float):
     return s
 
 
+def test_include_optional_flag():
+    """Optional ingredients are excluded by default and included on request."""
+    dish = _dish(1, "Pasta")
+    ings = [
+        _ing("100", "Pasta", 250, "g"),
+        _ing("200", "Parmezaan", 50, "g", optional=True),
+    ]
+    cache = {
+        "100": _sku_cache("100", 500, "g", 1.0),
+        "200": _sku_cache("200", 100, "g", 2.5),
+    }
+
+    default = aggregate([(dish, ings)], cache)
+    assert {ln.sku for ln in default.lines} == {"100"}
+
+    with_opt = aggregate([(dish, ings)], cache, include_optional=True)
+    assert {ln.sku for ln in with_opt.lines} == {"100", "200"}
+
+
+def test_resolved_flexible_ingredient_aggregates():
+    """A flexible placeholder resolved to a real SKU feeds aggregation like any other."""
+    from dataclasses import dataclass
+
+    @dataclass
+    class EffIng:  # mirrors meals._EffIng duck-typing
+        sku: str
+        display_name: str
+        amount: float
+        amount_unit: str
+        optional: bool = False
+
+    dish = _dish(1, "Curry")
+    resolved = [EffIng(sku="900", display_name="Kipfilet", amount=300, amount_unit="g")]
+    cache = {"900": _sku_cache("900", 650, "g", 3.99)}
+
+    res = aggregate([(dish, resolved)], cache, include_optional=True)
+    assert len(res.lines) == 1
+    assert res.lines[0].sku == "900"
+
+
 # ── fmt_amount ────────────────────────────────────────────────────────────────
 
 

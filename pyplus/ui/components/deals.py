@@ -36,6 +36,7 @@ class _DealsState:
     expanded: set[str] = field(default_factory=set)
     promo_products: dict[str, list[PromotionProduct]] = field(default_factory=dict)
     loading_slug: str = ""
+    card_refreshers: dict = field(default_factory=dict)  # slug → per-card @ui.refreshable
 
 
 def create_deals_lane(session) -> None:
@@ -79,8 +80,23 @@ def create_deals_lane(session) -> None:
                             "font-size:13px;color:var(--c-text-3);margin-top:.25rem"
                         )
                 else:
-                    for promo in state.promotions:
-                        _render_promo(promo, state, session, cart_service, _render)
+                    # Free-delivery offers have no products to act on — skip them.
+                    visible = [p for p in state.promotions if not p.is_free_delivery]
+                    if not visible:
+                        with ui.element("div").classes("sp-lane-placeholder"):
+                            ui.label("🏷️").classes("sp-lane-placeholder-icon")
+                            ui.label(t("lane.deals.empty")).style(
+                                "font-size:13px;color:var(--c-text-3);margin-top:.25rem"
+                            )
+                    for promo in visible:
+                        # Each card is its own refreshable so expanding one doesn't
+                        # re-render (and re-flash the images of) the whole lane.
+                        @ui.refreshable
+                        def _card(p=promo) -> None:
+                            _render_promo(p, state, session, cart_service, _card)
+
+                        state.card_refreshers[promo.slug] = _card
+                        _card()
 
             _render()
 
@@ -217,7 +233,7 @@ def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, r
                     # Group deal: expand/collapse button
                     n_products = len(state.promo_products.get(promo.slug, []))
                     label = (
-                        f"{n_products}" if n_products else ("Minder" if is_expanded else "Bekijk")
+                        f"{n_products}" if n_products else ("Minder" if is_expanded else "Bekijken")
                     )
                     icon = "expand_less" if is_expanded else "expand_more"
                     with ui.element("div").style(
@@ -512,6 +528,36 @@ async def _apply_ml_sort(session, promotions: list) -> list:
         return promotions
 
 
+async def _enrich_from_catalogue(session, products: list[PromotionProduct]) -> None:
+    """Fill availability + a sensible price from the store catalogue.
+
+    The promotion-detail endpoint returns IsAvailable=False and NewPrice=0 for all
+    children, so we override from product_cache (store-accurate) when present.
+    """
+    store = getattr(session, "store_number", 0) or 0
+    if not store or not products:
+        return
+    try:
+        from pyplus.db import repo
+        from pyplus.db.engine import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            cat = await repo.get_product_cache_by_skus(db, store, [p.sku for p in products])
+    except Exception as exc:
+        log.debug("Promo catalogue enrich failed: %s", exc)
+        return
+
+    for p in products:
+        row = cat.get(p.sku)
+        if row is None:
+            continue
+        p.is_available = row.is_available
+        if p.price_new <= 0 and row.price:
+            p.price_new = row.price
+        if not p.image_url and row.image_url:
+            p.image_url = row.image_url
+
+
 async def _toggle_expand(slug: str, state: _DealsState, session, refresh_fn) -> None:
     """Expand/collapse a group deal. Fetches products on first expand."""
     if slug in state.expanded:
@@ -526,9 +572,11 @@ async def _toggle_expand(slug: str, state: _DealsState, session, refresh_fn) -> 
         refresh_fn.refresh()
         try:
             products = await session.client.get_promotion_products_api(slug)
-            state.promo_products[slug] = [
-                p for p in products if p.sku and not p.sku.startswith("0")
-            ]
+            products = [p for p in products if p.sku and not p.sku.startswith("0")]
+            # The promo-detail API returns IsAvailable=False / NewPrice=0 for every
+            # child — useless. Trust the store catalogue for availability + price.
+            await _enrich_from_catalogue(session, products)
+            state.promo_products[slug] = products
         except Exception as exc:
             log.warning("Promo products fetch failed (%s): %s", slug, exc)
             state.promo_products[slug] = []

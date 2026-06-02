@@ -1,7 +1,7 @@
 """
 Lane ② — Vaste boodschappen: the user's curated staple products.
 
-Each row shows a cart-synced stepper.  The "Voeg alles toe" button adds every
+Each row shows a cart-synced stepper.  The "Alles toevoegen" button adds every
 product not yet in the cart at its default_qty in one shot.
 """
 
@@ -23,22 +23,207 @@ log = logging.getLogger(__name__)
 async def create_staples_lane(session) -> None:
     """Render Lane ② — Vaste boodschappen."""
     cart_service = getattr(session, "cart_service", None)
+    store = session.store_number or 0
+    list_ref: dict = {"fn": None}  # current row-list refresher (for cart-change updates)
 
-    products: list = []
-    sku_cache: dict = {}
-    load_error = ""
-    try:
-        async with AsyncSessionLocal() as db:
-            products = await repo.get_fixed_products(db, session.user_id)
-            sku_cache = await repo.get_ingredient_skus_by_skus(
-                db, session.user_id, [p.sku for p in products if p.sku]
+    # Register the cart listener once; it points at whichever _list is current.
+    session.add_cart_listener(lambda: list_ref["fn"].refresh() if list_ref["fn"] else None)
+
+    with ui.element("div").classes("sp-lane"):
+        # ── Header ────────────────────────────────────────────────────────
+        with ui.element("div").classes("sp-lane-header"):
+            with ui.element("div").style(
+                "display:flex;align-items:center;justify-content:space-between;gap:.5rem"
+            ):
+                ui.label(t("lane.staples.title")).classes("sp-lane-title")
+                with ui.element("div").style("display:flex;align-items:center;gap:.25rem"):
+                    add_btn = (
+                        ui.button(icon="add")
+                        .props("flat round dense size=sm color=primary")
+                        .tooltip("Vaste boodschap toevoegen")
+                    )
+                    addall_holder = ui.element("div")
+
+        body = ui.element("div").classes("sp-lane-body sp-staples-body")
+
+        @ui.refreshable
+        async def _body() -> None:
+            # ── Load data ──────────────────────────────────────────────
+            products: list = []
+            sku_cache: dict = {}
+            catalogue: dict = {}
+            catalogue_known = False
+            load_error = ""
+            try:
+                async with AsyncSessionLocal() as db:
+                    products = await repo.get_fixed_products(db, session.user_id)
+                    skus = [p.sku for p in products if p.sku]
+                    sku_cache = await repo.get_ingredient_skus_by_skus(db, session.user_id, skus)
+                    if store:
+                        catalogue = await repo.get_product_cache_by_skus(db, store, skus)
+                        catalogue_known = await repo.count_product_cache(db, store) > 0
+            except Exception as exc:
+                log.error("Staples lane load failed: %s", exc)
+                load_error = "Vaste boodschappen konden niet worden geladen."
+
+            replenish_scores = await _load_replenish(session)
+
+            # ── "Alles toevoegen" lives in the header; rebuild it each load ──
+            addall_holder.clear()
+            with addall_holder:
+                if products:
+                    ui.button(
+                        "Alles toevoegen",
+                        icon="add_shopping_cart",
+                        on_click=lambda: asyncio.ensure_future(
+                            _add_all(products, sku_cache, session, cart_service)
+                        ),
+                    ).props("flat dense no-caps color=primary size=sm").style(
+                        "font-size:12px;font-weight:600"
+                    )
+
+            if load_error:
+                with ui.element("div").classes("sp-lane-error"):
+                    ui.icon("error_outline", size="24px").style("color:var(--c-danger);opacity:.6")
+                    ui.label(load_error).style("font-size:13px;color:var(--c-text-3)")
+                return
+
+            # ── Add-product search (toggled by the header + button) ────────
+            _render_add_search(session, store, _body)
+
+            if not products:
+                with ui.element("div").classes("sp-lane-placeholder"):
+                    ui.label("📋").classes("sp-lane-placeholder-icon")
+                    ui.label("Nog geen vaste boodschappen.").style(
+                        "font-size:13px;color:var(--c-text-3);margin-top:.25rem"
+                    )
+                return
+
+            if replenish_scores:
+                from pyplus.ml.replenish import sort_fixed_products_by_due
+
+                sorted_products = [
+                    p
+                    for sku in sort_fixed_products_by_due(
+                        [p.sku for p in products], replenish_scores
+                    )
+                    for p in products
+                    if p.sku == sku
+                ]
+            else:
+                sorted_products = products
+
+            @ui.refreshable
+            def _list() -> None:
+                for fp in sorted_products:
+                    rs = replenish_scores.get(fp.sku)
+                    _render_row(
+                        fp,
+                        sku_cache.get(fp.sku),
+                        catalogue.get(fp.sku),
+                        catalogue_known,
+                        session,
+                        cart_service,
+                        rs,
+                        _body,
+                    )
+
+            list_ref["fn"] = _list
+            _list()
+
+        # The + button toggles the add-search visibility via module state.
+        add_btn.on("click", lambda: _toggle_add_search(_body))
+
+        with body:
+            await _body()
+
+
+# Add-search open/closed state, keyed per render via a simple flag on the closure.
+_ADD_OPEN: dict[int, bool] = {}
+
+
+def _toggle_add_search(body_refresh) -> None:
+    key = id(body_refresh)
+    _ADD_OPEN[key] = not _ADD_OPEN.get(key, False)
+    body_refresh.refresh()
+
+
+def _render_add_search(session, store: int, body_refresh) -> None:
+    if not _ADD_OPEN.get(id(body_refresh)):
+        return
+
+    state = {"results": [], "searching": False}
+
+    with ui.element("div").style(
+        "padding:.375rem .25rem .5rem;border-bottom:1px solid var(--c-border);margin-bottom:.25rem"
+    ):
+        with ui.element("div").style("position:relative"):
+            field = (
+                ui.input(placeholder="Zoek een product om toe te voegen…")
+                .props("outlined dense clearable autofocus")
+                .style("width:100%")
             )
-    except Exception as exc:
-        log.error("Staples lane load failed: %s", exc)
-        load_error = "Vaste boodschappen konden niet worden geladen."
 
-    # Load replenishment artifact if ML is enabled
-    replenish_scores: dict = {}
+            @ui.refreshable
+            def _results() -> None:
+                if state["searching"]:
+                    ui.label("Zoeken…").style(
+                        "padding:.375rem .5rem;font-size:12px;color:var(--c-text-3)"
+                    )
+                    return
+                for prod in state["results"][:8]:
+
+                    async def _pick(p=prod) -> None:
+                        async with AsyncSessionLocal() as db:
+                            await repo.add_fixed_product(db, session.user_id, p.sku, p.name)
+                            from pyplus.services.dishes import cache_ingredient_sku_from_product
+
+                            await cache_ingredient_sku_from_product(db, session.user_id, p)
+                        _ADD_OPEN[id(body_refresh)] = False
+                        ui.notify(f"{p.name} toegevoegd", type="positive", position="top")
+                        body_refresh.refresh()
+
+                    with (
+                        ui.element("div")
+                        .style(
+                            "display:flex;align-items:center;gap:.5rem;padding:.3rem .5rem;cursor:pointer"
+                        )
+                        .on("click", _pick)
+                    ):
+                        if prod.image_url:
+                            ui.image(prod.image_url).style(
+                                "width:28px;height:28px;object-fit:contain;border-radius:4px;"
+                                "background:var(--c-border);flex-shrink:0"
+                            )
+                        ui.label(prod.name).style(
+                            "font-size:12px;flex:1;min-width:0;overflow:hidden;"
+                            "text-overflow:ellipsis;white-space:nowrap"
+                        )
+
+            _results()
+
+            async def _on_input(e) -> None:
+                q = (e.value if hasattr(e, "value") else "") or ""
+                if len(q.strip()) < 2:
+                    state["results"] = []
+                    _results.refresh()
+                    return
+                state["searching"] = True
+                _results.refresh()
+                try:
+                    from pyplus.services.search import search_products
+
+                    state["results"] = await search_products(session, q)
+                except Exception:
+                    state["results"] = []
+                state["searching"] = False
+                _results.refresh()
+
+            field.on("update:model-value", _on_input)
+
+
+async def _load_replenish(session) -> dict:
+    """Load the replenishment artifact when ML replenishment is enabled."""
     try:
         from pyplus.db import repo as _repo
         from pyplus.db.engine import AsyncSessionLocal as _ASSL
@@ -50,117 +235,123 @@ async def create_staples_lane(session) -> None:
         if _settings.ml_enabled and _settings.ml_replenish:
             from pyplus.ml.artifacts import load_artifact
 
-            _art = await load_artifact(session.user_id, "replenishment")
-            if _art:
-                replenish_scores = _art
+            return await load_artifact(session.user_id, "replenishment") or {}
     except Exception:
         pass
-
-    with ui.element("div").classes("sp-lane"):
-        # ── Header ────────────────────────────────────────────────────────
-        with ui.element("div").classes("sp-lane-header"):
-            with ui.element("div").style(
-                "display:flex;align-items:center;justify-content:space-between"
-            ):
-                ui.label(t("lane.staples.title")).classes("sp-lane-title")
-                if products:
-                    ui.button(
-                        "Voeg alles toe",
-                        icon="add_shopping_cart",
-                        on_click=lambda: asyncio.ensure_future(
-                            _add_all(products, sku_cache, session, cart_service)
-                        ),
-                    ).props("flat dense no-caps color=primary size=sm").style(
-                        "font-size:12px;font-weight:600"
-                    )
-
-        # ── Body ──────────────────────────────────────────────────────────
-        with ui.element("div").classes("sp-lane-body sp-staples-body"):
-            if load_error:
-                with ui.element("div").classes("sp-lane-error"):
-                    ui.icon("error_outline", size="24px").style("color:var(--c-danger);opacity:.6")
-                    ui.label(load_error).style("font-size:13px;color:var(--c-text-3)")
-                return
-
-            if not products:
-                with ui.element("div").classes("sp-lane-placeholder"):
-                    ui.label("📋").classes("sp-lane-placeholder-icon")
-                    ui.label("Nog geen vaste boodschappen.").style(
-                        "font-size:13px;color:var(--c-text-3);margin-top:.25rem"
-                    )
-            else:
-                # Sort: due items first when replenishment is active
-                if replenish_scores:
-                    from pyplus.ml.replenish import sort_fixed_products_by_due
-
-                    sorted_products = [
-                        p
-                        for sku in sort_fixed_products_by_due(
-                            [p.sku for p in products], replenish_scores
-                        )
-                        for p in products
-                        if p.sku == sku
-                    ]
-                else:
-                    sorted_products = products
-
-                @ui.refreshable
-                def _list() -> None:
-                    for fp in sorted_products:
-                        rs = replenish_scores.get(fp.sku)
-                        _render_row(fp, sku_cache.get(fp.sku), session, cart_service, rs)
-
-                _list()
-                session.add_cart_listener(lambda: _list.refresh())
+    return {}
 
 
 def _render_row(
     fp: FixedProduct,
     cached: IngredientSku | None,
+    catalogue_row,
+    catalogue_known: bool,
     session,
     cart_service,
     replenish_score=None,
+    body_refresh=None,
 ) -> None:
     cart_qty = next((it.quantity for it in session.cart.items if it.sku == fp.sku), 0)
     is_syncing = fp.sku in session.syncing_skus
 
-    # Resolved display info (from sku_cache if available)
-    name = cached.name if cached else fp.display_name
-    subtitle = cached.subtitle if cached else ""
-    price = cached.last_price or 0.0 if cached else 0.0
-    image = cached.image_url if cached else ""
+    # Prefer the store catalogue (fresh, store-accurate) over the per-user sku_cache.
+    name = (catalogue_row.name if catalogue_row else None) or (
+        cached.name if cached else fp.display_name
+    )
+    subtitle = (catalogue_row.subtitle if catalogue_row else None) or (
+        cached.subtitle if cached else ""
+    )
+    if catalogue_row:
+        price = catalogue_row.price or 0.0
+    else:
+        price = cached.last_price or 0.0 if cached else 0.0
+    image = (catalogue_row.image_url if catalogue_row else None) or (
+        cached.image_url if cached else ""
+    )
+    slug = (catalogue_row.slug if catalogue_row else None) or (cached.slug if cached else "")
+
+    # Availability: catalogue is authoritative. Not in catalogue (once synced) =
+    # the store no longer carries it → "vervallen". In catalogue = use its flag.
+    discontinued = catalogue_known and catalogue_row is None
+    if catalogue_row is not None:
+        available = catalogue_row.is_available
+    elif cached and cached.last_seen_available is not None:
+        available = cached.last_seen_available
+    else:
+        available = None
+
+    from pyplus.i18n import t
+    from pyplus.ui.format import plus_product_url
+
+    product_url = plus_product_url(slug, fp.sku)
 
     is_due = replenish_score is not None and replenish_score.is_due
     row_style = "background:var(--c-brand-tint);border-radius:var(--r-sm)" if is_due else ""
 
     with ui.element("div").classes("sp-staples-item").style(row_style):
-        # Availability dot
-        if cached and cached.last_seen_available is not None:
-            dot_cls = "sp-avail-dot-ok" if cached.last_seen_available else "sp-avail-dot-no"
-            ui.element("div").classes(f"sp-avail-dot {dot_cls}")
-        else:
-            ui.element("div").classes("sp-avail-dot")
+        # Product thumbnail (with availability dot overlaid in the corner)
+        with ui.element("div").style("position:relative;width:34px;height:34px;flex-shrink:0"):
+            if image:
+                ui.image(image).style(
+                    "width:34px;height:34px;border-radius:var(--r-sm);"
+                    "object-fit:contain;background:var(--c-surface-2)"
+                )
+            else:
+                ui.element("div").style(
+                    "width:34px;height:34px;border-radius:var(--r-sm);background:var(--c-border)"
+                )
+            if not discontinued and available is not None:
+                dot_cls = "sp-avail-dot-ok" if available else "sp-avail-dot-no"
+                ui.element("div").classes(f"sp-avail-dot {dot_cls}").style(
+                    "position:absolute;top:-2px;right:-2px"
+                )
 
         # Name + subtitle + replenishment reason
         with ui.element("div").style("flex:1;min-width:0;overflow:hidden"):
-            ui.label(name).style(
-                "font-size:13px;font-weight:500;color:var(--c-text);"
-                "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3"
-            )
-            reason_line = subtitle
-            if replenish_score and replenish_score.reason:
-                reason_line = replenish_score.reason
-            if reason_line:
-                ui.label(reason_line).style("font-size:11px;color:var(--c-text-3);line-height:1.2")
+            if product_url:
+                ui.link(name, product_url, new_tab=True).style(
+                    "font-size:13px;font-weight:500;color:var(--c-text);text-decoration:none;"
+                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;"
+                    "display:block"
+                ).tooltip("Bekijken op plus.nl")
+            else:
+                ui.label(name).style(
+                    "font-size:13px;font-weight:500;color:var(--c-text);"
+                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3"
+                )
+            if discontinued:
+                ui.label(t("status.discontinued")).classes("sp-badge sp-badge-unavailable").style(
+                    "font-size:10px;margin-top:1px;display:inline-block"
+                )
+            else:
+                reason_line = subtitle
+                if replenish_score and replenish_score.reason:
+                    reason_line = replenish_score.reason
+                if reason_line:
+                    ui.label(reason_line).style(
+                        "font-size:11px;color:var(--c-text-3);line-height:1.2"
+                    )
 
         # Price
-        if price > 0:
+        if price > 0 and not discontinued:
             ui.label(f"€ {price:.2f}".replace(".", ",")).style(
                 "font-size:12px;color:var(--c-text-3);flex-shrink:0;margin-right:.25rem"
             )
 
         # Stepper
         _render_stepper(fp, cart_qty, is_syncing, name, subtitle, price, image, cart_service)
+
+        # Remove from staples
+        if body_refresh is not None:
+
+            async def _delete(s=fp.sku) -> None:
+                async with AsyncSessionLocal() as db:
+                    await repo.remove_fixed_product(db, session.user_id, s)
+                body_refresh.refresh()
+
+            ui.button(icon="close", on_click=lambda: asyncio.ensure_future(_delete())).props(
+                "flat round dense size=xs color=grey-5"
+            ).tooltip("Verwijderen uit vaste boodschappen")
 
 
 def _render_stepper(fp, cart_qty, syncing, name, subtitle, price, image, cart_service) -> None:

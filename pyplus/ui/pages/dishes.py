@@ -8,7 +8,6 @@ resolution (substitutions) happens at add-to-cart time in M7.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass, field
 
@@ -56,9 +55,7 @@ async def create_dishes_page() -> None:
                     show_archived = ui.checkbox("Archief tonen").style("font-size:13px")
                     ui.button(
                         t("dishes.new"),
-                        on_click=lambda: asyncio.ensure_future(
-                            _open_editor(user_id, session, None, dish_grid_refresh)
-                        ),
+                        on_click=lambda: _open_editor(user_id, session, None, dish_grid_refresh),
                     ).props("unelevated rounded color=primary no-caps").style(
                         "font-size:13px;font-weight:600"
                     )
@@ -73,7 +70,7 @@ async def create_dishes_page() -> None:
             # Re-render when archive toggle changes
             show_archived.on(
                 "update:model-value",
-                lambda _: asyncio.ensure_future(dish_grid_refresh.refresh()),
+                lambda _: dish_grid_refresh.refresh(),
             )
 
 
@@ -89,9 +86,7 @@ async def _render_dish_grid(user_id, session, include_archived, refresh_fn) -> N
             ui.label("Nog geen gerechten.").style("font-size:15px;color:var(--c-text-3)")
             ui.button(
                 t("dishes.new"),
-                on_click=lambda: asyncio.ensure_future(
-                    _open_editor(user_id, session, None, refresh_fn)
-                ),
+                on_click=lambda: _open_editor(user_id, session, None, refresh_fn),
             ).props("unelevated rounded color=primary no-caps")
         return
 
@@ -106,6 +101,7 @@ async def _render_dish_card(dish, user_id, session, refresh_fn) -> None:
     async with AsyncSessionLocal() as db:
         ingredients = await repo.get_ingredients(db, dish.id)
         avail, unavail, unknown = await repo.get_dish_availability(db, user_id, dish.id)
+        discontinued = await repo.get_dish_discontinued_skus(db, session.store_number or 0, dish.id)
 
     total = len(ingredients)
 
@@ -138,6 +134,20 @@ async def _render_dish_card(dish, user_id, session, refresh_fn) -> None:
         # Name
         ui.label(dish.name).classes("sp-dish-card-name").style("margin-bottom:.25rem")
 
+        # Planning metadata chips (prep time / meat / vegetables)
+        from pyplus.ui.format import dish_meta_chips
+
+        chips = dish_meta_chips(dish)
+        if chips:
+            with ui.element("div").style(
+                "display:flex;flex-wrap:wrap;gap:.25rem;margin-bottom:.5rem"
+            ):
+                for chip in chips:
+                    ui.label(chip).style(
+                        "font-size:11px;color:var(--c-text-2);background:var(--c-surface-2);"
+                        "border-radius:var(--r-sm);padding:1px 7px"
+                    )
+
         # Ingredient count + availability
         with ui.element("div").style(
             "display:flex;align-items:center;gap:.5rem;margin-bottom:.625rem"
@@ -147,7 +157,11 @@ async def _render_dish_card(dish, user_id, session, refresh_fn) -> None:
             )
 
             if total > 0:
-                if unavail > 0:
+                if discontinued:
+                    ui.label(t("dishes.discontinued_count", n=len(discontinued))).classes(
+                        "sp-badge sp-badge-unavailable"
+                    ).style("font-size:10px").tooltip(t("status.discontinued"))
+                elif unavail > 0:
                     ui.label(t("dishes.partial_unavail", n=unavail)).classes(
                         "sp-badge sp-badge-unavailable"
                     ).style("font-size:10px")
@@ -162,24 +176,18 @@ async def _render_dish_card(dish, user_id, session, refresh_fn) -> None:
         with ui.element("div").style("display:flex;gap:.375rem"):
             ui.button(
                 t("action.edit"),
-                on_click=lambda d=dish: asyncio.ensure_future(
-                    _open_editor(user_id, session, d.id, refresh_fn)
-                ),
+                on_click=lambda d=dish: _open_editor(user_id, session, d.id, refresh_fn),
             ).props("flat dense no-caps color=primary").style("font-size:12px")
 
             ui.button(
                 t("dishes.duplicate"),
-                on_click=lambda d=dish: asyncio.ensure_future(
-                    _duplicate(user_id, d.id, refresh_fn)
-                ),
+                on_click=lambda d=dish: _duplicate(user_id, d.id, refresh_fn),
             ).props("flat dense no-caps color=grey").style("font-size:12px")
 
             label = t("dishes.restore") if dish.archived else t("dishes.archive")
             ui.button(
                 label,
-                on_click=lambda d=dish: asyncio.ensure_future(
-                    _toggle_archive(user_id, d, refresh_fn)
-                ),
+                on_click=lambda d=dish: _toggle_archive(user_id, d, refresh_fn),
             ).props("flat dense no-caps color=negative").style("font-size:12px")
 
 
@@ -219,7 +227,9 @@ class _IngRow:
     pack_unit: str | None
     optional: bool
     sort_order: int
+    flexible: bool = False  # placeholder: product chosen at add-to-cart time
     # Transient — not stored
+    discontinued: bool = False  # not in store catalogue (no longer carried)
     relinking: bool = False
     search_query: str = ""
     search_results: list = field(default_factory=list)
@@ -238,11 +248,20 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
             return
         name_val = dish.name
         notes_val = dish.prep_notes
+        prep_val = dish.prep_minutes
+        meat_val = dish.meat_type
+        veg_val = dish.veg_count
     else:
         dish = None
         raw_ings = []
         name_val = ""
         notes_val = ""
+        prep_val = None
+        meat_val = None
+        veg_val = None
+
+    # Mutable holder for the optional planning metadata, mutated by the selects below.
+    meta = {"prep_minutes": prep_val, "meat_type": meat_val, "veg_count": veg_val}
 
     # Build mutable ingredient row state
     rows: list[_IngRow] = []
@@ -262,9 +281,19 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
                         pack_size=ing.pack_size,
                         pack_unit=ing.pack_unit,
                         optional=ing.optional,
+                        flexible=ing.flexible,
                         sort_order=ing.sort_order,
                     )
                 )
+            # Flag ingredients the store catalogue no longer carries.
+            store = session.store_number or 0
+            if store and await repo.count_product_cache(db, store) > 0:
+                present = await repo.get_product_cache_by_skus(
+                    db, store, [r.sku for r in rows if r.sku]
+                )
+                for r in rows:
+                    if r.sku and r.sku not in present:
+                        r.discontinued = True
 
     # ── Dialog ────────────────────────────────────────────────────────
     with ui.dialog(value=True).props("persistent").classes("sp-editor-dialog") as dlg:
@@ -292,6 +321,7 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
                             dish_id,
                             name_input.value,
                             notes_input.value,
+                            meta,
                             rows,
                             dlg,
                             refresh_fn,
@@ -324,6 +354,9 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
                     "font-size:11px;color:var(--c-text-4);margin-top:-.625rem;margin-bottom:1rem"
                 )
 
+                # Planning metadata (prep time / meat / vegetables) — all optional.
+                _render_meta_fields(meta)
+
                 # Ingredients header
                 with ui.element("div").style(
                     "display:flex;align-items:center;justify-content:space-between;"
@@ -346,12 +379,56 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
 
                 _ingredient_list()
 
-                # Add ingredient button
-                with ui.element("div").style("margin-top:.625rem"):
+                # Add ingredient buttons
+                with ui.element("div").style(
+                    "display:flex;gap:.5rem;align-items:center;margin-top:.625rem"
+                ):
                     ui.button(
                         f"+ {t('dishes.add_ingredient')}",
                         on_click=lambda: _add_new_row(rows, _ingredient_list),
                     ).props("flat no-caps color=primary").style("font-size:13px")
+                    ui.button(
+                        f"+ {t('dishes.add_flexible')}",
+                        on_click=lambda: _add_flexible_row(rows, _ingredient_list),
+                    ).props("flat no-caps color=secondary").style("font-size:13px").tooltip(
+                        t("dishes.flexible_hint")
+                    )
+
+
+def _render_meta_fields(meta: dict) -> None:
+    """Render the optional prep-time / meat / vegetable selects in one row."""
+    from pyplus.db.models import MEAT_TYPES, PREP_TIME_BUCKETS
+    from pyplus.ui.format import meat_emoji, meat_label, prep_time_label, veg_emoji
+
+    unset = t("dishes.meta_unset")
+
+    prep_opts = {None: unset} | {m: prep_time_label(m) for m in PREP_TIME_BUCKETS}
+    meat_opts = {None: unset} | {m: f"{meat_emoji(m)} {meat_label(m)}".strip() for m in MEAT_TYPES}
+    veg_opts = {None: unset} | {n: (veg_emoji(n) or "➖") for n in (0, 1, 2, 3)}
+
+    with ui.element("div").style(
+        "display:grid;grid-template-columns:repeat(3,1fr);gap:.625rem;margin-bottom:1rem"
+    ):
+        prep_sel = (
+            ui.select(prep_opts, value=meta["prep_minutes"], label=t("dishes.prep_time_label"))
+            .props("outlined dense options-dense")
+            .style("width:100%")
+        )
+        prep_sel.on("update:model-value", lambda e: meta.update(prep_minutes=e.value))
+
+        meat_sel = (
+            ui.select(meat_opts, value=meta["meat_type"], label=t("dishes.meat_label"))
+            .props("outlined dense options-dense")
+            .style("width:100%")
+        )
+        meat_sel.on("update:model-value", lambda e: meta.update(meat_type=e.value))
+
+        veg_sel = (
+            ui.select(veg_opts, value=meta["veg_count"], label=t("dishes.veg_label"))
+            .props("outlined dense options-dense")
+            .style("width:100%")
+        )
+        veg_sel.on("update:model-value", lambda e: meta.update(veg_count=e.value))
 
 
 def _add_new_row(rows: list[_IngRow], refresh_fn) -> None:
@@ -374,9 +451,96 @@ def _add_new_row(rows: list[_IngRow], refresh_fn) -> None:
     refresh_fn.refresh()
 
 
+def _add_flexible_row(rows: list[_IngRow], refresh_fn) -> None:
+    rows.append(
+        _IngRow(
+            id=None,
+            dish_id=None,
+            sku="",
+            display_name="",
+            image_url="",
+            amount=1.0,
+            amount_unit="stuks",
+            pack_size=None,
+            pack_unit=None,
+            optional=False,
+            sort_order=len(rows),
+            flexible=True,
+        )
+    )
+    refresh_fn.refresh()
+
+
+def _render_flexible_row(row: _IngRow, idx: int, rows: list, refresh_fn) -> None:
+    """A placeholder ingredient: free-text label now, product chosen at cart-add."""
+    with ui.element("div").style(
+        "display:flex;align-items:center;gap:.5rem;"
+        "padding:.625rem .75rem;border:1px dashed var(--c-brand);"
+        "border-radius:var(--r-md);margin-bottom:.5rem;background:var(--c-brand-tint)"
+    ):
+        ui.icon("tune", size="20px").style("color:var(--c-brand-dark);flex-shrink:0")
+
+        with ui.element("div").style(
+            "flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"
+        ):
+            ui.label(t("dishes.flexible_badge")).style(
+                "font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;"
+                "color:var(--c-brand-dark)"
+            )
+            label_input = (
+                ui.input(placeholder=t("dishes.flexible_placeholder"), value=row.display_name)
+                .props("dense borderless")
+                .style("width:100%;font-size:13px")
+            )
+            label_input.on(
+                "blur", lambda e, r=row: setattr(r, "display_name", label_input.value or "")
+            )
+
+        # Amount + unit (the placeholder still carries a quantity/unit)
+        amount_input = (
+            ui.input(value=_fmt_amount(row.amount))
+            .props("outlined dense")
+            .style("width:56px;flex-shrink:0")
+        )
+
+        def _amount_change(e, r=row):
+            try:
+                r.amount = float((e.value or "").replace(",", "."))
+            except (ValueError, AttributeError):
+                pass
+
+        amount_input.on("blur", _amount_change)
+        unit_select = (
+            ui.select(_UNITS, value=row.amount_unit if row.amount_unit in _UNITS else _UNITS[0])
+            .props("outlined dense options-dense")
+            .style("width:72px;flex-shrink:0")
+        )
+        unit_select.on("update:model-value", lambda e, r=row: setattr(r, "amount_unit", e.value))
+
+        with ui.element("div").style("display:flex;gap:2px;flex-shrink:0"):
+            if idx > 0:
+                ui.button(
+                    icon="arrow_upward", on_click=lambda i=idx: _move_row(rows, i, -1, refresh_fn)
+                ).props("flat dense size=sm")
+            if idx < len(rows) - 1:
+                ui.button(
+                    icon="arrow_downward", on_click=lambda i=idx: _move_row(rows, i, +1, refresh_fn)
+                ).props("flat dense size=sm")
+            ui.button(icon="delete", on_click=lambda i=idx: _remove_row(rows, i, refresh_fn)).props(
+                "flat dense size=sm color=negative"
+            )
+
+
+def _fmt_amount(amount: float) -> str:
+    return str(int(amount) if amount == int(amount) else amount)
+
+
 def _render_ingredient_row(
     row: _IngRow, idx: int, rows: list, session, user_id: int, refresh_fn
 ) -> None:
+    if row.flexible:
+        _render_flexible_row(row, idx, rows, refresh_fn)
+        return
     with ui.element("div").style(
         "display:flex;flex-direction:column;gap:.5rem;"
         "padding:.625rem .75rem;border:1px solid var(--c-border);"
@@ -408,9 +572,9 @@ def _render_ingredient_row(
                             r.searching = True
                             refresh_fn.refresh()
                             try:
-                                r.search_results = await session.client.search_products_api(
-                                    r.search_query, session.store_number
-                                )
+                                from pyplus.services.search import search_products
+
+                                r.search_results = await search_products(session, r.search_query)
                             except Exception:
                                 r.search_results = []
                             r.searching = False
@@ -452,6 +616,7 @@ def _render_ingredient_row(
                                     r.display_name = p.name
                                     r.image_url = p.image_url
                                     r.relinking = False
+                                    r.discontinued = False
                                     r.search_query = ""
                                     r.search_results = []
                                     # Infer unit from subtitle
@@ -518,7 +683,13 @@ def _render_ingredient_row(
                         "font-size:13px;font-weight:500;overflow:hidden;"
                         "text-overflow:ellipsis;white-space:nowrap"
                     )
-                    if row.pack_size and row.pack_unit:
+                    if row.discontinued:
+                        ui.label(t("status.discontinued")).classes(
+                            "sp-badge sp-badge-unavailable"
+                        ).style("font-size:10px;display:inline-block").tooltip(
+                            "Niet in catalogus — kies een ander product"
+                        )
+                    elif row.pack_size and row.pack_unit:
                         ui.label(f"Per {row.pack_size:g} {row.pack_unit}").style(
                             "font-size:11px;color:var(--c-text-3)"
                         )
@@ -620,6 +791,7 @@ async def _save_dish(
     dish_id: int | None,
     name: str,
     notes: str,
+    meta: dict,
     rows: list[_IngRow],
     dlg,
     refresh_fn,
@@ -631,9 +803,26 @@ async def _save_dish(
 
     async with AsyncSessionLocal() as db:
         if dish_id is None:
-            dish = await repo.create_dish(db, user_id, name=name, prep_notes=notes)
+            dish = await repo.create_dish(
+                db,
+                user_id,
+                name=name,
+                prep_notes=notes,
+                prep_minutes=meta.get("prep_minutes"),
+                meat_type=meta.get("meat_type"),
+                veg_count=meta.get("veg_count"),
+            )
         else:
-            dish = await repo.update_dish(db, user_id, dish_id, name=name, prep_notes=notes)
+            dish = await repo.update_dish(
+                db,
+                user_id,
+                dish_id,
+                name=name,
+                prep_notes=notes,
+                prep_minutes=meta.get("prep_minutes"),
+                meat_type=meta.get("meat_type"),
+                veg_count=meta.get("veg_count"),
+            )
 
         if not dish:
             ui.notify(t("status.error"), type="negative")
@@ -646,18 +835,23 @@ async def _save_dish(
         await db.flush()
 
         for i, row in enumerate(rows):
-            if not row.sku:
-                continue  # skip unbound ingredients
+            # Keep product-bound rows (have a sku) and flexible rows (have a label).
+            if row.flexible:
+                if not (row.display_name or "").strip():
+                    continue  # empty flexible placeholder — drop it
+            elif not row.sku:
+                continue  # unbound product row — drop it
             await repo.add_ingredient(
                 db,
                 dish.id,
-                sku=row.sku,
+                sku="" if row.flexible else row.sku,
                 display_name=row.display_name,
                 amount=row.amount,
                 amount_unit=row.amount_unit,
                 pack_size=row.pack_size,
                 pack_unit=row.pack_unit,
                 optional=row.optional,
+                flexible=row.flexible,
                 sort_order=i,
             )
 

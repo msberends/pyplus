@@ -330,6 +330,15 @@ class PlusClient:
         # Session state captured from intercepted request/response bodies
         self._session = SessionState()
 
+        # Cart primed by _parse_cart_response; consumed once by get_cart_api()
+        self._primed_cart: Optional["Cart"] = None
+        # Task handle for the DataActionGetCartById parse — awaited in get_session_state()
+        self._cart_parse_task: Optional[asyncio.Task] = None
+        # Ground-truth search request body captured from the real browser PLP call.
+        # Used to verify/repair _build_search_payload against a live session — a
+        # mismatched screenData payload silently returns all items as unavailable.
+        self._real_search_payload: Optional[dict] = None
+
     # ------------------------------------------------------------------
     # Context manager
     # ------------------------------------------------------------------
@@ -445,6 +454,17 @@ class PlusClient:
                         ):
                             self._session.search_api_version = av
                             version_cache.save_from_session(self._session)
+                    # Capture the real browser PLP request body once — the ground
+                    # truth for verifying our hand-built search payload.
+                    if (
+                        "DataActionGetProductListAndCategoryInfo" in url
+                        and self._real_search_payload is None
+                    ):
+                        self._real_search_payload = body
+                        print(
+                            "[diag] captured real browser search payload — "
+                            "compare with _build_search_payload to fix availability"
+                        )
                     params = body.get("inputParameters", {})
                     if params.get("CheckoutId") and not self._session.checkout_id:
                         self._session.checkout_id = params["CheckoutId"]
@@ -478,7 +498,9 @@ class PlusClient:
                 "ActionCheckoutItem_Remove",
             )
         ):
-            asyncio.ensure_future(self._parse_cart_response(response))
+            task = asyncio.ensure_future(self._parse_cart_response(response))
+            if "DataActionGetCartById" in url:
+                self._cart_parse_task = task
         if (
             response.status == 200
             and "ActionStoreWrapper_GetGeneralDetails" in url
@@ -498,7 +520,10 @@ class PlusClient:
             data = body.get("data", {})
             checkout = data.get("Checkout") or data.get("Cart") or next(iter(data.values()), {})
             if isinstance(checkout, dict):
+                if "Version" in checkout:
+                    self._session.checkout_version = checkout["Version"]
                 self._update_line_item_ids(checkout)
+                self._primed_cart = _parse_cart_from_checkout(checkout)
         except Exception:
             pass
 
@@ -640,7 +665,26 @@ class PlusClient:
 
         Requires checkout_id (populated by get_session_state). Uses
         DataActionGetCartById which is the same call the cart page fires on load.
+
+        If the browser already fired DataActionGetCartById during session setup
+        (intercepted by _parse_cart_response), returns that primed cart instead
+        of making a redundant second call — this avoids failures when the cached
+        apiVersion is stale and the browser hasn't yet primed a fresh one.
         """
+        import logging as _logging
+
+        _log = _logging.getLogger(__name__)
+
+        if self._primed_cart is not None:
+            _log.info("get_cart_api — primed cart beschikbaar, geen fetch nodig")
+            cart = self._primed_cart
+            self._primed_cart = None
+            return cart
+
+        _log.info(
+            "get_cart_api — geen primed cart; fetch starten (cart_get_api_version=%s)",
+            bool(self._session.cart_get_api_version),
+        )
         import time as _time
 
         if not self._session.cart_get_api_version:
@@ -688,6 +732,7 @@ class PlusClient:
             payload,
         )
         elapsed = _time.perf_counter() - t0
+        _log.info("get_cart_api — page.evaluate klaar in %.0f ms", elapsed * 1000)
         print(f"[API] DataActionGetCartById → 200 in {elapsed * 1000:.0f}ms")
 
         vi = result.get("versionInfo", {})
@@ -1265,42 +1310,194 @@ class PlusClient:
             )
         return products
 
-    def _build_search_payload(self, query: str, store_number: int) -> dict:
+    @staticmethod
+    def _promo_week() -> dict:
+        """Current PLUS promo week (Wed–Tue) as the API's Period struct."""
+        import datetime as _dt
+
+        today = _dt.date.today()
+        # Most recent Wednesday on/before today (weekday: Mon=0 … Wed=2).
+        start = today - _dt.timedelta(days=(today.weekday() - 2) % 7)
+        return {
+            "FromDate": start.isoformat(),
+            "ToDate": (start + _dt.timedelta(days=6)).isoformat(),
+        }
+
+    def _build_search_payload(
+        self, query: str, store_number: int, page: int = 1, page_size: int = 24
+    ) -> dict:
+        """Build the PLP search payload, matching the live browser request exactly.
+
+        The OutSystems SearchPage screen is fussy: the search term is ``SearchKeyword``
+        (not ``SearchTerm``), ``IsSearch`` must be True, pagination is ``PageNumber`` /
+        ``URLPageNumber``, and the full variable set must be present or the server
+        returns 12 unavailable dummy skeletons. Results come back in ``ProductList_All``.
+        ``page_size`` is unused — the server fixes the page size.
+        """
         return {
             "versionInfo": self._session.version_info_for_search(),
             "viewName": "MainFlow.SearchPage",
             "screenData": {
                 "variables": {
-                    "SearchTerm": query,
-                    "CurrentPageNumber": 1,
-                    "NumberOfProductsPerPage": 24,
-                    "StoreNumber": store_number,
-                    "OnlineChannelId": _CHANNEL_ID,
-                    "CheckoutOrderInfo": {
-                        "CheckoutId": self._session.checkout_id,
-                        "OrderEditId": "",
-                        "IsOrderEditMode": False,
-                    },
-                    "ProductList": {
+                    "AppliedFiltersList": {
                         "List": [],
-                        "EmptyListItem": _SEARCH_EMPTY_ITEM,
+                        "EmptyListItem": {
+                            "Name": "",
+                            "Quantity": "0",
+                            "IsSelected": False,
+                            "URL": "",
+                        },
                     },
-                    "IsUnderAge": False,
-                    "IsDesktop": True,
-                    "_isDesktopInDataFetchStatus": 1,
-                    "IsTablet": False,
-                    "_isTabletInDataFetchStatus": 1,
-                    "IsPhone": False,
-                    "_isPhoneInDataFetchStatus": 1,
-                    "IsCustomerUnderAge": False,
-                    "_isCustomerUnderAgeInDataFetchStatus": 1,
-                    "IsTimetraveler": False,
-                    "_isTimetravelerInDataFetchStatus": 1,
+                    "LocalCategoryID": 0,
+                    "LocalCategoryName": "",
+                    "LocalCategoryParentId": 0,
+                    "LocalCategoryTitle": "",
+                    "IsLoadingMore": page > 1,
+                    "IsFirstDataFetched": False,
+                    "ShowFilters": False,
+                    "IsShowData": False,
+                    "StoreNumber": store_number,
+                    "StoreChannel": _CHANNEL_ID,
+                    "CheckoutId": self._session.checkout_id,
+                    "IsOrderEditMode": False,
+                    "ProductList_All": {"List": [], "EmptyListItem": _SEARCH_EMPTY_ITEM},
+                    "PageNumber": page,
+                    "SelectedSort": "",
+                    "OrderEditId": "",
+                    "IsListRendered": False,
+                    "IsAlreadyFetch": False,
+                    "IsPromotionBannersFetched": False,
+                    "Period": self._promo_week(),
+                    "UserStoreId": self._session.user_store_id,
+                    "FilterExpandedList": {"List": [], "EmptyListItem": False},
+                    "ItemsInCart": {"List": []},
+                    "HideDummy": False,
                     "OneWelcomeUserId": self._session.onewelcome_user_id,
                     "_oneWelcomeUserIdInDataFetchStatus": 1,
+                    "CategorySlug": "",
+                    "_categorySlugInDataFetchStatus": 1,
+                    "SearchKeyword": query,
+                    "_searchKeywordInDataFetchStatus": 1,
+                    "IsDesktop": True,
+                    "_isDesktopInDataFetchStatus": 1,
+                    "IsSearch": True,
+                    "_isSearchInDataFetchStatus": 1,
+                    "URLPageNumber": page,
+                    "_uRLPageNumberInDataFetchStatus": 1,
+                    "FilterQueryURL": "",
+                    "_filterQueryURLInDataFetchStatus": 1,
+                    "IsMobile": False,
+                    "_isMobileInDataFetchStatus": 1,
+                    "IsTablet": False,
+                    "_isTabletInDataFetchStatus": 1,
+                    "Monitoring_FlowTypeId": 2,
+                    "_monitoring_FlowTypeIdInDataFetchStatus": 1,
+                    "IsCustomerUnderAge": False,
+                    "_isCustomerUnderAgeInDataFetchStatus": 1,
                 }
             },
         }
+
+    async def get_all_products_api(
+        self,
+        store_number: int | None = None,
+        max_pages: int = 1200,
+    ) -> list["Product"]:
+        """
+        Download the full store catalogue via the PLP search endpoint.
+
+        Pages through DataActionGetProductListAndCategoryInfo with an empty
+        SearchKeyword — which returns the complete product list for the store
+        (~11k products, 12 per page) — and accumulates every product. Direct API
+        only; no per-product browser navigation.
+
+        Loop length is driven by the server's TotalPages; dedupes by SKU and stops
+        early on an empty page or one that adds nothing new (defensive against the
+        server clamping the page number).
+        """
+        import time as _time
+
+        effective_store = store_number or self._session.store_number
+
+        if not self._session.search_api_version:
+            print("[*] search apiVersion onbekend — navigeer naar zoekresultaten…")
+            await self._page.goto(f"{_SEARCH_PAGE_URL}melk")
+            await self._page.wait_for_load_state("networkidle", timeout=25_000)
+            await asyncio.sleep(1)
+
+        by_sku: dict[str, Product] = {}
+        page = 1
+        total_pages = max_pages
+        t_all = _time.perf_counter()
+
+        while page <= min(total_pages, max_pages):
+            payload = self._build_search_payload("", effective_store, page=page)
+            result = await self._page.evaluate(
+                """async (payload) => {
+                    const cookieMap = {};
+                    document.cookie.split('; ').forEach(c => {
+                        const eq = c.indexOf('=');
+                        if (eq > 0) cookieMap[c.slice(0, eq)] = c.slice(eq + 1);
+                    });
+                    const nr2 = decodeURIComponent(cookieMap['nr2Users'] || '');
+                    const crf = nr2.split(';').find(p => p.trim().startsWith('crf=')) || '';
+                    const csrfToken = crf.slice(crf.indexOf('=') + 1);
+                    const resp = await fetch(
+                        'https://www.plus.nl/screenservices/ECP_Composition_CW/ProductLists'
+                        + '/PLP_Content/DataActionGetProductListAndCategoryInfo',
+                        {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'x-csrftoken': csrfToken,
+                                'outsystems-locale': 'nl-NL',
+                            },
+                            body: JSON.stringify(payload),
+                            credentials: 'include',
+                        }
+                    );
+                    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                    return await resp.json();
+                }""",
+                payload,
+            )
+
+            vi = result.get("versionInfo", {})
+            if vi.get("hasApiVersionChanged"):
+                self._session.search_api_version = ""
+                version_cache.save_from_session(self._session)
+                raise RuntimeError("hasApiVersionChanged — cache gewist, herstart sessie")
+
+            data = result.get("data", {})
+            if page == 1:
+                total_pages = int(data.get("TotalPages") or 0) or max_pages
+                print(
+                    f"[API] catalogue: {data.get('TotalNumberItems')} products "
+                    f"across {total_pages} pages"
+                )
+
+            products = _parse_search_results(data, effective_store)
+            if not products:
+                break
+
+            new_on_page = 0
+            for p in products:
+                if p.sku and p.sku not in by_sku:
+                    by_sku[p.sku] = p
+                    new_on_page += 1
+
+            if page % 50 == 0 or page == 1:
+                print(f"[API] catalogue page {page}/{total_pages}: {len(by_sku)} products so far")
+
+            if new_on_page == 0:
+                break
+            page += 1
+
+        print(
+            f"[API] catalogue download: {len(by_sku)} products in "
+            f"{(_time.perf_counter() - t_all):.1f}s"
+        )
+        return list(by_sku.values())
 
     def _build_purchase_history_payload(self, page: int, page_size: int) -> dict:
         import datetime as _dt
@@ -1501,19 +1698,32 @@ class PlusClient:
         Return the session state captured from intercepted requests.
         Call this after login — the page's automatic screenservices calls
         will have populated module_version, checkout_id, etc.
-        If checkout_id is still missing, navigates to the cart page to trigger it.
+        Always navigates to the cart page so DataActionGetCartById fires,
+        capturing a fresh cart_get_api_version and priming the cart.
         """
-        if not self._session.checkout_id:
-            # Cart page load triggers DataActionGetCartById which carries CheckoutId
-            await self._page.goto(_CART_URL)
-            await self._page.wait_for_load_state("networkidle", timeout=15_000)
+        import logging as _logging
 
-        # Load cached apiVersions — avoids browser primes on subsequent sessions
+        _log = _logging.getLogger(__name__)
+
+        _log.info("get_session_state — navigeren naar winkelwagen (%s)", _CART_URL)
+        await self._page.goto(_CART_URL)
+        _log.info("get_session_state — wachten op networkidle")
+        await self._page.wait_for_load_state("networkidle", timeout=15_000)
+        _log.info("get_session_state — networkidle bereikt; versiecache laden")
+
+        # Load cached apiVersions — only fills fields not already captured above
         version_cache.apply_to_session(self._session)
 
-        # Give pending _parse_cart_response futures a chance to complete
-        # (they're scheduled with ensure_future from the response event handler)
+        # Give pending _parse_cart_response futures a chance to complete.
+        # We do not await _cart_parse_task explicitly — it may block indefinitely
+        # if Playwright can't read the response body.  get_cart_api() will use
+        # _primed_cart opportunistically if it's ready, or fall back to a fresh
+        # fetch (which now works because cart_get_api_version was just captured).
         await asyncio.sleep(0)
+        _log.info(
+            "get_session_state — asyncio.sleep(0) done; primed_cart=%s",
+            self._primed_cart is not None,
+        )
 
         self._session.cookies = await self.get_cookies_as_dict()
 
@@ -1865,9 +2075,11 @@ def _parse_search_results(data: dict, store_number: int = 0) -> list["Product"]:
     Tries multiple response key paths defensively since the exact structure
     is inferred (run explore_search.py to confirm against a live session).
     """
-    # Try the most likely paths first
+    # Try the most likely paths first. The live SearchPage returns results in
+    # ProductList_All; older/other shapes use ProductList.
     raw = (
-        data.get("ProductList", {}).get("List")
+        data.get("ProductList_All", {}).get("List")
+        or data.get("ProductList", {}).get("List")
         or data.get("ProductListAndCategoryInfo", {}).get("ProductList", {}).get("List")
         or []
     )
@@ -1882,22 +2094,27 @@ def _parse_search_results(data: dict, store_number: int = 0) -> list["Product"]:
 
     products = []
     for item in raw:
-        img = item.get("ImageURL", "")
+        # Live SearchPage wraps each product's fields in PLP_Str; older shapes are flat.
+        p = item.get("PLP_Str") if isinstance(item.get("PLP_Str"), dict) else item
+        sku = p.get("SKU") or ""
+        if not sku:
+            continue  # skip dummy/skeleton rows
+        img = p.get("ImageURL") or ""
         if img.startswith("//"):
             img = "https:" + img
         categories = [
-            c.get("Name", "") for c in item.get("Categories", {}).get("List", []) if c.get("Name")
+            c.get("Name", "") for c in (p.get("Categories") or {}).get("List", []) if c.get("Name")
         ]
         products.append(
             Product(
-                sku=item.get("SKU", ""),
-                name=item.get("Name", ""),
-                subtitle=item.get("Product_Subtitle", ""),
-                brand=item.get("Brand", ""),
-                slug=item.get("Slug", ""),
+                sku=sku,
+                name=p.get("Name") or "",
+                subtitle=p.get("Product_Subtitle") or "",
+                brand=p.get("Brand") or "",
+                slug=p.get("Slug") or "",
                 image_url=img,
-                price=_safe_float(item.get("OriginalPrice", item.get("NewPrice", "0"))),
-                is_available=item.get("IsAvailable", False),
+                price=_safe_float(p.get("OriginalPrice") or p.get("NewPrice") or "0"),
+                is_available=bool(p.get("IsAvailable")),
                 store_number=store_number,
                 categories=categories,
             )

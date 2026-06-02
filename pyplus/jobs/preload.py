@@ -73,6 +73,31 @@ async def _run_weekly_ntfy_all_users() -> None:
             log.error("[scheduler] weekly_ntfy for user=%d failed: %s", user.id, exc)
 
 
+async def _run_catalogue_all_users() -> None:
+    """APScheduler entry point: weekly full-catalogue sync per distinct store."""
+    from pyplus.db import repo
+    from pyplus.db.engine import AsyncSessionLocal
+    from pyplus.jobs.registry import refresh_product_catalogue
+
+    async with AsyncSessionLocal() as db:
+        users = await repo.get_users_with_credentials(db)
+
+    if not users:
+        log.info("[scheduler] no users with credentials — skipping catalogue sync")
+        return
+
+    # One sync per store is enough (product_cache is store-scoped); dedupe stores.
+    seen_stores: set[int] = set()
+    for user in users:
+        if user.store_number is None or user.store_number in seen_stores:
+            continue
+        seen_stores.add(user.store_number)
+        try:
+            await _login_and_run(refresh_product_catalogue, user.id, user.store_number)
+        except Exception as exc:
+            log.error("[scheduler] catalogue sync for store=%d failed: %s", user.store_number, exc)
+
+
 async def _run_full_preload_all_users() -> None:
     """APScheduler entry point: full preload for every user with stored credentials."""
     from pyplus.db import repo
@@ -130,9 +155,20 @@ def start_scheduler() -> None:
         misfire_grace_time=3600,
     )
 
+    # Weekly full-catalogue sync every Monday at 03:30 (heavy ~5–7 min download;
+    # the nightly full_preload skips it while the cache is < 7 days old).
+    _scheduler.add_job(
+        _run_catalogue_all_users,
+        CronTrigger(day_of_week="mon", hour=3, minute=30),
+        id="catalogue_weekly_monday",
+        replace_existing=True,
+        misfire_grace_time=7200,
+    )
+
     _scheduler.start()
     log.info(
-        "APScheduler started — full_preload at 02:30, weekly_ntfy Thursdays at 07:00 Amsterdam"
+        "APScheduler started — full_preload at 02:30, catalogue Mondays at 03:30, "
+        "weekly_ntfy Thursdays at 07:00 Amsterdam"
     )
 
 

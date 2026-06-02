@@ -15,6 +15,7 @@ from pyplus.i18n import t
 def create_cart_panel(session) -> None:
     """Render the cart panel and wire it to the session's live cart."""
     cart_service = getattr(session, "cart_service", None)
+    savings_by_sku: dict = {}  # sku → savings.Saving for the current cart
 
     with ui.element("div").classes("sp-cart-panel"):
         # ── Header ─────────────────────────────────────────────────────
@@ -40,7 +41,7 @@ def create_cart_panel(session) -> None:
                     return
 
                 for item in cart.items:
-                    _render_cart_item(item, session, cart_service)
+                    _render_cart_item(item, session, cart_service, savings_by_sku.get(item.sku))
 
             _items()
 
@@ -59,6 +60,18 @@ def create_cart_panel(session) -> None:
                 savings_label = ui.label("")
                 savings_label.classes("sp-cart-savings")
             savings_row.set_visibility(False)
+
+            # ── Savings / optimise ─────────────────────────────────────
+            optimise_btn = (
+                ui.button(
+                    t("cart.optimise"),
+                    icon="savings",
+                    on_click=lambda: _show_optimise_dialog(session, cart_service, savings_by_sku),
+                )
+                .props("flat rounded no-caps color=primary")
+                .classes("sp-optimise-btn")
+            )
+            optimise_btn.set_visibility(False)
 
             ui.button(
                 t("cart.checkout"),
@@ -95,6 +108,39 @@ def create_cart_panel(session) -> None:
         else:
             savings_row.set_visibility(False)
         _items.refresh()
+        asyncio.ensure_future(_recompute_savings())
+
+    async def _recompute_savings() -> None:
+        """Recompute cheaper-pack swaps for the current cart (off the render path)."""
+        store = getattr(session, "store_number", 0) or 0
+        items = list(session.cart.items)
+        new: dict = {}
+        if store and items:
+            try:
+                from pyplus.db import repo
+                from pyplus.db.engine import AsyncSessionLocal
+                from pyplus.services.savings import find_savings
+
+                async with AsyncSessionLocal() as db:
+                    alts = await repo.get_pack_alternatives(
+                        db, store, [it.sku for it in items if it.sku]
+                    )
+                for s in find_savings(items, alts):
+                    new[s.sku] = s
+            except Exception:
+                new = {}
+        if new == savings_by_sku:
+            return
+        savings_by_sku.clear()
+        savings_by_sku.update(new)
+        total = sum(s.saving for s in savings_by_sku.values())
+        optimise_btn.set_visibility(bool(savings_by_sku))
+        if savings_by_sku:
+            optimise_btn.set_text(
+                f"{t('cart.optimise')} · "
+                + t("cart.save_amount", amount=f"{total:.2f}".replace(".", ","))
+            )
+        _items.refresh()
 
     def _on_error(msg: str) -> None:
         ui.notify(msg, type="warning", position="top-right", timeout=3000, close_button=True)
@@ -104,8 +150,11 @@ def create_cart_panel(session) -> None:
     _on_cart()
 
 
-def _render_cart_item(item, session, cart_service) -> None:
-    """Render one cart item row: thumbnail | name+unit | price + stepper."""
+def _render_cart_item(item, session, cart_service, saving=None) -> None:
+    """Render one cart item row: thumbnail | name+unit | price + stepper.
+
+    When `saving` is set, a small cheaper-pack hint with an apply button is shown.
+    """
     is_syncing = item.sku in session.syncing_skus
     sku = item.sku
 
@@ -118,11 +167,51 @@ def _render_cart_item(item, session, cart_service) -> None:
 
         # Name + unit (middle flex)
         with ui.element("div").style("flex:1;min-width:0;overflow:hidden"):
-            ui.label(item.product).classes("sp-cart-item-name").style(
-                "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-            )
+            from pyplus.ui.format import plus_product_url
+
+            product_url = plus_product_url(sku=sku)
+            if product_url:
+                ui.link(item.product, product_url, new_tab=True).classes("sp-cart-item-name").style(
+                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                    "text-decoration:none;color:inherit;display:block"
+                ).tooltip("Bekijken op plus.nl")
+            else:
+                ui.label(item.product).classes("sp-cart-item-name").style(
+                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                )
             if item.unit:
                 ui.label(item.unit).classes("sp-cart-item-unit")
+
+            # Cheaper-pack hint
+            if saving is not None and not is_syncing:
+                with (
+                    ui.element("div")
+                    .classes("sp-cart-saving-hint")
+                    .style(
+                        "display:flex;align-items:center;gap:.25rem;margin-top:2px;cursor:pointer"
+                    )
+                    .on(
+                        "click",
+                        lambda _, s=saving: asyncio.ensure_future(
+                            _apply_saving(session, cart_service, s)
+                        ),
+                    )
+                    .tooltip(
+                        t(
+                            "cart.swap_desc",
+                            cur_qty=saving.cur_qty,
+                            cur_pack=saving.cur_pack,
+                            new_qty=saving.new_qty,
+                            new_pack=saving.new_pack,
+                        )
+                    )
+                ):
+                    ui.icon("savings", size="12px").style("color:var(--c-brand-dark)")
+                    amt = f"{saving.saving:.2f}".replace(".", ",")
+                    ui.label(f"{t('cart.save_amount', amount=amt)} →").style(
+                        "font-size:10px;font-weight:600;color:var(--c-brand-dark);"
+                        "text-decoration:underline"
+                    )
 
         # Price + stepper (right column)
         with ui.element("div").style(
@@ -178,6 +267,101 @@ def _render_stepper(sku: str, qty: int, syncing: bool, session, cart_service) ->
                 )
 
 
+async def _apply_saving(session, cart_service, s) -> None:
+    """Swap to the cheaper pack: drop the current sku, add the alternative."""
+    if not cart_service:
+        return
+    per_unit = round(s.new_cost / s.new_qty, 2) if s.new_qty else 0.0
+    if s.new_sku == s.sku:
+        await cart_service.set_quantity(s.sku, s.new_qty)
+    else:
+        await cart_service.set_quantity(s.sku, 0)
+        await cart_service.add(
+            s.new_sku,
+            s.new_qty,
+            product_name=s.name,
+            product_unit=f"Per {s.new_pack}",
+            product_price=per_unit,
+        )
+    amt = f"{s.saving:.2f}".replace(".", ",")
+    ui.notify(t("cart.save_amount", amount=amt).capitalize(), type="positive", position="top")
+
+
+def _show_optimise_dialog(session, cart_service, savings_by_sku: dict) -> None:
+    savings = sorted(savings_by_sku.values(), key=lambda s: s.saving, reverse=True)
+    with ui.dialog(value=True) as dlg:
+        with ui.card().style(
+            "min-width:300px;max-width:440px;width:100%;padding:0;overflow:hidden"
+        ):
+            with ui.element("div").style(
+                "display:flex;align-items:center;justify-content:space-between;"
+                "padding:.875rem 1rem;border-bottom:1px solid var(--c-border)"
+            ):
+                ui.label(t("cart.optimise_title")).style(
+                    "font-size:16px;font-weight:700;color:var(--c-text)"
+                )
+                ui.button(icon="close", on_click=dlg.close).props(
+                    "flat round dense size=sm color=grey"
+                )
+
+            with ui.element("div").style("padding:.5rem 1rem;max-height:60vh;overflow-y:auto"):
+                if not savings:
+                    ui.label(t("cart.optimise_none")).style(
+                        "font-size:13px;color:var(--c-text-3);padding:.5rem 0"
+                    )
+                for s in savings:
+                    with ui.element("div").style(
+                        "display:flex;align-items:center;gap:.5rem;padding:.5rem 0;"
+                        "border-bottom:1px solid var(--c-border)"
+                    ):
+                        with ui.element("div").style("flex:1;min-width:0"):
+                            ui.label(s.name).style(
+                                "font-size:13px;font-weight:600;color:var(--c-text);"
+                                "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                            )
+                            ui.label(
+                                t(
+                                    "cart.swap_desc",
+                                    cur_qty=s.cur_qty,
+                                    cur_pack=s.cur_pack,
+                                    new_qty=s.new_qty,
+                                    new_pack=s.new_pack,
+                                )
+                            ).style("font-size:11px;color:var(--c-text-3)")
+                        amt = f"{s.saving:.2f}".replace(".", ",")
+                        ui.label(t("cart.save_amount", amount=amt)).style(
+                            "font-size:12px;font-weight:700;color:var(--c-brand-dark);flex-shrink:0"
+                        )
+
+                        async def _one(snap=s) -> None:
+                            await _apply_saving(session, cart_service, snap)
+
+                        ui.button(
+                            t("cart.apply"), on_click=lambda _, f=_one: asyncio.ensure_future(f())
+                        ).props("flat dense no-caps size=sm color=primary").style("flex-shrink:0")
+
+            if savings:
+                total = sum(s.saving for s in savings)
+                with ui.element("div").style(
+                    "display:flex;align-items:center;gap:.5rem;padding:.75rem 1rem;"
+                    "border-top:1px solid var(--c-border)"
+                ):
+                    ui.label(
+                        t("cart.optimise_total", amount=f"{total:.2f}".replace(".", ","))
+                    ).style("font-size:13px;font-weight:700;color:var(--c-brand-dark);flex:1")
+
+                    async def _all() -> None:
+                        dlg.close()
+                        for snap in list(savings):
+                            await _apply_saving(session, cart_service, snap)
+
+                    ui.button(
+                        t("cart.apply_all"),
+                        icon="done_all",
+                        on_click=lambda: asyncio.ensure_future(_all()),
+                    ).props("unelevated rounded no-caps color=primary size=sm")
+
+
 def create_mobile_cart_bar(session) -> None:
     """
     Compact sticky bottom bar for mobile (invisible on desktop via CSS).
@@ -212,7 +396,7 @@ def create_mobile_cart_bar(session) -> None:
                     )
                 create_cart_panel(session)
 
-    bar.on("click", lambda: asyncio.ensure_future(_open_sheet()))
+    bar.on("click", _open_sheet)
 
     _prev_count: list[int] = [0]
 
@@ -241,7 +425,9 @@ def _download_shopping_list(session) -> None:
     from pyplus.services.exports import build_text_list
 
     text = build_text_list(session.cart)
-    ui.download(text.encode("utf-8"), "boodschappenlijst.txt", media_type="text/plain")
+    ui.download(
+        text.encode("utf-8"), "boodschappenlijst.txt", media_type="text/plain; charset=utf-8"
+    )
 
 
 async def _copy_shopping_list(session) -> None:

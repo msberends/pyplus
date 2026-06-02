@@ -82,7 +82,9 @@ def create_search_lane(session) -> None:
         status_label.set_text(t("status.loading"))
 
         try:
-            found = await session.client.search_products_api(query, session.store_number)
+            from pyplus.services.search import search_products
+
+            found = await search_products(session, query)
             _results.clear()
             _results.extend(found)
             if found:
@@ -133,9 +135,18 @@ def _render_product_row(product, session, cart_service) -> None:
 
         # Info block
         with ui.element("div").classes("sp-search-info"):
-            ui.label(product.name).classes("sp-search-name").style(
-                "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-            )
+            from pyplus.ui.format import plus_product_url
+
+            product_url = plus_product_url(getattr(product, "slug", ""), product.sku)
+            if product_url:
+                ui.link(product.name, product_url, new_tab=True).classes("sp-search-name").style(
+                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                    "text-decoration:none;color:var(--c-text);display:block"
+                ).tooltip("Bekijken op plus.nl")
+            else:
+                ui.label(product.name).classes("sp-search-name").style(
+                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                )
             with ui.element("div").style("display:flex;align-items:center;gap:.5rem"):
                 if product.subtitle:
                     ui.label(product.subtitle).classes("sp-search-unit")

@@ -28,6 +28,7 @@ async def cache_ingredient_sku_from_product(db, user_id: int, product: "Product"
         product.sku,
         name=product.name,
         subtitle=product.subtitle,
+        slug=getattr(product, "slug", "") or "",
         image_url=product.image_url,
         pack_size=pack_size,
         pack_unit=pack_unit,

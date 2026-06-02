@@ -57,6 +57,12 @@ class MlKind(str, enum.Enum):
     promo_match = "promo_match"
 
 
+# Dish meat/diet categories (carried over from the R app). Stored as plain strings
+# on Dish.meat_type; the UI maps them to icons via pyplus.i18n.
+MEAT_TYPES = ("vega", "kip", "rund", "varken", "vis", "gecombineerd")
+PREP_TIME_BUCKETS = (20, 40, 60, 120)  # minutes — upper bound of each bucket
+
+
 # ── Core user tables ───────────────────────────────────────────────────────────
 
 
@@ -124,6 +130,10 @@ class Dish(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     prep_notes: Mapped[str] = mapped_column(Text, default="")
+    # Optional planning metadata (carried over from the R app's "Gerechten beheren").
+    prep_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 20/40/60/120
+    meat_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # see MEAT_TYPES
+    veg_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 0–3
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=datetime.datetime.utcnow
     )
@@ -148,6 +158,9 @@ class DishIngredient(Base):
     pack_size: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     pack_unit: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     optional: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Flexible = no fixed product; display_name holds the instruction/label and the
+    # actual product is chosen at add-to-cart time. Flexible rows have an empty sku.
+    flexible: Mapped[bool] = mapped_column(Boolean, default=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
     dish: Mapped["Dish"] = relationship(back_populates="ingredients")
@@ -167,6 +180,7 @@ class IngredientSku(Base):
     sku: Mapped[str] = mapped_column(String(100), primary_key=True)
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     subtitle: Mapped[str] = mapped_column(String(200), default="")
+    slug: Mapped[str] = mapped_column(String(200), default="")  # for plus.nl product links
     image_url: Mapped[str] = mapped_column(Text, default="")
     pack_size: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     pack_unit: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
@@ -226,6 +240,8 @@ class ProductCache(Base):
     store_number: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     subtitle: Mapped[str] = mapped_column(String(200), default="")
+    brand: Mapped[str] = mapped_column(String(200), default="")
+    slug: Mapped[str] = mapped_column(String(200), default="")  # for plus.nl product links
     image_url: Mapped[str] = mapped_column(Text, default="")
     price: Mapped[float] = mapped_column(Float, default=0.0)
     is_available: Mapped[bool] = mapped_column(Boolean, default=False)

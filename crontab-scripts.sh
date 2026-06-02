@@ -53,6 +53,14 @@
 # Products not found at the store are automatically marked unavailable.
 # 45 3 * * *  cd <APP_DIR> && uv run python -m pyplus.jobs refresh_products --user all >> <APP_DIR>/logs/products.log 2>&1
 #
+# Full product catalogue — WEEKLY (Monday 03:30). Downloads the entire store
+# catalogue (~11k products for store 868, ~929 pages) into product_cache via
+# direct API. Heavy: ~5-7 min per distinct store. Powers instant local search
+# and the "vervallen" (no-longer-carried) flags on staples and dish ingredients.
+# Weekly is plenty — the catalogue changes slowly; prices/stock for your own SKUs
+# stay fresh via refresh_products above.
+# 30 3 * * 1  cd <APP_DIR> && uv run python -m pyplus.jobs refresh_product_catalogue --user all >> <APP_DIR>/logs/product_catalogue.log 2>&1
+#
 # ML recompute — after all refresh jobs (no PLUS call needed)
 # 30 4 * * *  cd <APP_DIR> && uv run python -m pyplus.jobs recompute_ml --user all >> <APP_DIR>/logs/ml.log 2>&1
 #

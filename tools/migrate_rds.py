@@ -45,6 +45,33 @@ def _extract_sku(url: str) -> str:
     return m.group(1) if m else ""
 
 
+def _int_or_none(value) -> int | None:
+    """Coerce an R numeric/NA cell to int or None."""
+    try:
+        if value is None or pd.isna(value):
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+# R dish "meat" labels → PyPLUS meat_type tokens (see db.models.MEAT_TYPES).
+_MEAT_MAP = {
+    "vegetarisch": "vega",
+    "kip": "kip",
+    "rund": "rund",
+    "varken": "varken",
+    "vis": "vis",
+    "gecombineerd": "gecombineerd",
+}
+
+
+def _map_meat(value) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    return _MEAT_MAP.get(str(value).strip().lower())
+
+
 def _week_start_for(day: date) -> date:
     return day - timedelta(days=day.weekday())
 
@@ -224,6 +251,9 @@ async def _run_migration(
             old_id = int(drow["dish_id"])
             name = str(drow["name"]).strip()
             notes = str(drow.get("instructions", "") or "").strip()
+            prep_minutes = _int_or_none(drow.get("preptime"))
+            veg_count = _int_or_none(drow.get("vegetables"))
+            meat_type = _map_meat(drow.get("meat"))
 
             if not dry_run:
                 # Idempotency: skip if already exists
@@ -240,7 +270,15 @@ async def _run_migration(
                     report.dishes_skipped += 1
                     continue
 
-                dish = await repo.create_dish(db, user_id, name=name, prep_notes=notes)
+                dish = await repo.create_dish(
+                    db,
+                    user_id,
+                    name=name,
+                    prep_notes=notes,
+                    prep_minutes=prep_minutes,
+                    meat_type=meat_type,
+                    veg_count=veg_count,
+                )
                 old_to_new[old_id] = dish.id
                 dish_name_to_id[name] = dish.id
             else:
@@ -305,7 +343,8 @@ async def _run_migration(
                     display_name=display_name,
                     amount=float(amount),
                     amount_unit="stuks",
-                    optional=bool(is_optional or is_flexible),
+                    optional=bool(is_optional),
+                    flexible=bool(is_flexible),
                     sort_order=sort_idx,
                 )
             report.ingredients_created += 1

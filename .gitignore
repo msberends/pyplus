@@ -41,3 +41,6 @@ __pycache__/
 dist/
 build/
 .venv/
+
+# NiceGUI runtime storage (session secret, etc.)
+.nicegui/

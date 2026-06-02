@@ -32,6 +32,7 @@ async def create_settings_page() -> None:
     async with AsyncSessionLocal() as db:
         settings_json = await repo.get_user_settings_json(db, user_id)
         user = await repo.get_user_by_id(db, user_id)
+        sync_states = await repo.get_all_sync_states(db, user_id)
     try:
         settings = UserSettings.model_validate_json(settings_json)
     except Exception:
@@ -63,6 +64,12 @@ async def create_settings_page() -> None:
             # ── Meldingen (ntfy) ───────────────────────────────────────────
             _section_card(t("settings.ntfy.title"), lambda: _render_ntfy(settings, _save))
 
+            # ── Agenda-abonnement ─────────────────────────────────────────
+            _section_card("Agenda-abonnement", lambda: _render_ical(user_id, session))
+
+            # ── Gegevens & synchronisatie ─────────────────────────────────
+            _section_card("Gegevens & synchronisatie", lambda: _render_sync_status(sync_states))
+
 
 def _section_card(title: str, body_fn) -> None:
     with ui.element("div").style(
@@ -76,14 +83,36 @@ def _section_card(title: str, body_fn) -> None:
 
 
 def _render_account(session, user, user_id: int) -> None:
-    if user and user.display_name:
-        ui.label(f"Ingelogd als {user.display_name}").style(
-            "font-size:14px;color:var(--c-text-2);margin-bottom:.75rem;display:block"
-        )
-    store = user.store_number if user and user.store_number else "–"
-    ui.label(f"Winkel: {store}").style(
-        "font-size:13px;color:var(--c-text-3);margin-bottom:1rem;display:block"
-    )
+    from pyplus.security import secrets
+
+    # PLUS e-mail
+    email = ""
+    if user and user.plus_email_enc:
+        email = secrets.decrypt(user.plus_email_enc) or ""
+    if email:
+        with ui.element("div").style("margin-bottom:.625rem"):
+            ui.label("PLUS account").style(
+                "font-size:11px;font-weight:600;color:var(--c-text-4);letter-spacing:.06em;text-transform:uppercase"
+            )
+            ui.label(email).style("font-size:14px;color:var(--c-text-2)")
+    elif user and user.display_name:
+        with ui.element("div").style("margin-bottom:.625rem"):
+            ui.label("Ingelogd als").style(
+                "font-size:11px;font-weight:600;color:var(--c-text-4);letter-spacing:.06em;text-transform:uppercase"
+            )
+            ui.label(user.display_name).style("font-size:14px;color:var(--c-text-2)")
+
+    # Winkel
+    if user and user.store_number:
+        with ui.element("div").style("margin-bottom:1rem"):
+            ui.label("Winkel").style(
+                "font-size:11px;font-weight:600;color:var(--c-text-4);letter-spacing:.06em;text-transform:uppercase"
+            )
+            ui.label(f"PLUS winkel #{user.store_number}").style(
+                "font-size:14px;color:var(--c-text-2)"
+            )
+    else:
+        ui.element("div").style("margin-bottom:1rem")
 
     async def _logout() -> None:
         uid = app.storage.user.get("user_id")
@@ -206,6 +235,8 @@ def _render_ml(settings: UserSettings, user_id: int, save_fn) -> None:
 
 
 def _render_ntfy(settings: UserSettings, save_fn) -> None:
+    from pyplus.security import secrets
+
     url_input = (
         ui.input(
             label=t("settings.ntfy.url"),
@@ -222,16 +253,45 @@ def _render_ntfy(settings: UserSettings, save_fn) -> None:
             value=settings.ntfy_topic,
         )
         .props("outlined dense")
+        .style("width:100%;margin-bottom:.5rem")
+    )
+
+    username_input = (
+        ui.input(
+            label=t("settings.ntfy.username"),
+            value=settings.ntfy_username,
+        )
+        .props("outlined dense")
+        .style("width:100%;margin-bottom:.5rem")
+    )
+
+    _current_pw = secrets.decrypt(settings.ntfy_password_enc) if settings.ntfy_password_enc else ""
+    password_input = (
+        ui.input(
+            label=t("settings.ntfy.password"),
+            value=_current_pw or "",
+            password=True,
+            password_toggle_button=True,
+        )
+        .props("outlined dense")
         .style("width:100%;margin-bottom:.625rem")
     )
 
     async def _save_ntfy() -> None:
         settings.ntfy_url = url_input.value.strip()
         settings.ntfy_topic = topic_input.value.strip()
+        settings.ntfy_username = username_input.value.strip()
+        pw = password_input.value
+        if pw:
+            settings.ntfy_password_enc = secrets.encrypt(pw) or ""
+        elif not pw and settings.ntfy_password_enc:
+            settings.ntfy_password_enc = ""
         await save_fn()
 
     url_input.on("blur", lambda _: asyncio.ensure_future(_save_ntfy()))
     topic_input.on("blur", lambda _: asyncio.ensure_future(_save_ntfy()))
+    username_input.on("blur", lambda _: asyncio.ensure_future(_save_ntfy()))
+    password_input.on("blur", lambda _: asyncio.ensure_future(_save_ntfy()))
 
     with ui.row().style("align-items:center;gap:.625rem"):
         weekly_sw = ui.switch(t("settings.ntfy.weekly"), value=settings.ntfy_weekly_alert).props(
@@ -259,11 +319,19 @@ async def _test_ntfy(settings: UserSettings) -> None:
     try:
         import httpx
 
+        from pyplus.security import secrets
+
+        auth = None
+        if settings.ntfy_username:
+            pw = secrets.decrypt(settings.ntfy_password_enc) if settings.ntfy_password_enc else ""
+            auth = (settings.ntfy_username, pw)
+
         async with httpx.AsyncClient() as client:
             r = await client.post(
                 f"{settings.ntfy_url.rstrip('/')}/{settings.ntfy_topic}",
                 content="PyPLUS test-melding",
                 headers={"Title": "PyPLUS"},
+                auth=auth,
                 timeout=10,
             )
         if r.status_code < 300:
@@ -272,3 +340,59 @@ async def _test_ntfy(settings: UserSettings) -> None:
             ui.notify(f"ntfy antwoordde met {r.status_code}", type="warning", position="top")
     except Exception as exc:
         ui.notify(f"Fout: {exc}", type="negative", position="top")
+
+
+def _render_ical(user_id: int, session) -> None:
+    from pyplus.ui.components.meals import render_ical_subscription_body
+
+    render_ical_subscription_body(user_id)
+
+
+# Resource → Dutch label, in display order. Keys match jobs/registry resource names.
+_SYNC_LABELS: list[tuple[str, str]] = [
+    ("catalogue", "Productcatalogus"),
+    ("products", "Prijzen & beschikbaarheid"),
+    ("promotions", "Aanbiedingen"),
+    ("purchase_catalogue", "Eerder gekochte producten"),
+    ("orders", "Bestelgeschiedenis"),
+    ("ml", "Slimme suggesties"),
+]
+
+
+def _render_sync_status(sync_states: dict) -> None:
+    """Show when each background cache was last refreshed."""
+    from pyplus.ui.format import humanize_since
+
+    ui.label("Achtergrondtaken houden je gegevens vers zonder dat het openen vertraagt.").style(
+        "font-size:12px;color:var(--c-text-3);margin-bottom:.75rem;display:block"
+    )
+
+    for resource, label in _SYNC_LABELS:
+        row = sync_states.get(resource)
+        when = humanize_since(row.last_synced_at if row else None)
+        status = row.last_status if row else None
+
+        # Colour-code the status dot: green ok, amber in-progress, red error, grey never.
+        if status == "ok":
+            dot = "var(--c-brand)"
+        elif status == "in_progress":
+            dot = "var(--c-warning, #d97706)"
+        elif status == "error":
+            dot = "var(--c-danger)"
+        else:
+            dot = "var(--c-border)"
+
+        with ui.element("div").style(
+            "display:flex;align-items:center;gap:.625rem;padding:.45rem 0;"
+            "border-bottom:1px solid var(--c-border)"
+        ):
+            ui.element("div").style(
+                f"width:8px;height:8px;border-radius:50%;background:{dot};flex-shrink:0"
+            )
+            ui.label(label).style("font-size:13px;color:var(--c-text-2);flex:1")
+            ui.label(when).style("font-size:12px;color:var(--c-text-3)")
+
+    if not sync_states:
+        ui.label("Nog niets gesynchroniseerd.").style(
+            "font-size:12px;color:var(--c-text-4);margin-top:.5rem;display:block"
+        )

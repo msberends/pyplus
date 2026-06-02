@@ -9,7 +9,7 @@
 #   journalctl -u pyplus -f
 
 [Unit]
-Description=PyPLUS — personal PLUS.nl shopping assistant
+Description=PyPLUS - personal PLUS.nl shopping assistant
 After=network.target
 
 [Service]

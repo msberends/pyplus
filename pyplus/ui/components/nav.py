@@ -23,7 +23,7 @@ def create_nav_rail(active: str = "cockpit", user_display_name: str = "") -> Non
             .style("display:flex;align-items:center;justify-content:center;cursor:pointer")
             .on("click", lambda: ui.navigate.to("/cockpit"))
         ):
-            ui.label("SP").style("font-size:12px;font-weight:800;color:white;letter-spacing:-0.5px")
+            ui.label("PP").style("font-size:12px;font-weight:800;color:white;letter-spacing:-0.5px")
 
         # Nav buttons
         for icon, path, label in _NAV_ITEMS:

@@ -128,7 +128,18 @@ class CartService:
             # Reconcile with authoritative server response.
             from plus.client import _parse_cart_from_checkout
 
-            self.session.set_cart(_parse_cart_from_checkout(checkout))
+            new_cart = _parse_cart_from_checkout(checkout)
+            # PLUS cart API doesn't return ImageURLs — preserve from the optimistic cart.
+            old_images = {it.sku: it.image_url for it in self.session.cart.items if it.image_url}
+            if old_images:
+                patched = [
+                    it.model_copy(update={"image_url": old_images[it.sku]})
+                    if not it.image_url and it.sku in old_images
+                    else it
+                    for it in new_cart.items
+                ]
+                new_cart = new_cart.model_copy(update={"items": patched})
+            self.session.set_cart(new_cart)
 
         except Exception as exc:
             log.warning("Cart API error (sku=%s delta=%+d): %s", sku, delta, exc)

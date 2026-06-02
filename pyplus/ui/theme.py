@@ -517,7 +517,7 @@ body {
 
 /* Main stage */
 .sp-cockpit-stage {
-  flex: 1;
+  flex: 2 1 0;
   overflow-y: auto;
   padding: 1.25rem;
   display: grid;
@@ -529,8 +529,8 @@ body {
 
 /* Cart column */
 .sp-cockpit-cart-col {
-  width: 308px;
-  flex-shrink: 0;
+  min-width: 280px;
+  flex: 1 0 280px;
   border-left: 1px solid var(--c-border);
   overflow: hidden;
   display: flex;
@@ -609,6 +609,8 @@ body {
 /* ─── Staples lane ───────────────────────────────────────────────────────── */
 .sp-staples-body {
   padding: .375rem .625rem .75rem;
+  overflow-y: auto;
+  max-height: 42vh;
 }
 
 .sp-staples-item {
@@ -633,6 +635,8 @@ body {
 /* ─── Deals lane ─────────────────────────────────────────────────────────── */
 .sp-deals-body {
   padding: .375rem .625rem .75rem;
+  overflow-y: auto;
+  max-height: 42vh;
 }
 
 .sp-promo-card {
@@ -668,6 +672,8 @@ body {
 /* ─── Meals lane ─────────────────────────────────────────────────────────── */
 .sp-meals-body {
   padding: .625rem .75rem .75rem;
+  overflow-y: auto;
+  max-height: 42vh;
 }
 
 .sp-meals-slot {
@@ -823,11 +829,13 @@ body {
   .sp-nav-logo { display: none; }
   .sp-nav-spacer { display: none; }
   .sp-cockpit-stage {
+    flex: 1 1 auto;
     grid-template-columns: 1fr; order: 1;
     padding-bottom: calc(58px + 58px + 1.25rem);  /* nav + cart bar */
     overflow-y: auto;
   }
   .sp-cockpit-cart-col { display: none; }  /* replaced by bottom bar */
+  .sp-deals-body, .sp-meals-body, .sp-staples-body { max-height: none; overflow-y: visible; }
   .sp-mobile-cart-bar { display: flex; }
 }
 """

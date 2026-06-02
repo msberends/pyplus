@@ -34,6 +34,7 @@ _PLUS_JOBS = {
     "refresh_purchase_catalogue",
     "refresh_orders",
     "refresh_products",
+    "refresh_product_catalogue",
     "full_preload",
     "weekly_ntfy",
 }

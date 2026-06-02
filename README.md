@@ -20,14 +20,21 @@ version needed). See [`ARCHITECTURE.md`](ARCHITECTURE.md) for how that API was r
 - **Single-surface cockpit** — four item *sources* (lanes) feed one **live cart** (the cart on screen
   *is* your real PLUS cart, kept in sync optimistically):
   1. **Deze week** — a 7-dinner + 5-lunch weekly meal planner built from your dishes.
-  2. **Vaste boodschappen** — your fixed weekly staples.
+  2. **Vaste boodschappen** — your fixed weekly staples; add or remove products inline.
   3. **Aanbiedingen voor jou** — this week's promotions, ranked for relevance.
   4. **Zoeken** — instant product search for ad-hoc extras.
 - **Dish manager** — recipes with strict, assisted ingredient→SKU mapping, prep notes, amounts/pack
-  sizes, optional-ingredient flags, and one-tap relinking when a product changes.
-- **Cross-dish pack optimization** — aggregates ingredients across the week and picks the cheapest
-  pack combination (e.g. *2 × 300 g chicken → 1 × 650 g pack, split at home*), shown transparently
-  before anything hits the cart.
+  sizes, planning metadata (prep time, meat/diet type, vegetable count), and one-tap relinking when a
+  product changes. Ingredients can be **optional** (offered at cart-add) or **flexible** (a free-text
+  placeholder whose product you pick at cart-add) — both prompted before anything is aggregated.
+- **Local product catalogue** — the full store catalogue (~11k products) is synced to SQLite via the
+  direct API, so search is instant with images/prices, and staples or dish ingredients the store no
+  longer carries are flagged *"niet meer verkrijgbaar"*.
+- **Pack optimization** — two complementary, always-transparent savings:
+  - *Cross-dish* — aggregates ingredients across the week and buys the fewest packs (e.g.
+    *2 × 300 g chicken → 1 × 650 g pack, split at home*), previewed before anything hits the cart.
+  - *Cart-wide* — spots when a product in your cart is cheaper per unit in another pack size
+    (e.g. *2 × 250 g coffee → 1 × 500 g*) and offers a one-tap swap, per item or all at once.
 - **Exports** — an iCal feed of the week's menu (with prep notes) you can subscribe to from your
   phone, plus a plain-text shopping list.
 - **Local intelligence layer** *(off by default)* — week-menu recommender, staple replenishment
@@ -101,8 +108,9 @@ Every job is a plain function runnable two ways:
   ```
 
 Named jobs: `refresh_orders`, `refresh_purchase_catalogue`, `refresh_promotions`, `refresh_products`,
-`recompute_ml`, `weekly_ntfy`, and `full_preload` (runs them in dependency order). The two paths are
-idempotent and locked per (user, resource) so an in-app run and a cron run never collide.
+`refresh_product_catalogue` (full store catalogue → `product_cache`, weekly), `recompute_ml`,
+`weekly_ntfy`, and `full_preload` (runs them in dependency order). The two paths are idempotent and
+locked per (user, resource) so an in-app run and a cron run never collide.
 
 See [`crontab-scripts.sh`](crontab-scripts.sh) for ready-to-paste cron lines and the recommended
 schedule.
@@ -162,7 +170,7 @@ new_app/
 │   ├── db/            # SQLAlchemy ORM models, async engine, user-scoped repo helpers
 │   ├── security/      # Fernet credential encryption + HMAC iCal tokens
 │   ├── session/       # per-user PlusClient lifecycle + session manager
-│   ├── services/      # cart, dishes, aggregate (pack-opt), history, exports
+│   ├── services/      # cart, dishes, aggregate (pack-opt), savings (cart unit-price), search, history, exports
 │   ├── ml/            # recommender, replenish, promo_match, artifacts (off by default)
 │   ├── jobs/          # job registry + CLI + APScheduler wiring
 │   ├── ui/            # theme, components, pages (login, cockpit, dishes, settings)
@@ -180,7 +188,7 @@ new_app/
 ## Development
 
 ```bash
-uv run pytest          # offline unit suite (aggregation, ML, exports, cart, ntfy)
+uv run pytest          # offline unit suite (aggregation, savings, catalogue, ML, exports, cart, ntfy)
 uv run ruff check .    # lint
 uv run ruff format .   # format
 ```

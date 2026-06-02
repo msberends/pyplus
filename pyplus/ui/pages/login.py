@@ -61,7 +61,7 @@ def _render_auto_login(email: str, password: str, name: str, user_id: int) -> No
                     .classes("sp-login-logo-mark")
                     .style("display:flex;align-items:center;justify-content:center")
                 ):
-                    ui.label("SP").style(
+                    ui.label("PP").style(
                         "font-size:13px;font-weight:800;color:white;"
                         "letter-spacing:-0.5px;line-height:1"
                     )
@@ -107,7 +107,7 @@ def _render_login_form() -> None:
                     .classes("sp-login-logo-mark")
                     .style("display:flex;align-items:center;justify-content:center")
                 ):
-                    ui.label("SP").style(
+                    ui.label("PP").style(
                         "font-size:13px;font-weight:800;color:white;"
                         "letter-spacing:-0.5px;line-height:1"
                     )
@@ -209,11 +209,11 @@ async def _do_login_core(
     from pyplus.session import manager
     from pyplus.session.user_session import UserSession
 
+    log.info("Login S0 — browser starten")
     client = PlusClient(headless=True)
     try:
         await client.__aenter__()
-
-        # Step 1: browser OAuth login (~3–5 s)
+        log.info("Login S1 — OAuth login starten (%s)", email)
         on_progress(t("login.progress_logging_in"))
         success = await client.login(email, password)
         if not success:
@@ -221,14 +221,20 @@ async def _do_login_core(
             on_error(t("login.error_failed"))
             return
 
-        # Step 2: capture session state (checkout_id, store_number, …)
+        log.info("Login S2 — session state ophalen (cart-navigatie)")
         on_progress(t("login.progress_cart"))
         session_state = await client.get_session_state()
+        log.info(
+            "Login S2 done — checkout_id=%s store=%s",
+            session_state.checkout_id[:8] if session_state.checkout_id else "?",
+            session_state.store_number,
+        )
 
-        # Step 3: fetch live cart
+        log.info("Login S3 — live cart ophalen")
         cart = await client.get_cart_api()
+        log.info("Login S3 done — %d item(s) in cart", len(cart.items) if cart else 0)
 
-        # Step 4: DB — look up or create user
+        log.info("Login S4 — gebruiker opzoeken/aanmaken in DB")
         onewelcome_id = session_state.onewelcome_user_id
         async with AsyncSessionLocal() as db:
             user = await repo.get_user_by_onewelcome_id(db, onewelcome_id)
@@ -252,7 +258,7 @@ async def _do_login_core(
                 )
                 await db.refresh(user)
 
-            # Step 5: remember-me
+            log.info("Login S5 — remember-me opslaan (remember=%s)", remember)
             if remember and secrets.is_available():
                 password_enc = secrets.encrypt(password)
                 if password_enc:
@@ -273,7 +279,7 @@ async def _do_login_core(
         on_error(t("login.error_failed"))
         return
 
-    # Step 6: register session
+    log.info("Login S6 — sessie registreren (user_id=%d)", user_id)
     session = UserSession(
         client=client,
         user_id=user_id,
@@ -283,10 +289,16 @@ async def _do_login_core(
     )
     manager.register(session)
     app.storage.user["user_id"] = user_id
+    log.info("Login S6 done — storage bijgewerkt")
 
-    # Step 7: first-login store confirmation (non-blocking dialog)
+    log.info("Login S7 — winkelbevestiging + navigeren (first_login=%s)", is_first_login)
     if is_first_login and store_number:
-        _show_store_confirmation(store_number)
+        try:
+            _show_store_confirmation(store_number)
+        except Exception:
+            log.warning("Login S7 — store-bevestiging overgeslagen (NiceGUI context weg)")
+
+    log.info("Login S8 — on_success aanroepen")
 
     on_success()
 
