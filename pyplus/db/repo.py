@@ -96,6 +96,14 @@ async def update_user_store(db: AsyncSession, user_id: int, store_number: int) -
         await db.commit()
 
 
+async def set_user_display_name(db: AsyncSession, user_id: int, display_name: str) -> None:
+    """Set the user-chosen display name used for the greeting."""
+    user = await get_user_by_id(db, user_id)
+    if user:
+        user.display_name = display_name.strip()
+        await db.commit()
+
+
 # ── Credentials ────────────────────────────────────────────────────────────────
 
 
@@ -591,6 +599,8 @@ async def upsert_product_cache(db: AsyncSession, store_number: int, products: li
     Uses SQLite's ON CONFLICT to update existing (sku, store_number) rows in one
     statement per chunk. Returns the number of products written.
     """
+    import json as _json
+
     now = datetime.datetime.utcnow()
     rows = [
         {
@@ -603,6 +613,7 @@ async def upsert_product_cache(db: AsyncSession, store_number: int, products: li
             "image_url": getattr(p, "image_url", "") or "",
             "price": getattr(p, "price", 0.0) or 0.0,
             "is_available": getattr(p, "is_available", False),
+            "categories_json": _json.dumps(getattr(p, "categories", None) or []),
             "fetched_at": now,
         }
         for p in products
@@ -623,6 +634,7 @@ async def upsert_product_cache(db: AsyncSession, store_number: int, products: li
                 "image_url": stmt.excluded.image_url,
                 "price": stmt.excluded.price,
                 "is_available": stmt.excluded.is_available,
+                "categories_json": stmt.excluded.categories_json,
                 "fetched_at": stmt.excluded.fetched_at,
             },
         )
@@ -731,6 +743,21 @@ async def upsert_purchased_products(
                 )
             )
     await db.commit()
+
+
+async def get_purchased_products_by_skus(
+    db: AsyncSession, user_id: int, skus: list[str]
+) -> dict[str, PurchasedProductCache]:
+    """Return {sku: PurchasedProductCache} for the given SKUs (purchase history)."""
+    if not skus:
+        return {}
+    result = await db.execute(
+        select(PurchasedProductCache).where(
+            PurchasedProductCache.user_id == user_id,
+            PurchasedProductCache.sku.in_(skus),
+        )
+    )
+    return {row.sku: row for row in result.scalars().all()}
 
 
 # ── Order history cache ────────────────────────────────────────────────────────

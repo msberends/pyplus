@@ -334,6 +334,36 @@ body {
   text-transform: uppercase;
 }
 
+/* Category group header — for grouped cart + staples views. */
+.sp-cat-header {
+  font-size: 10px;
+  font-weight: var(--w-bold);
+  color: var(--c-text-4);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  padding: .5rem 0 .2rem;
+  margin-top: .25rem;
+  border-bottom: 1px solid var(--c-border);
+  display: block;
+}
+.sp-cat-header:first-child { margin-top: 0; }
+
+/* Compact "on offer" tag — for cart + staples rows. */
+.sp-promo-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--c-brand);
+  color: white;
+  font-size: 9px;
+  font-weight: var(--w-bold);
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 /* ─── Lane error state ───────────────────────────────────────────────────── */
 .sp-lane-error {
   display: flex;
@@ -605,6 +635,18 @@ body {
   line-height: 1.3;
 }
 .sp-editor-dialog .q-dialog__inner { padding: 1rem; }
+@media (max-width: 600px) {
+  /* Full-height editor on phones so the body scrolls and the pinned
+     footer (add-ingredient) stays on screen. */
+  .sp-editor-dialog .q-dialog__inner { padding: 0; }
+  .sp-editor-dialog .q-card {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    border-radius: 0 !important;
+  }
+}
 
 /* ─── Staples lane ───────────────────────────────────────────────────────── */
 .sp-staples-body {

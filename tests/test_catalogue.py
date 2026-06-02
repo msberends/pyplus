@@ -18,7 +18,7 @@ async def session_factory():
     await engine.dispose()
 
 
-def _p(sku, name, brand="", available=True):
+def _p(sku, name, brand="", available=True, categories=None):
     return Product(
         sku=sku,
         name=name,
@@ -28,6 +28,7 @@ def _p(sku, name, brand="", available=True):
         image_url=f"https://img/{sku}.png",
         price=1.99,
         is_available=available,
+        categories=categories or [],
     )
 
 
@@ -75,6 +76,18 @@ async def test_get_by_skus_flags_missing(session_factory):
         found = await repo.get_product_cache_by_skus(db, 720, ["1", "2", "999"])
         assert set(found) == {"1", "2"}  # 999 is not carried → absent
         assert await repo.get_product_cache_by_skus(db, 720, []) == {}
+
+
+@pytest.mark.asyncio
+async def test_categories_breadcrumb_round_trip(session_factory):
+    from pyplus.services.search import _row_to_product
+
+    path = ["Verse kant-en-klaarmaaltijden", "Italiaanse maaltijden", "Lasagne"]
+    async with session_factory() as db:
+        await repo.upsert_product_cache(db, 720, [_p("1", "Verse lasagne", categories=path)])
+        hits = await repo.search_product_cache(db, 720, "lasagne")
+    # The full multi-layer path is preserved in order, broad → specific.
+    assert _row_to_product(hits[0], 720).categories == path
 
 
 @pytest.mark.asyncio

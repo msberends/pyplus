@@ -54,11 +54,15 @@ async def create_staples_lane(session) -> None:
             catalogue: dict = {}
             catalogue_known = False
             load_error = ""
+            purchased: dict = {}
             try:
                 async with AsyncSessionLocal() as db:
                     products = await repo.get_fixed_products(db, session.user_id)
                     skus = [p.sku for p in products if p.sku]
                     sku_cache = await repo.get_ingredient_skus_by_skus(db, session.user_id, skus)
+                    # Purchase history is an extra image source for products the
+                    # store no longer carries ("niet verkrijgbaar").
+                    purchased = await repo.get_purchased_products_by_skus(db, session.user_id, skus)
                     if store:
                         catalogue = await repo.get_product_cache_by_skus(db, store, skus)
                         catalogue_known = await repo.count_product_cache(db, store) > 0
@@ -66,7 +70,15 @@ async def create_staples_lane(session) -> None:
                 log.error("Staples lane load failed: %s", exc)
                 load_error = "Vaste boodschappen konden niet worden geladen."
 
-            replenish_scores = await _load_replenish(session)
+            prefs = session.settings
+            replenish_scores = await _load_replenish(session) if prefs.show_replenish_hints else {}
+
+            # Promotions this item may be part of (cache-only, no PLUS call).
+            promo_index: dict = {}
+            if store and prefs.show_promo_tags:
+                from pyplus.services.promos import get_promo_index
+
+                promo_index = await get_promo_index(store)
 
             # ── "Alles toevoegen" lives in the header; rebuild it each load ──
             addall_holder.clear()
@@ -99,7 +111,31 @@ async def create_staples_lane(session) -> None:
                     )
                 return
 
-            if replenish_scores:
+            from pyplus.services.categories import group_order, parse_categories, top_category
+
+            def _cats(fp) -> list[str]:
+                row = catalogue.get(fp.sku)
+                cats = parse_categories(getattr(row, "categories_json", None)) if row else []
+                if not cats and purchased.get(fp.sku):
+                    cats = parse_categories(purchased[fp.sku].categories_json)
+                return cats
+
+            def _name_key(fp) -> str:
+                row, c = catalogue.get(fp.sku), sku_cache.get(fp.sku)
+                return (
+                    (row.name if row else None) or (c.name if c else None) or fp.display_name or ""
+                ).casefold()
+
+            def _price_key(fp) -> float:
+                row, c = catalogue.get(fp.sku), sku_cache.get(fp.sku)
+                return (row.price if row else None) or (c.last_price if c else 0.0) or 0.0
+
+            # Base ordering per the user's chosen sort.
+            if prefs.staples_sort == "name":
+                sorted_products = sorted(products, key=_name_key)
+            elif prefs.staples_sort == "price":
+                sorted_products = sorted(products, key=_price_key, reverse=True)
+            elif replenish_scores:  # "smart" — soonest-due first
                 from pyplus.ml.replenish import sort_fixed_products_by_due
 
                 sorted_products = [
@@ -113,20 +149,33 @@ async def create_staples_lane(session) -> None:
             else:
                 sorted_products = products
 
+            def _row(fp) -> None:
+                _render_row(
+                    fp,
+                    sku_cache.get(fp.sku),
+                    catalogue.get(fp.sku),
+                    catalogue_known,
+                    session,
+                    cart_service,
+                    replenish_scores.get(fp.sku),
+                    _body,
+                    promo_index.get(fp.sku),
+                    purchased.get(fp.sku),
+                )
+
             @ui.refreshable
             def _list() -> None:
-                for fp in sorted_products:
-                    rs = replenish_scores.get(fp.sku)
-                    _render_row(
-                        fp,
-                        sku_cache.get(fp.sku),
-                        catalogue.get(fp.sku),
-                        catalogue_known,
-                        session,
-                        cart_service,
-                        rs,
-                        _body,
-                    )
+                if prefs.staples_group_by_category:
+                    buckets: dict = {}
+                    for fp in sorted_products:
+                        buckets.setdefault(top_category(_cats(fp)), []).append(fp)
+                    for cat in group_order(list(buckets)):
+                        ui.label(cat).classes("sp-cat-header")
+                        for fp in buckets[cat]:
+                            _row(fp)
+                else:
+                    for fp in sorted_products:
+                        _row(fp)
 
             list_ref["fn"] = _list
             _list()
@@ -202,8 +251,10 @@ def _render_add_search(session, store: int, body_refresh) -> None:
 
             _results()
 
-            async def _on_input(e) -> None:
-                q = (e.value if hasattr(e, "value") else "") or ""
+            async def _on_input(e, fld=field) -> None:
+                # update:model-value carries no `.value` here — fall back to the
+                # field's synced value so typing actually drives the search.
+                q = (e.value if hasattr(e, "value") else fld.value) or ""
                 if len(q.strip()) < 2:
                     state["results"] = []
                     _results.refresh()
@@ -250,6 +301,8 @@ def _render_row(
     cart_service,
     replenish_score=None,
     body_refresh=None,
+    promo=None,
+    purchased=None,
 ) -> None:
     cart_qty = next((it.quantity for it in session.cart.items if it.sku == fp.sku), 0)
     is_syncing = fp.sku in session.syncing_skus
@@ -265,8 +318,12 @@ def _render_row(
         price = catalogue_row.price or 0.0
     else:
         price = cached.last_price or 0.0 if cached else 0.0
-    image = (catalogue_row.image_url if catalogue_row else None) or (
-        cached.image_url if cached else ""
+    # Image: catalogue → pinned sku cache → purchase history. The last source
+    # keeps a picture for "niet verkrijgbaar" products no longer in the catalogue.
+    image = (
+        (catalogue_row.image_url if catalogue_row else None)
+        or (cached.image_url if cached else None)
+        or (purchased.image_url if purchased else "")
     )
     slug = (catalogue_row.slug if catalogue_row else None) or (cached.slug if cached else "")
 
@@ -332,14 +389,24 @@ def _render_row(
                         "font-size:11px;color:var(--c-text-3);line-height:1.2"
                     )
 
+        # On-offer tag (type of promotion, e.g. "1+1 GRATIS")
+        if promo is not None and not discontinued:
+            from pyplus.services.promos import promo_tag_label
+
+            ui.label(promo_tag_label(promo)).classes("sp-promo-tag").style(
+                "flex-shrink:0;margin-right:.25rem"
+            ).tooltip("In de aanbieding")
+
         # Price
         if price > 0 and not discontinued:
             ui.label(f"€ {price:.2f}".replace(".", ",")).style(
                 "font-size:12px;color:var(--c-text-3);flex-shrink:0;margin-right:.25rem"
             )
 
-        # Stepper
-        _render_stepper(fp, cart_qty, is_syncing, name, subtitle, price, image, cart_service)
+        # Stepper — only for products that can actually be bought. A
+        # "Niet verkrijgbaar" product has no add control.
+        if not discontinued:
+            _render_stepper(fp, cart_qty, is_syncing, name, subtitle, price, image, cart_service)
 
         # Remove from staples
         if body_refresh is not None:

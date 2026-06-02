@@ -88,7 +88,8 @@ def create_deals_lane(session) -> None:
                             ui.label(t("lane.deals.empty")).style(
                                 "font-size:13px;color:var(--c-text-3);margin-top:.25rem"
                             )
-                    for promo in visible:
+
+                    def _card_for(promo) -> None:
                         # Each card is its own refreshable so expanding one doesn't
                         # re-render (and re-flash the images of) the whole lane.
                         @ui.refreshable
@@ -97,6 +98,25 @@ def create_deals_lane(session) -> None:
 
                         state.card_refreshers[promo.slug] = _card
                         _card()
+
+                    if session.settings.deals_group_by_category:
+                        # Promotions already arrive grouped into category sections;
+                        # surface those as headers, first-appearance order preserved.
+                        seen: list[str] = []
+                        groups: dict[str, list] = {}
+                        for promo in visible:
+                            label = promo.category_label or "Overig"
+                            if label not in groups:
+                                groups[label] = []
+                                seen.append(label)
+                            groups[label].append(promo)
+                        for label in seen:
+                            ui.label(label).classes("sp-cat-header")
+                            for promo in groups[label]:
+                                _card_for(promo)
+                    else:
+                        for promo in visible:
+                            _card_for(promo)
 
             _render()
 
@@ -372,12 +392,13 @@ def _render_promo_product(prod: PromotionProduct, session, cart_service) -> None
                     )
 
         with ui.element("div").classes("sp-search-right"):
-            avail_cls = "sp-badge-available" if prod.is_available else "sp-badge-unavailable"
-            ui.label("✓" if prod.is_available else "uitv").classes(f"sp-badge {avail_cls}").style(
-                "font-size:10px;padding:1px 6px"
-            )
-
-            if is_syncing:
+            if not prod.is_available:
+                # Can't be bought → just say so, no add control (and no green
+                # check on the available ones — the add button speaks for itself).
+                ui.label(t("status.discontinued")).classes("sp-badge sp-badge-unavailable").style(
+                    "font-size:10px;padding:1px 6px;white-space:nowrap"
+                )
+            elif is_syncing:
                 with ui.element("div").style(
                     "width:32px;height:32px;display:flex;align-items:center;justify-content:center"
                 ):

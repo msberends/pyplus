@@ -16,6 +16,10 @@ def create_cart_panel(session) -> None:
     """Render the cart panel and wire it to the session's live cart."""
     cart_service = getattr(session, "cart_service", None)
     savings_by_sku: dict = {}  # sku → savings.Saving for the current cart
+    promo_by_sku: dict = {}  # sku → Promotion for items currently on offer
+    image_by_sku: dict = {}  # sku → catalogue image (fallback when cart line has none)
+    cat_by_sku: dict = {}  # sku → category breadcrumb (for grouping/sorting)
+    prefs = session.settings
 
     with ui.element("div").classes("sp-cart-panel"):
         # ── Header ─────────────────────────────────────────────────────
@@ -29,6 +33,16 @@ def create_cart_panel(session) -> None:
         # ── Scrollable item list ────────────────────────────────────────
         with ui.element("div").classes("sp-cart-body"):
 
+            def _render_item(item) -> None:
+                _render_cart_item(
+                    item,
+                    session,
+                    cart_service,
+                    savings_by_sku.get(item.sku),
+                    promo_by_sku.get(item.sku),
+                    image_by_sku.get(item.sku),
+                )
+
             @ui.refreshable
             def _items() -> None:
                 cart = session.cart
@@ -40,10 +54,76 @@ def create_cart_panel(session) -> None:
                         )
                     return
 
-                for item in cart.items:
-                    _render_cart_item(item, session, cart_service, savings_by_sku.get(item.sku))
+                items = _sort_items(list(cart.items), prefs.cart_sort)
+                if prefs.cart_group_by_category:
+                    for cat, group in _group_items(items, cat_by_sku):
+                        ui.label(cat).classes("sp-cat-header")
+                        for item in group:
+                            _render_item(item)
+                else:
+                    for item in items:
+                        _render_item(item)
 
             _items()
+
+            async def _load_categories() -> None:
+                """Load category breadcrumbs once for grouping (cache-only)."""
+                skus = [it.sku for it in session.cart.items if it.sku]
+                if not skus:
+                    return
+                from pyplus.services.categories import get_category_index
+
+                idx = await get_category_index(
+                    getattr(session, "store_number", 0) or 0, session.user_id, skus
+                )
+                if idx:
+                    cat_by_sku.update(idx)
+                    _items.refresh()
+
+            async def _load_promos() -> None:
+                """Load the (cache-only) promo index once and tag matching items."""
+                store = getattr(session, "store_number", 0) or 0
+                if not store:
+                    return
+                from pyplus.services.promos import get_promo_index
+
+                idx = await get_promo_index(store)
+                if idx:
+                    promo_by_sku.update(idx)
+                    _items.refresh()
+
+            async def _load_images() -> None:
+                """Backfill product images from the catalogue for cart lines that
+                arrive from PLUS without an ImageURL."""
+                store = getattr(session, "store_number", 0) or 0
+                skus = [it.sku for it in session.cart.items if it.sku and not it.image_url]
+                if not store or not skus:
+                    return
+                from pyplus.db import repo
+                from pyplus.db.engine import AsyncSessionLocal
+
+                try:
+                    async with AsyncSessionLocal() as db:
+                        cat = await repo.get_product_cache_by_skus(db, store, skus)
+                        cached = await repo.get_ingredient_skus_by_skus(db, session.user_id, skus)
+                except Exception:
+                    return
+                changed = False
+                for sku in skus:
+                    img = (cat.get(sku).image_url if cat.get(sku) else "") or (
+                        cached.get(sku).image_url if cached.get(sku) else ""
+                    )
+                    if img and image_by_sku.get(sku) != img:
+                        image_by_sku[sku] = img
+                        changed = True
+                if changed:
+                    _items.refresh()
+
+            if prefs.show_promo_tags:
+                asyncio.ensure_future(_load_promos())
+            asyncio.ensure_future(_load_images())
+            if prefs.cart_group_by_category:
+                asyncio.ensure_future(_load_categories())
 
         # ── Footer ──────────────────────────────────────────────────────
         with ui.element("div").classes("sp-cart-footer"):
@@ -108,7 +188,11 @@ def create_cart_panel(session) -> None:
         else:
             savings_row.set_visibility(False)
         _items.refresh()
-        asyncio.ensure_future(_recompute_savings())
+        asyncio.ensure_future(_load_images())
+        if prefs.cart_group_by_category:
+            asyncio.ensure_future(_load_categories())
+        if prefs.show_cart_savings:
+            asyncio.ensure_future(_recompute_savings())
 
     async def _recompute_savings() -> None:
         """Recompute cheaper-pack swaps for the current cart (off the render path)."""
@@ -150,18 +234,42 @@ def create_cart_panel(session) -> None:
     _on_cart()
 
 
-def _render_cart_item(item, session, cart_service, saving=None) -> None:
+def _sort_items(items: list, sort: str) -> list:
+    """Order cart items per the user's choice; 'cart' keeps the PLUS order."""
+    if sort == "name":
+        return sorted(items, key=lambda it: (it.product or "").casefold())
+    if sort == "price":
+        return sorted(items, key=lambda it: it.price_total, reverse=True)
+    return items  # "cart" — preserve PLUS/insertion order
+
+
+def _group_items(items: list, cat_by_sku: dict) -> list[tuple[str, list]]:
+    """Bucket items by their top-level category, preserving the given item order
+    within each group. Returns [(category, items), …] in display order."""
+    from pyplus.services.categories import group_order, top_category
+
+    buckets: dict[str, list] = {}
+    for it in items:
+        cat = top_category(cat_by_sku.get(it.sku, []))
+        buckets.setdefault(cat, []).append(it)
+    return [(cat, buckets[cat]) for cat in group_order(list(buckets))]
+
+
+def _render_cart_item(item, session, cart_service, saving=None, promo=None, image=None) -> None:
     """Render one cart item row: thumbnail | name+unit | price + stepper.
 
     When `saving` is set, a small cheaper-pack hint with an apply button is shown.
+    When `promo` is set, a compact "on offer" tag shows the type of promotion.
+    `image` is a catalogue fallback used when the PLUS cart line carries none.
     """
     is_syncing = item.sku in session.syncing_skus
     sku = item.sku
+    img_url = item.image_url or image or ""
 
     with ui.element("div").classes("sp-cart-item"):
         # Thumbnail
-        if item.image_url:
-            ui.image(item.image_url).classes("sp-cart-item-img")
+        if img_url:
+            ui.image(img_url).classes("sp-cart-item-img")
         else:
             ui.element("div").classes("sp-cart-item-img")
 
@@ -181,6 +289,14 @@ def _render_cart_item(item, session, cart_service, saving=None) -> None:
                 )
             if item.unit:
                 ui.label(item.unit).classes("sp-cart-item-unit")
+
+            # On-offer tag (type of promotion, e.g. "1+1 GRATIS")
+            if promo is not None:
+                from pyplus.services.promos import promo_tag_label
+
+                ui.label(promo_tag_label(promo)).classes("sp-promo-tag").style(
+                    "margin-top:2px"
+                ).tooltip("In de aanbieding")
 
             # Cheaper-pack hint
             if saving is not None and not is_syncing:
@@ -382,19 +498,34 @@ def create_mobile_cart_bar(session) -> None:
         )
 
     async def _open_sheet() -> None:
-        with ui.dialog(value=True).props("maximized").style("align-items:flex-end;padding:0"):
+        with (
+            ui.dialog(value=True)
+            .props("maximized transition-show=slide-up transition-hide=slide-down")
+            .style("align-items:flex-end;padding:0") as sheet
+        ):
             with ui.card().style(
                 "width:100%;border-radius:var(--r-xl) var(--r-xl) 0 0;"
-                "padding:0;max-height:85vh;overflow:hidden"
+                "padding:0;max-height:85vh;overflow:hidden;display:flex;flex-direction:column"
             ):
-                with ui.element("div").style(
-                    "display:flex;justify-content:center;padding:.625rem 0 .25rem"
+                # Grab handle + explicit close — tapping either dismisses the sheet
+                # (a maximized dialog has no backdrop to tap, so it needs its own).
+                with (
+                    ui.element("div")
+                    .style(
+                        "display:flex;align-items:center;justify-content:center;position:relative;"
+                        "padding:.625rem 0 .25rem;cursor:pointer;flex-shrink:0"
+                    )
+                    .on("click", sheet.close)
                 ):
                     ui.element("div").style(
                         "width:36px;height:4px;background:var(--c-border-strong);"
                         "border-radius:var(--r-full)"
                     )
-                create_cart_panel(session)
+                    ui.button(icon="close", on_click=sheet.close).props(
+                        "flat round dense size=sm color=grey"
+                    ).style("position:absolute;right:.5rem;top:.25rem")
+                with ui.element("div").style("flex:1;min-height:0;overflow:hidden;display:flex"):
+                    create_cart_panel(session)
 
     bar.on("click", _open_sheet)
 

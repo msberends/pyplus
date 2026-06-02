@@ -245,6 +245,10 @@ class ProductCache(Base):
     image_url: Mapped[str] = mapped_column(Text, default="")
     price: Mapped[float] = mapped_column(Float, default=0.0)
     is_available: Mapped[bool] = mapped_column(Boolean, default=False)
+    # JSON list of PLUS category names forming the product's breadcrumb path,
+    # broad → specific, e.g. ["Verse kant-en-klaarmaaltijden", "Italiaanse
+    # maaltijden", "Lasagne"]. May be 1+ layers. Captured during catalogue sync.
+    categories_json: Mapped[str] = mapped_column(Text, default="[]")
     fetched_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=datetime.datetime.utcnow
     )

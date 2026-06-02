@@ -148,6 +148,44 @@ async def test_ical_basic_structure():
 
 
 @pytest.mark.asyncio
+async def test_ical_includes_ingredients_when_enabled():
+    monday = datetime.date(2026, 6, 1)
+    row = _weekmenu_row("ma", "Pasta", "")
+    row.dish.id = 7
+    ing = MagicMock()
+    ing.display_name = "Spaghetti"
+    ing.amount = 500
+    ing.amount_unit = "g"
+
+    settings_json = '{"ical_include_ingredients": true}'
+
+    with patch("pyplus.services.exports.AsyncSessionLocal") as mock_ctx:
+        mock_db = AsyncMock()
+        mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch("pyplus.services.exports.repo.get_weekmenu", new_callable=AsyncMock) as mock_wm,
+            patch(
+                "pyplus.services.exports.repo.get_user_settings_json", new_callable=AsyncMock
+            ) as mock_set,
+            patch(
+                "pyplus.services.exports.repo.get_ingredients", new_callable=AsyncMock
+            ) as mock_ing,
+        ):
+            mock_wm.return_value = [row]
+            mock_set.return_value = settings_json
+            mock_ing.return_value = [ing]
+            ical_bytes = await build_ical(user_id=1, week_start=monday)
+
+    cal = Calendar.from_ical(ical_bytes)
+    ev = next(c for c in cal.walk() if c.name == "VEVENT")
+    desc = str(ev.get("description", ""))
+    assert "Ingrediënten" in desc
+    assert "Spaghetti" in desc
+
+
+@pytest.mark.asyncio
 async def test_ical_lunch_prefix():
     monday = datetime.date(2026, 6, 1)
     rows = [_weekmenu_row("lunch2", "Soep", "")]
@@ -297,3 +335,24 @@ def test_token_verify_no_key_returns_false():
     from pyplus.security.tokens import verify_ical_token
 
     assert verify_ical_token("anytoken", 1, None) is False
+
+
+def test_format_ingredient_line():
+    from types import SimpleNamespace
+
+    from pyplus.services.exports import _format_ingredient_line
+
+    def ing(name, amount, unit):
+        return SimpleNamespace(display_name=name, amount=amount, amount_unit=unit)
+
+    # Countable: drop the "1", use "Nx" otherwise
+    assert _format_ingredient_line(ing("Melkan plakken", 1, "stuks")) == "• Melkan plakken"
+    assert _format_ingredient_line(ing("Melkan plakken", 2, "stuks")) == "• 2x Melkan plakken"
+    assert _format_ingredient_line(ing("Ei", 1.0, "stuks")) == "• Ei"
+    # No unit behaves like a count
+    assert _format_ingredient_line(ing("Citroen", 3, "")) == "• 3x Citroen"
+    # Measured units keep amount + unit
+    assert _format_ingredient_line(ing("Bloem", 500, "g")) == "• 500 g Bloem"
+    assert _format_ingredient_line(ing("Knoflook", 1, "teen")) == "• 1 teen Knoflook"
+    # Empty name → dropped
+    assert _format_ingredient_line(ing("", 2, "stuks")) == ""

@@ -64,3 +64,19 @@ class UserSettings(BaseModel):
 
     # ── Exports ───────────────────────────────────────────────────────────────
     ical_include_ingredients: bool = False
+
+    # ── Display & behaviour ───────────────────────────────────────────────────
+    show_dish_metadata: bool = True  # meat/prep/veg chips on dishes + week menu
+    show_promo_tags: bool = True  # "in de aanbieding" tags in cart + staples
+    show_cart_savings: bool = True  # cheaper-pack hints + optimise button
+    show_replenish_hints: bool = True  # "binnenkort op" highlights in staples
+    confirm_clear_slot: bool = False  # ask before clearing a week-menu dish
+    hide_unavailable_search: bool = False  # drop unavailable products from search
+    search_result_limit: int = 24  # max products shown per search
+
+    # ── Cart & staples organisation ────────────────────────────────────────────
+    cart_group_by_category: bool = False  # group cart items under category headers
+    cart_sort: str = "cart"  # cart | name | price
+    staples_group_by_category: bool = False  # group staples under category headers
+    staples_sort: str = "smart"  # smart | name | price
+    deals_group_by_category: bool = False  # group promotions under category headers

@@ -7,6 +7,7 @@ Jobs are exactly the same functions as in registry.py; APScheduler just drives t
 
 from __future__ import annotations
 
+import datetime
 import logging
 
 log = logging.getLogger(__name__)
@@ -155,19 +156,20 @@ def start_scheduler() -> None:
         misfire_grace_time=3600,
     )
 
-    # Weekly full-catalogue sync every Monday at 03:30 (heavy ~5–7 min download;
-    # the nightly full_preload skips it while the cache is < 7 days old).
+    # Weekly full-catalogue sync every Saturday at 02:15 — fresh for weekend
+    # shopping (heavy ~5–7 min download; the nightly full_preload skips it while
+    # the cache is < 7 days old).
     _scheduler.add_job(
         _run_catalogue_all_users,
-        CronTrigger(day_of_week="mon", hour=3, minute=30),
-        id="catalogue_weekly_monday",
+        CronTrigger(day_of_week="sat", hour=2, minute=15),
+        id="catalogue_weekly",
         replace_existing=True,
         misfire_grace_time=7200,
     )
 
     _scheduler.start()
     log.info(
-        "APScheduler started — full_preload at 02:30, catalogue Mondays at 03:30, "
+        "APScheduler started — full_preload at 02:30, catalogue Saturdays at 02:15, "
         "weekly_ntfy Thursdays at 07:00 Amsterdam"
     )
 
@@ -177,3 +179,18 @@ def stop_scheduler() -> None:
     if _scheduler and _scheduler.running:
         _scheduler.shutdown(wait=False)
         _scheduler = None
+
+
+def scheduler_next_runs() -> dict[str, "datetime.datetime"]:
+    """Map ``job_id → next_run_time`` for the active in-app scheduler.
+
+    Returns an empty dict when the scheduler is disabled or not running, which the
+    Settings page uses to decide whether to show "next run" countdowns at all.
+    """
+    if _scheduler is None or not getattr(_scheduler, "running", False):
+        return {}
+    runs: dict[str, datetime.datetime] = {}
+    for job in _scheduler.get_jobs():
+        if job.next_run_time is not None:
+            runs[job.id] = job.next_run_time
+    return runs

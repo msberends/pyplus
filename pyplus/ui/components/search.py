@@ -84,7 +84,10 @@ def create_search_lane(session) -> None:
         try:
             from pyplus.services.search import search_products
 
-            found = await search_products(session, query)
+            prefs = session.settings
+            found = await search_products(session, query, limit=prefs.search_result_limit)
+            if prefs.hide_unavailable_search:
+                found = [p for p in found if p.is_available]
             _results.clear()
             _results.extend(found)
             if found:

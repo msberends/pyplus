@@ -270,6 +270,15 @@ async def _do_login_core(
             store_number = user.store_number or 0
             display_name = user.display_name or email.split("@")[0]
 
+            # Load the user's saved preferences so all lanes can read them.
+            from pyplus.ml.interface import UserSettings
+
+            settings_json = await repo.get_user_settings_json(db, user_id)
+            try:
+                user_settings = UserSettings.model_validate_json(settings_json)
+            except Exception:
+                user_settings = UserSettings()
+
     except Exception as exc:
         log.exception("Login error: %s", exc)
         try:
@@ -286,6 +295,7 @@ async def _do_login_core(
         store_number=store_number,
         display_name=display_name,
         _cart=cart,
+        _settings=user_settings,
     )
     manager.register(session)
     app.storage.user["user_id"] = user_id

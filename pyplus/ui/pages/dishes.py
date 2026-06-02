@@ -119,12 +119,13 @@ async def _render_dish_card(dish, user_id, session, refresh_fn) -> None:
                 if img_url:
                     ui.image(img_url).style(
                         "width:40px;height:40px;border-radius:var(--r-sm);"
-                        "object-fit:contain;background:var(--c-border)"
+                        "object-fit:contain;background:var(--c-surface);"
+                        "border:1px solid var(--c-border)"
                     )
                 else:
                     ui.element("div").style(
                         "width:40px;height:40px;border-radius:var(--r-sm);"
-                        "background:var(--c-border);flex-shrink:0"
+                        "background:var(--c-surface);border:1px solid var(--c-border);flex-shrink:0"
                     )
             if total > 4:
                 ui.label(f"+{total - 4}").style(
@@ -137,7 +138,7 @@ async def _render_dish_card(dish, user_id, session, refresh_fn) -> None:
         # Planning metadata chips (prep time / meat / vegetables)
         from pyplus.ui.format import dish_meta_chips
 
-        chips = dish_meta_chips(dish)
+        chips = dish_meta_chips(dish) if session.settings.show_dish_metadata else []
         if chips:
             with ui.element("div").style(
                 "display:flex;flex-wrap:wrap;gap:.25rem;margin-bottom:.5rem"
@@ -228,6 +229,7 @@ class _IngRow:
     optional: bool
     sort_order: int
     flexible: bool = False  # placeholder: product chosen at add-to-cart time
+    subtitle: str = ""  # product pack subtitle, e.g. "Per 400 ml" (display only)
     # Transient — not stored
     discontinued: bool = False  # not in store catalogue (no longer carried)
     relinking: bool = False
@@ -283,6 +285,7 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
                         optional=ing.optional,
                         flexible=ing.flexible,
                         sort_order=ing.sort_order,
+                        subtitle=cached.subtitle if cached else "",
                     )
                 )
             # Flag ingredients the store catalogue no longer carries.
@@ -379,20 +382,22 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
 
                 _ingredient_list()
 
-                # Add ingredient buttons
-                with ui.element("div").style(
-                    "display:flex;gap:.5rem;align-items:center;margin-top:.625rem"
-                ):
-                    ui.button(
-                        f"+ {t('dishes.add_ingredient')}",
-                        on_click=lambda: _add_new_row(rows, _ingredient_list),
-                    ).props("flat no-caps color=primary").style("font-size:13px")
-                    ui.button(
-                        f"+ {t('dishes.add_flexible')}",
-                        on_click=lambda: _add_flexible_row(rows, _ingredient_list),
-                    ).props("flat no-caps color=secondary").style("font-size:13px").tooltip(
-                        t("dishes.flexible_hint")
-                    )
+            # Pinned footer — add-ingredient actions stay reachable on phones
+            # even when the ingredient list scrolls past the viewport.
+            with ui.element("div").style(
+                "display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;flex-shrink:0;"
+                "padding:.75rem 1.25rem;border-top:1px solid var(--c-border);background:var(--c-surface)"
+            ):
+                ui.button(
+                    f"+ {t('dishes.add_ingredient')}",
+                    on_click=lambda: _add_new_row(rows, _ingredient_list),
+                ).props("flat no-caps color=primary").style("font-size:13px")
+                ui.button(
+                    f"+ {t('dishes.add_flexible')}",
+                    on_click=lambda: _add_flexible_row(rows, _ingredient_list),
+                ).props("flat no-caps color=secondary").style("font-size:13px").tooltip(
+                    t("dishes.flexible_hint")
+                )
 
 
 def _render_meta_fields(meta: dict) -> None:
@@ -547,7 +552,7 @@ def _render_ingredient_row(
         "border-radius:var(--r-md);margin-bottom:.5rem;"
         "background:var(--c-surface)"
     ):
-        # Top row: [image] [name/search] [amount] [unit] [optional] [up/down/delete]
+        # Top row: [image] [name/search] [amount] [unit] [up/down/relink/delete]
         with ui.element("div").style("display:flex;align-items:center;gap:.5rem"):
             # Product image / placeholder
             if row.image_url and not row.relinking:
@@ -563,14 +568,49 @@ def _render_ingredient_row(
 
             # Name display / relink search
             if row.relinking or not row.sku:
-                # Search field
+                # Search field. The input is rendered once and kept alive; only
+                # the results box below it is cleared/redrawn per keystroke, so
+                # the field never loses focus while typing.
                 with ui.element("div").style("flex:1;position:relative"):
+                    search_field = (
+                        ui.input(
+                            placeholder=t("dishes.ingredient_search"),
+                            value=row.search_query,
+                        )
+                        .props("outlined dense clearable autofocus")
+                        .style("width:100%")
+                    )
+                    results_box = ui.element("div").style(
+                        "position:absolute;top:42px;left:0;right:0;z-index:999"
+                    )
 
-                    async def _on_search(e, r=row):
-                        r.search_query = e.value if hasattr(e, "value") else ""
-                        if len(r.search_query) >= 2:
+                    def _draw_results(r=row, box=results_box):
+                        box.clear()
+                        with box:
+                            if r.searching:
+                                with ui.element("div").style(
+                                    "background:white;border:1px solid var(--c-border);"
+                                    "border-radius:var(--r-md);box-shadow:var(--shadow-md)"
+                                ):
+                                    ui.label("Zoeken…").style(
+                                        "padding:.5rem .75rem;font-size:12px;color:var(--c-text-3)"
+                                    )
+                            elif r.search_results:
+                                with ui.element("div").style(
+                                    "background:white;border:1px solid var(--c-border);"
+                                    "border-radius:var(--r-md);box-shadow:var(--shadow-md);"
+                                    "max-height:200px;overflow-y:auto"
+                                ):
+                                    for prod in r.search_results[:8]:
+                                        _render_search_result(prod, r, session, user_id, refresh_fn)
+
+                    async def _on_search(e, r=row, field=search_field):
+                        # update:model-value events don't carry `.value` in this
+                        # NiceGUI version — read the synced field value instead.
+                        r.search_query = (e.value if hasattr(e, "value") else field.value) or ""
+                        if len(r.search_query.strip()) >= 2:
                             r.searching = True
-                            refresh_fn.refresh()
+                            _draw_results()
                             try:
                                 from pyplus.services.search import search_products
 
@@ -580,102 +620,10 @@ def _render_ingredient_row(
                             r.searching = False
                         else:
                             r.search_results = []
-                        refresh_fn.refresh()
+                        _draw_results()
 
-                    search_field = (
-                        ui.input(
-                            placeholder=t("dishes.ingredient_search"),
-                            value=row.search_query,
-                        )
-                        .props("outlined dense clearable")
-                        .style("width:100%")
-                    )
                     search_field.on("update:model-value", _on_search)
-
-                    # Search results dropdown
-                    if row.searching:
-                        with ui.element("div").style(
-                            "position:absolute;top:42px;left:0;right:0;z-index:999;"
-                            "background:white;border:1px solid var(--c-border);"
-                            "border-radius:var(--r-md);box-shadow:var(--shadow-md);max-height:200px;overflow-y:auto"
-                        ):
-                            ui.label("Zoeken…").style(
-                                "padding:.5rem .75rem;font-size:12px;color:var(--c-text-3)"
-                            )
-
-                    elif row.search_results:
-                        with ui.element("div").style(
-                            "position:absolute;top:42px;left:0;right:0;z-index:999;"
-                            "background:white;border:1px solid var(--c-border);"
-                            "border-radius:var(--r-md);box-shadow:var(--shadow-md);max-height:200px;overflow-y:auto"
-                        ):
-                            for prod in row.search_results[:8]:
-
-                                async def _pick(p=prod, r=row):
-                                    r.sku = p.sku
-                                    r.display_name = p.name
-                                    r.image_url = p.image_url
-                                    r.relinking = False
-                                    r.discontinued = False
-                                    r.search_query = ""
-                                    r.search_results = []
-                                    # Infer unit from subtitle
-                                    from pyplus.services.dishes import _parse_pack_from_subtitle
-
-                                    pack_size, pack_unit = _parse_pack_from_subtitle(p.subtitle)
-                                    if pack_unit and r.amount_unit == "stuks":
-                                        r.amount_unit = pack_unit
-                                    r.pack_size = pack_size
-                                    r.pack_unit = pack_unit
-                                    # Cache to ingredient_skus
-                                    from pyplus.services.dishes import (
-                                        cache_ingredient_sku_from_product,
-                                    )
-
-                                    async with AsyncSessionLocal() as db:
-                                        await cache_ingredient_sku_from_product(db, user_id, p)
-                                    refresh_fn.refresh()
-
-                                avail_color = (
-                                    "var(--c-brand-dark)"
-                                    if prod.is_available
-                                    else "var(--c-danger)"
-                                )
-                                with (
-                                    ui.element("div")
-                                    .style(
-                                        "display:flex;align-items:center;gap:.5rem;"
-                                        "padding:.375rem .75rem;cursor:pointer;"
-                                        "transition:background .1s"
-                                    )
-                                    .on("click", _pick)
-                                    .on(
-                                        "mouseenter",
-                                        lambda el: el.style("background:var(--c-surface-2)"),
-                                    )
-                                    .on(
-                                        "mouseleave",
-                                        lambda el: el.style("background:none"),
-                                    )
-                                ):
-                                    if prod.image_url:
-                                        ui.image(prod.image_url).style(
-                                            "width:32px;height:32px;object-fit:contain;"
-                                            "border-radius:4px;background:var(--c-border);flex-shrink:0"
-                                        )
-                                    with ui.element("div").style("flex:1;min-width:0"):
-                                        ui.label(prod.name).style(
-                                            "font-size:13px;font-weight:500;overflow:hidden;"
-                                            "text-overflow:ellipsis;white-space:nowrap"
-                                        )
-                                        if prod.subtitle:
-                                            ui.label(prod.subtitle).style(
-                                                "font-size:11px;color:var(--c-text-3)"
-                                            )
-                                    ui.element("div").style(
-                                        f"width:6px;height:6px;border-radius:50%;"
-                                        f"background:{avail_color};flex-shrink:0"
-                                    )
+                    _draw_results()
             else:
                 # Pinned product display
                 with ui.element("div").style("flex:1;min-width:0;overflow:hidden"):
@@ -683,15 +631,24 @@ def _render_ingredient_row(
                         "font-size:13px;font-weight:500;overflow:hidden;"
                         "text-overflow:ellipsis;white-space:nowrap"
                     )
+                    # Product pack unit, e.g. "Per 400 ml" — shown for every
+                    # SKU-bound ingredient, like the staples and cart lanes do.
+                    unit_text = row.subtitle or (
+                        f"Per {row.pack_size:g} {row.pack_unit}"
+                        if row.pack_size and row.pack_unit
+                        else ""
+                    )
+                    if unit_text:
+                        ui.label(unit_text).style(
+                            "font-size:11px;color:var(--c-text-3);overflow:hidden;"
+                            "text-overflow:ellipsis;white-space:nowrap"
+                        )
                     if row.discontinued:
+                        # Temporary — the store may carry it again next week.
                         ui.label(t("status.discontinued")).classes(
                             "sp-badge sp-badge-unavailable"
-                        ).style("font-size:10px;display:inline-block").tooltip(
-                            "Niet in catalogus — kies een ander product"
-                        )
-                    elif row.pack_size and row.pack_unit:
-                        ui.label(f"Per {row.pack_size:g} {row.pack_unit}").style(
-                            "font-size:11px;color:var(--c-text-3)"
+                        ).style("font-size:10px;display:inline-block;margin-top:1px").tooltip(
+                            "Nu niet verkrijgbaar — kan later terugkomen"
                         )
 
             # Amount input
@@ -711,26 +668,10 @@ def _render_ingredient_row(
             amount_input.on("blur", _amount_change)
             amount_input.on("keydown.enter", _amount_change)
 
-            # Unit select
-            unit_select = (
-                ui.select(
-                    _UNITS,
-                    value=row.amount_unit if row.amount_unit in _UNITS else _UNITS[0],
-                )
-                .props("outlined dense options-dense")
-                .style("width:72px;flex-shrink:0")
-            )
-            unit_select.on(
-                "update:model-value",
-                lambda e, r=row: setattr(r, "amount_unit", e.value),
-            )
-
-            # Optional toggle
-            opt_check = ui.checkbox("", value=row.optional).props("dense").style("flex-shrink:0")
-            opt_check.tooltip("Optioneel")
-            opt_check.on(
-                "update:model-value",
-                lambda e, r=row: setattr(r, "optional", bool(e.value)),
+            # Unit — static. It is fixed by the linked product (its pack), so it
+            # is shown read-only rather than as an editable select.
+            ui.label(row.amount_unit or "").style(
+                "font-size:12px;color:var(--c-text-3);flex-shrink:0;min-width:34px;text-align:left"
             )
 
             # Control buttons
@@ -769,6 +710,73 @@ def _render_ingredient_row(
                     icon="delete",
                     on_click=lambda i=idx: _remove_row(rows, i, refresh_fn),
                 ).props("flat dense size=sm color=negative")
+
+        # Second line: a clearly-labelled optional toggle (the previous bare
+        # checkbox was easy to miss).
+        with ui.element("div").style(
+            "display:flex;align-items:center;gap:.375rem;padding-left:48px"
+        ):
+            opt_check = ui.checkbox(t("dishes.optional"), value=row.optional).props("dense")
+            opt_check.tooltip(t("dishes.optional_hint"))
+            opt_check.on(
+                "update:model-value",
+                lambda e, r=row: setattr(r, "optional", bool(e.value)),
+            )
+
+
+def _render_search_result(prod, row: _IngRow, session, user_id: int, refresh_fn) -> None:
+    """One row in the ingredient-search dropdown; clicking it links the SKU."""
+
+    async def _pick(p=prod, r=row):
+        r.sku = p.sku
+        r.display_name = p.name
+        r.image_url = p.image_url
+        r.subtitle = p.subtitle or ""
+        r.relinking = False
+        r.discontinued = False
+        r.search_query = ""
+        r.search_results = []
+        # Infer unit from subtitle
+        from pyplus.services.dishes import _parse_pack_from_subtitle
+
+        pack_size, pack_unit = _parse_pack_from_subtitle(p.subtitle)
+        if pack_unit and r.amount_unit == "stuks":
+            r.amount_unit = pack_unit
+        r.pack_size = pack_size
+        r.pack_unit = pack_unit
+        # Cache to ingredient_skus
+        from pyplus.services.dishes import cache_ingredient_sku_from_product
+
+        async with AsyncSessionLocal() as db:
+            await cache_ingredient_sku_from_product(db, user_id, p)
+        refresh_fn.refresh()
+
+    avail_color = "var(--c-brand-dark)" if prod.is_available else "var(--c-danger)"
+    with (
+        ui.element("div")
+        .style(
+            "display:flex;align-items:center;gap:.5rem;"
+            "padding:.375rem .75rem;cursor:pointer;transition:background .1s"
+        )
+        .on("click", _pick)
+        .on("mouseenter", lambda el: el.style("background:var(--c-surface-2)"))
+        .on("mouseleave", lambda el: el.style("background:none"))
+    ):
+        if prod.image_url:
+            ui.image(prod.image_url).style(
+                "width:32px;height:32px;object-fit:contain;"
+                "border-radius:4px;background:var(--c-border);flex-shrink:0"
+            )
+        with ui.element("div").style("flex:1;min-width:0"):
+            ui.label(prod.name).style(
+                "font-size:13px;font-weight:500;overflow:hidden;"
+                "text-overflow:ellipsis;white-space:nowrap"
+            )
+            if prod.subtitle:
+                ui.label(prod.subtitle).style("font-size:11px;color:var(--c-text-3)")
+        ui.element("div").style(
+            f"width:6px;height:6px;border-radius:50%;background:{avail_color};flex-shrink:0"
+        )
 
 
 def _move_row(rows: list[_IngRow], idx: int, direction: int, refresh_fn) -> None:

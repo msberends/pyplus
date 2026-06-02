@@ -45,8 +45,30 @@ def _make_calendar() -> Calendar:
 
 async def _build_events(user_id: int, week_start: datetime.date) -> list[Event]:
     """Load weekmenu from DB and return iCal Event objects for filled slots."""
+    from pyplus.ml.interface import UserSettings
+
     async with AsyncSessionLocal() as db:
         rows = await repo.get_weekmenu(db, user_id, week_start)
+
+        # Settings + ingredients are best-effort: the calendar must still build
+        # (with just prep notes) if either lookup fails.
+        settings = UserSettings()
+        ingredients_by_dish: dict[int, list] = {}
+        try:
+            settings = UserSettings.model_validate_json(
+                await repo.get_user_settings_json(db, user_id)
+            )
+        except Exception:
+            settings = UserSettings()
+        if settings.ical_include_ingredients:
+            try:
+                for row in rows:
+                    if row.dish is not None and row.dish.id not in ingredients_by_dish:
+                        ingredients_by_dish[row.dish.id] = await repo.get_ingredients(
+                            db, row.dish.id
+                        )
+            except Exception:
+                ingredients_by_dish = {}
 
     events: list[Event] = []
     for row in rows:
@@ -68,11 +90,37 @@ async def _build_events(user_id: int, week_start: datetime.date) -> list[Event]:
         event.add("status", "CONFIRMED")
         event.add("transp", "TRANSPARENT")
         event.add("class", "PRIVATE")
+
+        desc_parts: list[str] = []
         if dish.prep_notes and dish.prep_notes.strip():
-            event.add("description", dish.prep_notes.strip())
+            desc_parts.append(dish.prep_notes.strip())
+        if settings.ical_include_ingredients:
+            ings = ingredients_by_dish.get(dish.id, [])
+            lines = [_format_ingredient_line(ing) for ing in ings]
+            lines = [ln for ln in lines if ln]
+            if lines:
+                desc_parts.append("Ingrediënten:\n" + "\n".join(lines))
+        if desc_parts:
+            event.add("description", "\n\n".join(desc_parts))
         events.append(event)
 
     return events
+
+
+def _format_ingredient_line(ing) -> str:
+    """One concise ingredient line, e.g. '• 2x Naam', '• Naam', '• 500 g Naam'."""
+    name = (ing.display_name or "").strip()
+    if not name:
+        return ""
+    amount = ing.amount or 0
+    unit = (ing.amount_unit or "").strip()
+    if unit in ("", "stuks"):
+        # Countable: drop the count for a single item, else "Nx".
+        return f"• {amount:g}x {name}" if amount and amount != 1 else f"• {name}"
+    # Measured (g, ml, teen, …): keep the amount + unit.
+    qty = f"{amount:g}" if amount else ""
+    prefix = " ".join(p for p in (qty, unit) if p)
+    return f"• {prefix} {name}" if prefix else f"• {name}"
 
 
 # ── iCal export ────────────────────────────────────────────────────────────────

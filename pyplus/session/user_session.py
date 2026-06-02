@@ -19,6 +19,7 @@ class UserSession:
     display_name: str
 
     _cart: object = field(default=None)  # plus.models.Cart
+    _settings: object = field(default=None)  # pyplus.ml.interface.UserSettings
     _cart_listeners: list[Callable] = field(default_factory=list)
     _error_listeners: list[Callable[[str], None]] = field(default_factory=list)
 
@@ -40,6 +41,20 @@ class UserSession:
         """Replace the cart and notify all listeners."""
         self._cart = cart
         self._fire_cart_listeners()
+
+    # ── User settings ──────────────────────────────────────────────────────────
+
+    @property
+    def settings(self):
+        """The user's preferences. Falls back to defaults if not yet loaded."""
+        if self._settings is None:
+            from pyplus.ml.interface import UserSettings
+
+            return UserSettings()
+        return self._settings
+
+    def set_settings(self, settings) -> None:
+        self._settings = settings
 
     def touch(self) -> None:
         """Re-notify listeners without changing cart data (e.g. syncing status changed)."""

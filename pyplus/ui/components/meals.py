@@ -55,6 +55,22 @@ _MONTHS_NL = {
     12: "dec",
 }
 
+# The dish picker packs "<name><US><properties>" into each option label, where
+# <US> is the unit-separator control char. The custom option slot below splits
+# on it so the name renders as the prominent primary label and the planning
+# properties as a smaller, greyish caption on their own line.
+_OPT_SEP = "\u001f"
+_PICKER_OPTION_SLOT = """
+<q-item v-bind="props.itemProps">
+  <q-item-section>
+    <q-item-label>{{ props.opt.label.split(String.fromCharCode(31))[0] }}</q-item-label>
+    <q-item-label caption v-if="props.opt.label.includes(String.fromCharCode(31))">
+      {{ props.opt.label.split(String.fromCharCode(31))[1] }}
+    </q-item-label>
+  </q-item-section>
+</q-item>
+"""
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -192,9 +208,15 @@ async def create_meals_lane(session) -> None:
 def _render_all_slots(session, state: _MealsState, refresh_fn) -> None:
     from pyplus.ui.format import dish_meta_chips
 
+    show_meta = session.settings.show_dish_metadata
+
     def _opt_label(d) -> str:
+        # name<US>properties — split + styled by _PICKER_OPTION_SLOT so the title
+        # is prominent and the properties sit beneath it as a small grey caption.
+        if not show_meta:
+            return d.name
         chips = dish_meta_chips(d)
-        return f"{d.name}   {'  '.join(chips)}" if chips else d.name
+        return f"{d.name}{_OPT_SEP}{'  '.join(chips)}" if chips else d.name
 
     options = {d.id: _opt_label(d) for d in state.dishes}
 
@@ -234,15 +256,20 @@ def _slot_row(slot, day_label, date_str, state, options, session, refresh_fn) ->
         # Content
         if dish is None:
             with ui.element("div").style("flex:1;min-width:0"):
-                ui.select(
-                    options,
-                    value=None,
-                    with_input=True,
-                    label=t("lane.meals.empty_slot"),
-                    on_change=lambda e, s=slot: asyncio.ensure_future(
-                        _pick_dish(session.user_id, s, e.value, state, refresh_fn)
-                    ),
-                ).props("outlined dense options-dense").classes("sp-meals-picker")
+                picker = (
+                    ui.select(
+                        options,
+                        value=None,
+                        with_input=True,
+                        label=t("lane.meals.empty_slot"),
+                        on_change=lambda e, s=slot: asyncio.ensure_future(
+                            _pick_dish(session.user_id, s, e.value, state, refresh_fn)
+                        ),
+                    )
+                    .props("outlined dense options-dense")
+                    .classes("sp-meals-picker")
+                )
+                picker.add_slot("option", _PICKER_OPTION_SLOT)
         else:
             _filled_chip(slot, dish, state, session, refresh_fn)
 
@@ -250,13 +277,19 @@ def _slot_row(slot, day_label, date_str, state, options, session, refresh_fn) ->
 def _filled_chip(slot, dish, state, session, refresh_fn) -> None:
     from pyplus.ui.format import dish_meta_chips
 
+    def _do_clear(s=slot) -> None:
+        if session.settings.confirm_clear_slot:
+            _confirm_clear(session, s, dish, state, refresh_fn)
+        else:
+            asyncio.ensure_future(_clear_slot(session.user_id, s, state, refresh_fn))
+
     with ui.element("div").classes("sp-meals-chip"):
         with ui.element("div").style("flex:1;min-width:0;overflow:hidden"):
             ui.label(dish.name).style(
                 "font-size:13px;font-weight:600;color:var(--c-text);"
                 "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
             )
-            chips = dish_meta_chips(dish)
+            chips = dish_meta_chips(dish) if session.settings.show_dish_metadata else []
             if chips:
                 ui.label("  ".join(chips)).style(
                     "font-size:10px;color:var(--c-text-3);line-height:1.2;"
@@ -265,15 +298,11 @@ def _filled_chip(slot, dish, state, session, refresh_fn) -> None:
         with ui.element("div").style("display:flex;gap:1px;flex-shrink:0"):
             ui.button(
                 icon="swap_horiz",
-                on_click=lambda s=slot: asyncio.ensure_future(
-                    _clear_slot(session.user_id, s, state, refresh_fn)
-                ),
+                on_click=lambda: _do_clear(),
             ).props("flat round dense size=xs color=grey-6").tooltip(t("lane.meals.swap"))
             ui.button(
                 icon="close",
-                on_click=lambda s=slot: asyncio.ensure_future(
-                    _clear_slot(session.user_id, s, state, refresh_fn)
-                ),
+                on_click=lambda: _do_clear(),
             ).props("flat round dense size=xs color=grey-6").tooltip(t("lane.meals.clear"))
             if dish.prep_notes:
                 ui.button(
@@ -343,6 +372,25 @@ async def _clear_slot(
         await repo.set_weekmenu_slot(db, user_id, slot, state.week_start, None)
     state.slots[slot] = None
     refresh_fn.refresh()
+
+
+def _confirm_clear(session, slot: str, dish, state: _MealsState, refresh_fn) -> None:
+    """Confirmation dialog before removing a dish from a week-menu slot."""
+    with ui.dialog(value=True) as dlg, ui.card().style("max-width:340px;padding:1.25rem"):
+        ui.label("Gerecht verwijderen?").style("font-size:16px;font-weight:700;color:var(--c-text)")
+        ui.label(f"'{dish.name}' uit dit dagdeel halen?").style(
+            "font-size:13px;color:var(--c-text-3);margin:.375rem 0 .875rem"
+        )
+        with ui.row().style("justify-content:flex-end;gap:.5rem;width:100%"):
+            ui.button(t("action.cancel"), on_click=dlg.close).props("flat rounded no-caps")
+
+            async def _yes() -> None:
+                dlg.close()
+                await _clear_slot(session.user_id, slot, state, refresh_fn)
+
+            ui.button(t("lane.meals.clear"), on_click=lambda: asyncio.ensure_future(_yes())).props(
+                "unelevated rounded no-caps color=negative"
+            )
 
 
 # ── Aggregation + cart add ─────────────────────────────────────────────────────
@@ -570,19 +618,70 @@ def _render_flex_picker(session, flex_ing, st: dict, flex_choice: dict, refresh_
                 ).style("font-size:12px")
             return
 
-        # Search input + results
+        # Search input + results. The input is kept alive and only the results
+        # box below is redrawn per keystroke, so the field never loses focus.
         with ui.element("div").style("position:relative"):
             search_field = (
                 ui.input(placeholder=t("dishes.ingredient_search"), value=st["query"])
                 .props("outlined dense clearable")
                 .style("width:100%")
             )
+            results_box = ui.element("div")
 
-            async def _on_search(e, fid=flex_ing.id, s=st):
-                s["query"] = e.value if hasattr(e, "value") else ""
-                if len((s["query"] or "").strip()) >= 2:
+            def _draw_results(s=st, box=results_box):
+                box.clear()
+                with box:
+                    if s["searching"]:
+                        ui.label("Zoeken…").style(
+                            "padding:.375rem .5rem;font-size:12px;color:var(--c-text-3)"
+                        )
+                    elif s["results"]:
+                        with ui.element("div").style(
+                            "border:1px solid var(--c-border);border-radius:var(--r-md);"
+                            "margin-top:.25rem;max-height:180px;overflow-y:auto"
+                        ):
+                            for prod in s["results"][:8]:
+
+                                def _pick(p=prod, fid=flex_ing.id):
+                                    flex_choice[fid] = p
+                                    st["results"] = []
+                                    st["query"] = ""
+                                    refresh_fn.refresh()
+
+                                with (
+                                    ui.element("div")
+                                    .style(
+                                        "display:flex;align-items:center;gap:.5rem;"
+                                        "padding:.375rem .5rem;cursor:pointer"
+                                    )
+                                    .on("click", _pick)
+                                ):
+                                    if prod.image_url:
+                                        ui.image(prod.image_url).style(
+                                            "width:28px;height:28px;object-fit:contain;"
+                                            "border-radius:4px;background:var(--c-border);flex-shrink:0"
+                                        )
+                                    ui.label(prod.name).style(
+                                        "font-size:12px;flex:1;min-width:0;overflow:hidden;"
+                                        "text-overflow:ellipsis;white-space:nowrap"
+                                    )
+                                    dot = (
+                                        "var(--c-brand-dark)"
+                                        if prod.is_available
+                                        else "var(--c-danger)"
+                                    )
+                                    ui.element("div").style(
+                                        f"width:6px;height:6px;border-radius:50%;"
+                                        f"background:{dot};flex-shrink:0"
+                                    )
+
+            async def _on_search(e, s=st, field=search_field):
+                # update:model-value carries no `.value` here — use the field's
+                # synced value as the source of truth.
+                s["query"] = (e.value if hasattr(e, "value") else field.value) or ""
+                if len(s["query"].strip()) >= 2:
                     s["searching"] = True
-                    refresh_fn.refresh()
+                    _draw_results()
                     try:
                         from pyplus.services.search import search_products
 
@@ -592,48 +691,10 @@ def _render_flex_picker(session, flex_ing, st: dict, flex_choice: dict, refresh_
                     s["searching"] = False
                 else:
                     s["results"] = []
-                refresh_fn.refresh()
+                _draw_results()
 
             search_field.on("update:model-value", _on_search)
-
-            if st["searching"]:
-                ui.label("Zoeken…").style(
-                    "padding:.375rem .5rem;font-size:12px;color:var(--c-text-3)"
-                )
-            elif st["results"]:
-                with ui.element("div").style(
-                    "border:1px solid var(--c-border);border-radius:var(--r-md);"
-                    "margin-top:.25rem;max-height:180px;overflow-y:auto"
-                ):
-                    for prod in st["results"][:8]:
-
-                        def _pick(p=prod, fid=flex_ing.id, s=st):
-                            flex_choice[fid] = p
-                            s["results"] = []
-                            s["query"] = ""
-                            refresh_fn.refresh()
-
-                        with (
-                            ui.element("div")
-                            .style(
-                                "display:flex;align-items:center;gap:.5rem;padding:.375rem .5rem;"
-                                "cursor:pointer"
-                            )
-                            .on("click", _pick)
-                        ):
-                            if prod.image_url:
-                                ui.image(prod.image_url).style(
-                                    "width:28px;height:28px;object-fit:contain;border-radius:4px;"
-                                    "background:var(--c-border);flex-shrink:0"
-                                )
-                            ui.label(prod.name).style(
-                                "font-size:12px;flex:1;min-width:0;overflow:hidden;"
-                                "text-overflow:ellipsis;white-space:nowrap"
-                            )
-                            dot = "var(--c-brand-dark)" if prod.is_available else "var(--c-danger)"
-                            ui.element("div").style(
-                                f"width:6px;height:6px;border-radius:50%;background:{dot};flex-shrink:0"
-                            )
+            _draw_results()
 
 
 def _show_agg_dialog(session, agg: AggResult) -> None:
@@ -877,20 +938,52 @@ def render_ical_subscription_body(user_id: int) -> None:
         "font-size:13px;font-weight:600;color:var(--c-text);margin-bottom:.5rem;display:block"
     )
 
+    from pyplus.config import settings as app_settings
+
+    path = f"/menu.ics?uid={user_id}&token={token}"
+
+    # If a public base URL is configured, build the link server-side immediately.
+    base = (app_settings.base_url or "").rstrip("/")
+    initial = f"{base}{path}" if base else ""
+
     with ui.element("div").style(
         "display:flex;align-items:center;gap:.375rem;margin-bottom:.75rem"
     ):
-        url_display = ui.input().props("outlined dense readonly").style("flex:1;font-size:12px")
-        ui.button(
-            icon="content_copy",
-            on_click=lambda: asyncio.ensure_future(_copy_ical_url(url_display.value)),
-        ).props("flat round dense size=sm color=primary").tooltip("URL kopiëren")
+        url_display = (
+            ui.input(value=initial)
+            .props("outlined dense readonly")
+            .classes("ical-url-field")
+            .style("flex:1;font-size:12px")
+        )
+        # The copy must happen inside the tap gesture (iOS Safari blocks
+        # clipboard writes that come back via a server round-trip), so it runs as
+        # a client-side js_handler with an execCommand fallback for non-HTTPS. The
+        # Python handler only shows the confirmation toast.
+        copy_btn = (
+            ui.button(icon="content_copy")
+            .props("flat round dense size=sm color=primary")
+            .tooltip("URL kopiëren")
+        )
+        copy_btn.on(
+            "click",
+            handler=lambda: ui.notify(
+                "URL gekopieerd", type="positive", position="top", timeout=1500
+            ),
+            js_handler=_COPY_JS,
+        )
 
     async def _set_url() -> None:
-        origin = await ui.run_javascript("window.location.origin")
-        url_display.set_value(f"{origin}/menu.ics?uid={user_id}&token={token}")
+        # No configured base URL → resolve the origin from the live page. Deferred
+        # via a timer so the client connection is ready when run_javascript fires.
+        try:
+            origin = await ui.run_javascript("window.location.origin", timeout=5.0)
+        except Exception:
+            origin = ""
+        if origin:
+            url_display.set_value(f"{origin}{path}")
 
-    asyncio.ensure_future(_set_url())
+    if not initial:
+        ui.timer(0.2, lambda: asyncio.ensure_future(_set_url()), once=True)
 
     ui.label(
         "iOS: Agenda → Accounts → Voeg account toe → Andere → Agenda-abonnement\n"
@@ -942,14 +1035,39 @@ async def _show_ical_dialog(session, week_start: datetime.date) -> None:
                 )
 
 
-async def _copy_ical_url(url: str) -> None:
-    import json as _json
-
-    try:
-        await ui.run_javascript(f"navigator.clipboard.writeText({_json.dumps(url)})")
-        ui.notify("URL gekopieerd", type="positive", position="top", timeout=2000)
-    except Exception:
-        ui.notify("Kopiëren niet gelukt", type="warning", position="top")
+# Client-side copy: reads the URL straight from the input and copies within the
+# tap gesture. Prefers the async Clipboard API (HTTPS), falls back to a hidden
+# textarea + execCommand for non-secure contexts / older iOS Safari.
+_COPY_JS = """() => {
+    const field = document.querySelector('.ical-url-field input');
+    const text = field ? field.value : '';
+    if (!text) return;
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+    } else {
+        fallbackCopy(text);
+    }
+    function fallbackCopy(t) {
+        const ta = document.createElement('textarea');
+        ta.value = t;
+        ta.contentEditable = true;
+        ta.readOnly = false;
+        ta.style.position = 'fixed';
+        ta.style.top = '0';
+        ta.style.left = '0';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        const range = document.createRange();
+        range.selectNodeContents(ta);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        ta.setSelectionRange(0, t.length);
+        try { document.execCommand('copy'); } catch (e) {}
+        sel.removeAllRanges();
+        document.body.removeChild(ta);
+    }
+}"""
 
 
 async def _one_off_download(user_id: int, week_start: datetime.date) -> None:

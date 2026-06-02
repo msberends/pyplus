@@ -19,6 +19,14 @@ log = logging.getLogger(__name__)
 
 
 def _row_to_product(row, store_number: int) -> Product:
+    import json
+
+    try:
+        categories = json.loads(getattr(row, "categories_json", "") or "[]")
+        if not isinstance(categories, list):
+            categories = []
+    except (ValueError, TypeError):
+        categories = []
     return Product(
         sku=row.sku,
         name=row.name,
@@ -29,6 +37,7 @@ def _row_to_product(row, store_number: int) -> Product:
         price=row.price or 0.0,
         is_available=bool(row.is_available),
         store_number=store_number,
+        categories=categories,
     )
 
 
