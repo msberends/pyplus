@@ -122,6 +122,22 @@ async def _run_full_preload_all_users() -> None:
             log.error("[scheduler] full_preload for user=%d failed: %s", user.id, exc)
 
 
+async def _run_weather_all_users() -> None:
+    """APScheduler entry point: daily weather fetch for every user with weather enabled."""
+    from pyplus.db import repo
+    from pyplus.db.engine import AsyncSessionLocal
+    from pyplus.jobs.registry import refresh_weather
+
+    async with AsyncSessionLocal() as db:
+        users = await repo.get_users_with_credentials(db)
+
+    for user in users:
+        try:
+            await refresh_weather(user_id=user.id)
+        except Exception as exc:
+            log.error("[scheduler] weather for user=%d failed: %s", user.id, exc)
+
+
 def start_scheduler() -> None:
     global _scheduler
     from pyplus.config import settings
@@ -167,10 +183,19 @@ def start_scheduler() -> None:
         misfire_grace_time=7200,
     )
 
+    # Weather runs at 02:30 alongside the nightly preload (it's fast, no PLUS auth needed)
+    _scheduler.add_job(
+        _run_weather_all_users,
+        CronTrigger(hour=2, minute=30),
+        id="weather_daily",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
     _scheduler.start()
     log.info(
-        "APScheduler started — full_preload at 02:30, catalogue Saturdays at 02:15, "
-        "weekly_ntfy Thursdays at 07:00 Amsterdam"
+        "APScheduler started — full_preload + weather at 02:30, "
+        "catalogue Saturdays at 02:15, weekly_ntfy Thursdays at 07:00 Amsterdam"
     )
 
 

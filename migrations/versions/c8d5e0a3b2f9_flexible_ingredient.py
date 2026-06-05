@@ -32,8 +32,7 @@ def upgrade() -> None:
     # product chosen at cart-add). The R import conflated these with "optional";
     # split them out so flexible and optional are independent again.
     op.execute(
-        "UPDATE dish_ingredients SET flexible = 1, optional = 0 "
-        "WHERE sku IS NULL OR sku = ''"
+        "UPDATE dish_ingredients SET flexible = 1, optional = 0 WHERE sku IS NULL OR sku = ''"
     )
 
 

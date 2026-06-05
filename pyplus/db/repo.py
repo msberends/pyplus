@@ -24,6 +24,7 @@ from pyplus.db.models import (
     PurchasedProductCache,
     SyncState,
     User,
+    WeatherCache,
     Weekmenu,
 )
 
@@ -153,6 +154,9 @@ async def create_dish(
     prep_notes: str = "",
     prep_minutes: int | None = None,
     meat_type: str | None = None,
+    starch_type: str | None = None,
+    cooking_methods: str = "[]",
+    is_cold: bool = False,
     veg_count: int | None = None,
 ) -> Dish:
     dish = Dish(
@@ -161,6 +165,9 @@ async def create_dish(
         prep_notes=prep_notes,
         prep_minutes=prep_minutes,
         meat_type=meat_type,
+        starch_type=starch_type,
+        cooking_methods=cooking_methods,
+        is_cold=is_cold,
         veg_count=veg_count,
         created_at=datetime.datetime.utcnow(),
     )
@@ -198,6 +205,9 @@ async def duplicate_dish(db: AsyncSession, user_id: int, dish_id: int) -> Dish |
         prep_notes=src.prep_notes,
         prep_minutes=src.prep_minutes,
         meat_type=src.meat_type,
+        starch_type=src.starch_type,
+        cooking_methods=src.cooking_methods,
+        is_cold=src.is_cold,
         veg_count=src.veg_count,
     )
     for ing in ingredients:
@@ -427,6 +437,17 @@ async def get_ingredient_skus_by_skus(
     return {row.sku: row for row in result.scalars().all()}
 
 
+async def get_all_ingredient_prices(db: AsyncSession, user_id: int) -> dict[str, float]:
+    """Return {sku: last_price} for all cached ingredient SKUs with a known price."""
+    result = await db.execute(
+        select(IngredientSku.sku, IngredientSku.last_price).where(
+            IngredientSku.user_id == user_id,
+            IngredientSku.last_price.is_not(None),
+        )
+    )
+    return {row.sku: row.last_price for row in result.all()}
+
+
 async def get_weekmenu(db: AsyncSession, user_id: int, week_start: datetime.date) -> list[Weekmenu]:
     """All slot rows for a user + week, with dish eagerly loaded."""
     result = await db.execute(
@@ -570,22 +591,24 @@ async def get_pack_alternatives(
 async def search_product_cache(
     db: AsyncSession, store_number: int, query: str, limit: int = 24
 ) -> list[ProductCache]:
-    """Token-AND substring search over the cached catalogue for one store.
+    """Per-word substring search over the cached catalogue for one store.
 
-    Every whitespace-separated token must appear in the name or brand. Available
-    products sort first, then by name. Fast enough for instant typeahead because
-    the table is store-scoped and small (~11k rows).
+    Every whitespace-separated token must appear as a substring anywhere in
+    the name or brand (case-insensitive AND across tokens). Available products
+    sort first, then by name.
     """
     tokens = [tok for tok in query.lower().split() if tok]
     if not tokens:
         return []
     stmt = select(ProductCache).where(ProductCache.store_number == store_number)
     for tok in tokens:
-        like = f"%{tok}%"
+        anywhere = f"%{tok}%"
+        name_lower = func.lower(ProductCache.name)
+        brand_lower = func.lower(ProductCache.brand)
         stmt = stmt.where(
             or_(
-                func.lower(ProductCache.name).like(like),
-                func.lower(ProductCache.brand).like(like),
+                name_lower.like(anywhere),
+                brand_lower.like(anywhere),
             )
         )
     stmt = stmt.order_by(ProductCache.is_available.desc(), ProductCache.name).limit(limit)
@@ -956,3 +979,63 @@ async def get_dish_availability(
         else:
             unavailable += 1
     return available, unavailable, unknown
+
+
+# ── Weather cache ─────────────────────────────────────────────────────────────
+
+
+async def upsert_weather(
+    db: AsyncSession,
+    date: datetime.date,
+    latitude: float,
+    longitude: float,
+    temperature_max: float,
+) -> None:
+    stmt = sqlite_insert(WeatherCache).values(
+        date=date,
+        latitude=round(latitude, 2),
+        longitude=round(longitude, 2),
+        temperature_max=temperature_max,
+        fetched_at=datetime.datetime.utcnow(),
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[WeatherCache.date, WeatherCache.latitude, WeatherCache.longitude],
+        set_={"temperature_max": temperature_max, "fetched_at": datetime.datetime.utcnow()},
+    )
+    await db.execute(stmt)
+    await db.commit()
+
+
+async def get_weather(
+    db: AsyncSession, latitude: float, longitude: float, date: datetime.date
+) -> WeatherCache | None:
+    lat = round(latitude, 2)
+    lon = round(longitude, 2)
+    result = await db.execute(
+        select(WeatherCache).where(
+            WeatherCache.date == date,
+            WeatherCache.latitude == lat,
+            WeatherCache.longitude == lon,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_weather_range(
+    db: AsyncSession,
+    latitude: float,
+    longitude: float,
+    start: datetime.date,
+    end: datetime.date,
+) -> dict[datetime.date, float]:
+    lat = round(latitude, 2)
+    lon = round(longitude, 2)
+    result = await db.execute(
+        select(WeatherCache).where(
+            WeatherCache.latitude == lat,
+            WeatherCache.longitude == lon,
+            WeatherCache.date >= start,
+            WeatherCache.date <= end,
+        )
+    )
+    return {row.date: row.temperature_max for row in result.scalars().all()}

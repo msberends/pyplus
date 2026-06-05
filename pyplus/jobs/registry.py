@@ -377,6 +377,8 @@ async def recompute_ml(*, user_id: int) -> None:
             "voordeel": settings.ml_voordeel,
             "voorraad": settings.ml_voorraad,
             "variatie": settings.ml_variatie,
+            "ingredient_overlap": settings.ml_ingredient_overlap,
+            "budget": settings.ml_budget,
         }
 
         # ── Build purchase history ────────────────────────────────────────
@@ -429,7 +431,10 @@ async def recompute_ml(*, user_id: int) -> None:
         async with AsyncSessionLocal() as db:
             dishes = await repo.get_dishes(db, user_id)
             all_ings = await repo.get_all_dish_ingredients_for_user(db, user_id)
-            history_rows = await repo.get_weekmenu_history(db, user_id, limit_weeks=26)
+            history_rows = await repo.get_weekmenu_history(
+                db, user_id, limit_weeks=settings.ml_history_window_weeks
+            )
+            sku_prices = await repo.get_all_ingredient_prices(db, user_id)
 
         dishes_with_ings = [(d, all_ings.get(d.id, [])) for d in dishes]
         artifact = compute_all_scores(
@@ -439,6 +444,8 @@ async def recompute_ml(*, user_id: int) -> None:
             replenish_due_skus=due_skus,
             weights=weights,
             reference_week=week_start,
+            settings=settings,
+            ingredient_prices=sku_prices,
         )
         await save_artifact(user_id, "recommender", artifact)
 
@@ -653,6 +660,69 @@ async def weekly_ntfy(*, user_id: int, client=None, store_number: int = 0) -> No
         raise
 
 
+# ── Weather cache ─────────────────────────────────────────────────────────────
+
+
+async def refresh_weather(*, user_id: int) -> None:
+    """Fetch 14-day forecast + today from Open-Meteo for the user's configured location."""
+    resource = "weather"
+    if await _is_locked(user_id, resource):
+        return
+
+    from pyplus.db import repo
+    from pyplus.db.engine import AsyncSessionLocal
+    from pyplus.ml.interface import UserSettings
+
+    async with AsyncSessionLocal() as db:
+        settings_json = await repo.get_user_settings_json(db, user_id)
+    try:
+        settings = UserSettings.model_validate_json(settings_json)
+    except Exception:
+        settings = UserSettings()
+
+    if not settings.weather_enabled or settings.weather_latitude is None:
+        log.debug("[weather] user=%d weather not configured — skipping", user_id)
+        return
+
+    await _set_status(user_id, resource, "in_progress")
+    try:
+        import httpx
+
+        lat = round(settings.weather_latitude, 2)
+        lon = round(settings.weather_longitude, 2)
+
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": lat,
+                    "longitude": lon,
+                    "daily": "temperature_2m_max",
+                    "timezone": "Europe/Amsterdam",
+                    "past_days": 0,
+                    "forecast_days": 14,
+                },
+                timeout=15,
+            )
+        data = r.json()
+        dates = data.get("daily", {}).get("time", [])
+        temps = data.get("daily", {}).get("temperature_2m_max", [])
+
+        async with AsyncSessionLocal() as db:
+            for d_str, temp in zip(dates, temps):
+                day = datetime.date.fromisoformat(d_str)
+                await repo.upsert_weather(db, day, lat, lon, float(temp))
+
+        await _set_status(user_id, resource, "ok")
+        log.info(
+            "[weather] user=%d — %d days cached for (%.2f, %.2f)", user_id, len(dates), lat, lon
+        )
+    except Exception as exc:
+        await _set_status(user_id, resource, "error", str(exc)[:500])
+        log.error("[weather] user=%d FAILED: %s", user_id, exc)
+        raise
+
+
 # ── Full preload ───────────────────────────────────────────────────────────────
 
 
@@ -677,6 +747,7 @@ async def full_preload(*, user_id: int, client, store_number: int) -> None:
             )
         )
 
+    jobs.append((refresh_weather, {"user_id": user_id}))
     jobs.append((recompute_ml, {"user_id": user_id}))
 
     for job, kwargs in jobs:

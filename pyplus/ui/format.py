@@ -10,6 +10,22 @@ import urllib.parse
 
 _PRODUCT_BASE = "https://www.plus.nl/product/"
 _SEARCH_BASE = "https://www.plus.nl/zoekresultaten?SearchTerm="
+_CTFASSETS_HOST = "images.ctfassets.net"
+
+
+def thumbnail_url(url: str, size: int = 44) -> str:
+    """Return a resized Contentful image URL (w=size×3, WebP, square crop).
+
+    Contentful's Images API accepts ?w=&h=&fit=thumb&fm=webp.  A 3× DPR
+    factor covers HiDPI/Retina displays; still 10–30× smaller than the
+    2000 px originals PLUS.nl serves by default.  Non-ctfassets URLs are
+    returned unchanged.
+    """
+    if not url or _CTFASSETS_HOST not in url:
+        return url
+    px = size * 3
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}w={px}&h={px}&fit=thumb&fm=webp"
 
 _MEAT_EMOJI = {
     "vega": "🌱",
@@ -64,6 +80,53 @@ def meat_label(meat_type: str | None) -> str:
     return _MEAT_LABEL.get((meat_type or "").lower(), "")
 
 
+_STARCH_EMOJI = {
+    "aardappels": "🥔",
+    "pasta": "🍝",
+    "rijst": "🍚",
+    "noedels": "🍜",
+    "deeg": "🥟",
+    "geen_anders": "➖",
+}
+_STARCH_LABEL = {
+    "aardappels": "Aardappels",
+    "pasta": "Pasta",
+    "rijst": "Rijst",
+    "noedels": "Noedels",
+    "deeg": "Deeg",
+    "geen_anders": "Geen/anders",
+}
+
+_COOKING_EMOJI = {
+    "kookplaat": "🍳",
+    "oven": "♨️",
+    "magnetron": "📡",
+    "airfryer": "🌀",
+}
+_COOKING_LABEL = {
+    "kookplaat": "Kookplaat",
+    "oven": "Oven",
+    "magnetron": "Magnetron",
+    "airfryer": "Airfryer",
+}
+
+
+def starch_emoji(starch_type: str | None) -> str:
+    return _STARCH_EMOJI.get((starch_type or "").lower(), "")
+
+
+def starch_label(starch_type: str | None) -> str:
+    return _STARCH_LABEL.get((starch_type or "").lower(), "")
+
+
+def cooking_emoji(method: str | None) -> str:
+    return _COOKING_EMOJI.get((method or "").lower(), "")
+
+
+def cooking_label(method: str | None) -> str:
+    return _COOKING_LABEL.get((method or "").lower(), "")
+
+
 def veg_emoji(veg_count: int | None) -> str:
     if veg_count is None:
         return ""
@@ -103,18 +166,39 @@ def humanize_since(dt: datetime.datetime | None) -> str:
     return dt.strftime("%-d %b %Y")
 
 
+def parse_cooking_methods(dish) -> list[str]:
+    """Parse the cooking_methods JSON list from a dish."""
+    import json
+
+    raw = getattr(dish, "cooking_methods", "[]") or "[]"
+    try:
+        return json.loads(raw) if isinstance(raw, str) else list(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
 def dish_meta_chips(dish) -> list[str]:
     """Compact text chips summarising a dish's planning metadata, e.g.
-    ["🐓 Kip", "⏱ 20–40 min", "🥦🥦"]. Empty when nothing is set.
+    ["🐓 Kip", "🥔 Aardappels", "🍳 Kookplaat", "⏱ 20–40 min", "🥦🥦", "❄️"].
+    Empty when nothing is set.
     """
     chips: list[str] = []
     meat = meat_emoji(dish.meat_type)
     if meat:
         chips.append(f"{meat} {meat_label(dish.meat_type)}".strip())
+    starch = starch_emoji(getattr(dish, "starch_type", None))
+    if starch:
+        chips.append(f"{starch} {starch_label(dish.starch_type)}".strip())
+    for method in parse_cooking_methods(dish):
+        emoji = cooking_emoji(method)
+        if emoji:
+            chips.append(f"{emoji} {cooking_label(method)}".strip())
     prep = prep_time_label(dish.prep_minutes)
     if prep:
         chips.append(f"⏱ {prep}")
     veg = veg_emoji(dish.veg_count)
     if veg:
         chips.append(veg)
+    if getattr(dish, "is_cold", False):
+        chips.append("❄️")
     return chips

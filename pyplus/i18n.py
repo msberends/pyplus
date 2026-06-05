@@ -57,7 +57,11 @@ _STRINGS: dict[str, str] = {
     # ── Live cart ──────────────────────────────────────────────────────────────
     "cart.title": "Winkelwagen",
     "cart.empty": "Je winkelwagen is leeg",
-    "cart.checkout": "Afronden op plus.nl",
+    "cart.checkout": "Bestellen",
+    "cart.clear": "Leegmaken",
+    "cart.clear_confirm_title": "Winkelwagen leegmaken?",
+    "cart.clear_confirm_body": "Alle producten worden uit je winkelwagen verwijderd.",
+    "cart.clear_failed": "Winkelwagen leegmaken mislukt",
     "cart.total": "Totaal",
     "cart.savings": "Bespaard",
     "cart.items": "{n} producten",
@@ -84,8 +88,9 @@ _STRINGS: dict[str, str] = {
     "dishes.prep_notes_hint": "Wordt weergegeven in je agenda via iCal",
     "dishes.prep_time_label": "Bereidingstijd",
     "dishes.meat_label": "Vlees / vis / vega",
+    "dishes.starch_label": "Basis / zetmeel",
     "dishes.veg_label": "Hoeveelheid groenten",
-    "dishes.meta_unset": "Geen voorkeur",
+    "dishes.meta_unset": "Onbekend",
     "dishes.ingredients": "Ingrediënten",
     "dishes.add_ingredient": "Ingrediënt toevoegen",
     "dishes.add_flexible": "Flexibel ingrediënt",
@@ -119,6 +124,95 @@ _STRINGS: dict[str, str] = {
     "settings.ml.replenish": "Voorraadvoorspelling",
     "settings.ml.autopilot": "Autopilot",
     "settings.ml.autopilot_hint": "Vult je mandje automatisch voor een routineweek — vereist nog steeds jouw bevestiging op PLUS.nl",
+    # ── Day preferences ───────────────────────────────────────────────────
+    "settings.ml.day_prefs": "Dagvoorkeuren",
+    "settings.ml.day_prefs_hint": (
+        "Stel per dag in welke gerechten in aanmerking komen voor het weekmenu."
+    ),
+    "settings.ml.day_enabled": "Automatisch invullen",
+    "settings.ml.day_max_prep": "Max. bereidingstijd",
+    "settings.ml.day_meat_blocked": "Vlees / vis / vega",
+    "settings.ml.day_starch_pref": "Voorkeur basis/zetmeel",
+    "settings.ml.day_starch_blocked": "Basis / zetmeel",
+    "settings.ml.day_no_limit": "Geen limiet",
+    "settings.ml.lunch_combined": "Lunch (alle slots)",
+    # ── Week constraints ──────────────────────────────────────────────────
+    "settings.ml.week_goals": "Weekdoelen",
+    "settings.ml.week_goals_hint": (
+        "Regels die over de hele week gelden — het model probeert "
+        "hieraan te voldoen bij het invullen van lege slots."
+    ),
+    "settings.ml.min_vega": "Min. vegetarische dagen",
+    "settings.ml.max_vega": "Max. vegetarische dagen",
+    "settings.ml.min_fish": "Min. visdagen",
+    "settings.ml.max_same_meat": "Max. zelfde eiwittype per week",
+    "settings.ml.min_unique_starch": "Min. unieke zetmeeltypes",
+    "settings.ml.max_consec_meat": "Max. opeenvolgend zelfde vlees / vis / vega",
+    "settings.ml.max_consec_starch": "Max. opeenvolgend zelfde basis / zetmeel",
+    "settings.ml.max_red_meat": "Max. dagen rund/varken",
+    "settings.ml.target_veg": "Streefgemiddelde groenten",
+    # ── Advanced ML knobs ─────────────────────────────────────────────────
+    "settings.ml.advanced": "Geavanceerd",
+    "settings.ml.advanced_hint": (
+        "Instellingen voor fijnregeling — pas aan als je weet wat je doet."
+    ),
+    "settings.ml.cooldown": "Herhalings-cooldown",
+    "settings.ml.cooldown_hint": "Minimaal aantal weken voordat een gerecht opnieuw wordt voorgesteld.",
+    "settings.ml.novelty": "Novelty fraction",
+    "settings.ml.novelty_hint": "Streefaandeel gerechten die je nog nooit hebt klaargemaakt.",
+    "settings.ml.history_window": "Geschiedenisvenster",
+    "settings.ml.history_hint": "Hoeveel weken weekmenuhistorie het model meeneemt.",
+    "settings.ml.decay_halflife": "Trend decay half-life",
+    "settings.ml.decay_hint": (
+        "Exponentieel verval van historische patronen. "
+        "Lager = recente weken tellen zwaarder, hoger = stabielere gewoonten."
+    ),
+    "settings.ml.selection_method": "Selectiemethode",
+    "settings.ml.exploration": "Verkenningsratio (ε)",
+    "settings.ml.exploration_hint": "Kans dat een willekeurig gerecht wordt gekozen in plaats van de beste score.",
+    "settings.ml.temperature": "Temperatuur (τ)",
+    "settings.ml.temperature_hint": (
+        "Bepaalt de spreiding van de kansverdeling over gerechten. "
+        "Laag = bijna deterministisch, hoog = meer gelijkmatig."
+    ),
+    "settings.ml.confidence": "Minimale betrouwbaarheid",
+    "settings.ml.confidence_hint": "Gerechten met een score onder deze drempel worden niet voorgesteld.",
+    "settings.ml.method_greedy": "Greedy",
+    "settings.ml.method_softmax": "Softmax",
+    "settings.ml.method_epsilon": "Epsilon-greedy",
+    "settings.ml.method_thompson": "Thompson sampling",
+    "settings.ml.ingredient_overlap": "Ingrediënt-hergebruik",
+    "settings.ml.budget": "Budgetvoorkeur",
+    # ── Autopilot extensions ──────────────────────────────────────────────
+    "settings.ml.autopilot_dinner": "Diner automatisch plannen",
+    "settings.ml.autopilot_lunch": "Lunch automatisch plannen",
+    "settings.ml.autopilot_max_dinner": "Max. dinerslots",
+    "settings.ml.autopilot_max_lunch": "Max. lunchslots",
+    # ── Starch labels ─────────────────────────────────────────────────────
+    "starch.aardappels": "Aardappels",
+    "starch.pasta": "Pasta",
+    "starch.rijst": "Rijst",
+    "starch.noedels": "Noedels",
+    "starch.deeg": "Deeg",
+    "starch.geen_anders": "Geen/anders",
+    # ── Cooking methods ────────────────────────────────────────────────────────
+    "cooking.kookplaat": "Kookplaat",
+    "cooking.oven": "Oven",
+    "cooking.magnetron": "Magnetron",
+    "cooking.airfryer": "Airfryer",
+    "dishes.cooking_methods_label": "Bereiding",
+    "dishes.is_cold_label": "Is koud",
+    # ── Weather ───────────────────────────────────────────────────────────────
+    "settings.weather.title": "Weer",
+    "settings.weather.enabled": "Weer meenemen in suggesties",
+    "settings.weather.enabled_hint": "Op warme dagen geen gerechten met oven/airfryer, en voorkeur voor koude gerechten.",
+    "settings.weather.location": "Locatie",
+    "settings.weather.location_hint": "Vul een plaatsnaam in om automatisch de GPS-coördinaten te bepalen.",
+    "settings.weather.threshold": "Drempeltemperatuur (°C)",
+    "settings.weather.threshold_hint": "Vanaf deze maximumtemperatuur geldt het als een warme dag.",
+    "settings.weather.avoid_oven": "Oven/airfryer vermijden op warme dagen",
+    "settings.weather.prefer_cold": "Voorkeur voor koude gerechten op warme dagen",
+    "settings.weather.cold_boost": "Cold boost factor",
     "settings.ntfy.title": "Meldingen",
     "settings.ntfy.url": "ntfy-serveradres",
     "settings.ntfy.topic": "Topic",

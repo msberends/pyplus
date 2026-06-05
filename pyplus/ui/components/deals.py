@@ -23,6 +23,7 @@ from nicegui import ui
 
 from plus.models import Promotion, PromotionProduct
 from pyplus.i18n import t
+from pyplus.ui.format import thumbnail_url
 
 log = logging.getLogger(__name__)
 
@@ -120,8 +121,41 @@ def create_deals_lane(session) -> None:
 
             _render()
 
-            # Re-render steppers when cart changes
-            session.add_cart_listener(lambda: _render.refresh() if state.promotions else None)
+            # Re-render only affected promo cards when cart changes.
+            # Tracking the previous in-cart / syncing sets per single-product promo
+            # prevents needless full-lane rebuilds (which would re-fetch all images).
+            _last_promo_in_cart: list[frozenset] = [frozenset()]
+            _last_promo_syncing: list[frozenset] = [frozenset()]
+
+            def _on_cart_for_deals() -> None:
+                if not state.promotions:
+                    return
+                cart_qty_map = {it.sku: it.quantity for it in session.cart.items}
+                syncing = session.syncing_skus
+                single_skus = {
+                    p.sku
+                    for p in state.promotions
+                    if p.is_single_product and p.sku
+                }
+                in_cart_now = frozenset(s for s in single_skus if cart_qty_map.get(s, 0) > 0)
+                syncing_now = frozenset(single_skus & syncing)
+
+                changed_in_cart = in_cart_now.symmetric_difference(_last_promo_in_cart[0])
+                changed_syncing = syncing_now.symmetric_difference(_last_promo_syncing[0])
+                changed_skus = changed_in_cart | changed_syncing
+
+                if changed_skus:
+                    _last_promo_in_cart[0] = in_cart_now
+                    _last_promo_syncing[0] = syncing_now
+                    for promo in state.promotions:
+                        if promo.is_single_product and promo.sku in changed_skus:
+                            card = state.card_refreshers.get(promo.slug)
+                            if card is not None:
+                                card.refresh()
+                # qty-only changes within already-in-cart promos: no refresh needed;
+                # the stepper qty label is not shown prominently in deal cards.
+
+            session.add_cart_listener(_on_cart_for_deals)
 
     async def _load() -> None:
         today = datetime.date.today()
@@ -211,7 +245,7 @@ def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, r
         with ui.element("div").style("display:flex;align-items:center;gap:.625rem"):
             # Thumbnail
             if promo.image_url:
-                ui.image(promo.image_url).classes("sp-promo-img")
+                ui.image(thumbnail_url(promo.image_url, 52)).classes("sp-promo-img")
             else:
                 ui.element("div").classes("sp-promo-img").style("background:var(--c-border)")
 
@@ -369,7 +403,7 @@ def _render_promo_product(prod: PromotionProduct, session, cart_service) -> None
 
     with ui.element("div").classes("sp-search-result").style("padding:.375rem .5rem"):
         if prod.image_url:
-            ui.image(prod.image_url).classes("sp-search-img").style("width:36px;height:36px")
+            ui.image(thumbnail_url(prod.image_url, 36)).classes("sp-search-img").style("width:36px;height:36px")
         else:
             ui.element("div").classes("sp-search-img").style(
                 "width:36px;height:36px;background:var(--c-border)"

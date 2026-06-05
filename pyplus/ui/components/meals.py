@@ -19,6 +19,7 @@ from pyplus.db.engine import AsyncSessionLocal
 from pyplus.db.models import Dish
 from pyplus.i18n import t
 from pyplus.services.aggregate import AggLine, AggResult, aggregate, fmt_amount
+from pyplus.ui.format import thumbnail_url
 
 log = logging.getLogger(__name__)
 
@@ -126,6 +127,7 @@ async def create_meals_lane(session) -> None:
     load_error = ""
     try:
         await _load_slots(state, session.user_id)
+        state._weather = await _load_weather(session, state.week_start)
     except Exception as exc:
         log.error("Meals lane load failed: %s", exc)
         load_error = "Weekmenu kon niet worden geladen."
@@ -142,7 +144,7 @@ async def create_meals_lane(session) -> None:
                         ui.button(
                             icon="chevron_left",
                             on_click=lambda: asyncio.ensure_future(
-                                _navigate(session.user_id, state, -1, week_lbl, _render)
+                                _navigate(session.user_id, state, -1, week_lbl, _render, session)
                             ),
                         ).props("flat round dense size=sm color=grey-6")
                         week_lbl = ui.label(_format_week(state.week_start)).style(
@@ -152,7 +154,7 @@ async def create_meals_lane(session) -> None:
                         ui.button(
                             icon="chevron_right",
                             on_click=lambda: asyncio.ensure_future(
-                                _navigate(session.user_id, state, +1, week_lbl, _render)
+                                _navigate(session.user_id, state, +1, week_lbl, _render, session)
                             ),
                         ).props("flat round dense size=sm color=grey-6")
                         plan_btn = (
@@ -205,14 +207,25 @@ async def create_meals_lane(session) -> None:
 # ── Slot rendering ─────────────────────────────────────────────────────────────
 
 
+async def _load_weather(session, week_start: datetime.date) -> dict[datetime.date, float]:
+    if not session.settings.weather_enabled:
+        return {}
+    lat = session.settings.weather_latitude
+    lon = session.settings.weather_longitude
+    if lat is None or lon is None:
+        return {}
+    async with AsyncSessionLocal() as db:
+        return await repo.get_weather_range(
+            db, lat, lon, week_start, week_start + datetime.timedelta(days=6)
+        )
+
+
 def _render_all_slots(session, state: _MealsState, refresh_fn) -> None:
     from pyplus.ui.format import dish_meta_chips
 
     show_meta = session.settings.show_dish_metadata
 
     def _opt_label(d) -> str:
-        # name<US>properties — split + styled by _PICKER_OPTION_SLOT so the title
-        # is prominent and the properties sit beneath it as a small grey caption.
         if not show_meta:
             return d.name
         chips = dish_meta_chips(d)
@@ -220,16 +233,19 @@ def _render_all_slots(session, state: _MealsState, refresh_fn) -> None:
 
     options = {d.id: _opt_label(d) for d in state.dishes}
 
+    weather = getattr(state, "_weather", {})
+
     _section_header(t("lane.meals.dinner"))
     for slot in _DINNER_SLOTS:
         d = _slot_date(slot, state.week_start)
         date_str = f"{d.day} {_MONTHS_NL[d.month]}" if d else ""
-        _slot_row(slot, _DAY_LABEL[slot], date_str, state, options, session, refresh_fn)
+        temp = weather.get(d) if d else None
+        _slot_row(slot, _DAY_LABEL[slot], date_str, temp, state, options, session, refresh_fn)
 
     ui.element("div").style("height:.375rem")
     _section_header(t("lane.meals.lunch"))
     for slot in _LUNCH_SLOTS:
-        _slot_row(slot, _DAY_LABEL[slot], "", state, options, session, refresh_fn)
+        _slot_row(slot, _DAY_LABEL[slot], "", None, state, options, session, refresh_fn)
 
 
 def _section_header(label: str) -> None:
@@ -240,9 +256,21 @@ def _section_header(label: str) -> None:
     )
 
 
-def _slot_row(slot, day_label, date_str, state, options, session, refresh_fn) -> None:
+def _slot_row(slot, day_label, date_str, temp, state, options, session, refresh_fn) -> None:
     dish = state.slots.get(slot)
     with ui.element("div").classes("sp-meals-slot"):
+        # Temperature (separate span, left of day badge)
+        if temp is not None:
+            import math
+
+            hot = session.settings.weather_hot_threshold
+            t_color = "var(--c-danger)" if temp >= hot else "var(--c-text-4)"
+            temp_rounded = math.floor(temp + 0.5)
+            ui.label(f"{temp_rounded}°").style(
+                f"font-size:10px;color:{t_color};line-height:1;font-weight:600;"
+                f"width:24px;text-align:right;flex-shrink:0"
+            )
+
         # Day badge
         with ui.element("div").classes("sp-meals-day"):
             ui.label(day_label).style(
@@ -250,7 +278,8 @@ def _slot_row(slot, day_label, date_str, state, options, session, refresh_fn) ->
             )
             if date_str:
                 ui.label(date_str).style(
-                    "font-size:9px;color:var(--c-text-4);line-height:1;margin-top:1px;text-align:center"
+                    "font-size:9px;color:var(--c-text-4);line-height:1;"
+                    "margin-top:1px;text-align:center"
                 )
 
         # Content
@@ -339,9 +368,12 @@ async def _navigate(
     delta_weeks: int,
     week_lbl,
     refresh_fn,
+    session=None,
 ) -> None:
     state.week_start += datetime.timedelta(weeks=delta_weeks)
     await _load_slots(state, user_id)
+    if session:
+        state._weather = await _load_weather(session, state.week_start)
     week_lbl.set_text(_format_week(state.week_start))
     refresh_fn.refresh()
 
@@ -600,7 +632,7 @@ def _render_flex_picker(session, flex_ing, st: dict, flex_choice: dict, refresh_
         if chosen is not None:
             with ui.element("div").style("display:flex;align-items:center;gap:.5rem"):
                 if chosen.image_url:
-                    ui.image(chosen.image_url).style(
+                    ui.image(thumbnail_url(chosen.image_url, 32)).style(
                         "width:32px;height:32px;object-fit:contain;border-radius:4px;"
                         "background:var(--c-border);flex-shrink:0"
                     )
@@ -657,7 +689,7 @@ def _render_flex_picker(session, flex_ing, st: dict, flex_choice: dict, refresh_
                                     .on("click", _pick)
                                 ):
                                     if prod.image_url:
-                                        ui.image(prod.image_url).style(
+                                        ui.image(thumbnail_url(prod.image_url, 28)).style(
                                             "width:28px;height:28px;object-fit:contain;"
                                             "border-radius:4px;background:var(--c-border);flex-shrink:0"
                                         )
@@ -888,7 +920,9 @@ async def _plan_week(session, state: "_MealsState", refresh_fn) -> None:
             dishes = await repo.get_dishes(db, session.user_id)
 
         current = {slot: (dish.id if dish else None) for slot, dish in state.slots.items()}
-        suggestions = plan_week(artifact, [d.id for d in dishes], current)
+        suggestions = plan_week(
+            artifact, [d.id for d in dishes], current, settings=session.settings
+        )
 
         if not suggestions:
             ui.notify("Alle slots zijn al gevuld", type="info", position="top")

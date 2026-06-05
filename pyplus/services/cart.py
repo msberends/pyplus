@@ -76,6 +76,40 @@ class CartService:
         if delta != 0:
             await self._queue(sku, delta)
 
+    async def clear_all(self) -> None:
+        """Remove every item from the cart (optimistic clear + API calls)."""
+        items = list(self.session.cart.items)
+        if not items:
+            return
+        for task in list(self._tasks.values()):
+            task.cancel()
+        self._tasks.clear()
+        self._pending.clear()
+        self._snapshots.clear()
+
+        from plus.models import Cart
+
+        snapshot = self.session.cart
+        self.session.set_cart(Cart(items=[], savings=0.0))
+
+        try:
+            checkout = None
+            for item in items:
+                checkout = await self.session.client.remove_from_cart_api(
+                    item.sku, item.quantity
+                )
+            if checkout:
+                from plus.client import _parse_cart_from_checkout
+
+                new_cart = _parse_cart_from_checkout(checkout)
+                self.session.set_cart(new_cart)
+        except Exception as exc:
+            log.warning("Clear cart error: %s", exc)
+            self.session.set_cart(snapshot)
+            from pyplus.i18n import t
+
+            self.session.notify_error(t("cart.clear_failed"))
+
     # ── Internal ───────────────────────────────────────────────────────────────
 
     async def _queue(

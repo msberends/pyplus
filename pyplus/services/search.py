@@ -54,36 +54,11 @@ async def search_catalogue(store_number: int, query: str, limit: int = 24) -> li
 
 
 async def search_products(session, query: str, limit: int = 24) -> list[Product]:
-    """Resolve a search query to products, preferring the instant local catalogue.
-
-    Order: (1) local product_cache; (2) live PLUS search API on a miss, whose
-    results are cached for next time.
-    """
+    """Search the local product catalogue. No live API calls — the catalogue is
+    kept fresh by the nightly sync job."""
     query = (query or "").strip()
     if len(query) < 2:
         return []
 
     store_number = getattr(session, "store_number", 0) or 0
-
-    cached = await search_catalogue(store_number, query, limit)
-    if cached:
-        return cached
-
-    # Cold cache / no local hit — go to the live API.
-    try:
-        live = await session.client.search_products_api(query, store_number)
-    except Exception as exc:
-        log.warning("Live search fallback failed (q=%r): %s", query, exc)
-        return []
-
-    if live and store_number:
-        try:
-            from pyplus.db import repo
-            from pyplus.db.engine import AsyncSessionLocal
-
-            async with AsyncSessionLocal() as db:
-                await repo.upsert_product_cache(db, store_number, live)
-        except Exception as exc:
-            log.debug("Could not cache live search results: %s", exc)
-
-    return live[:limit]
+    return await search_catalogue(store_number, query, limit)

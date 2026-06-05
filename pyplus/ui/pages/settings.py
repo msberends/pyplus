@@ -8,12 +8,22 @@ import logging
 from nicegui import app, ui
 
 from pyplus.i18n import t
-from pyplus.ml.interface import UserSettings
+from pyplus.ml.interface import DayPreference, UserSettings
 from pyplus.session import manager
 from pyplus.ui.components.nav import create_nav_rail
 from pyplus.ui.theme import apply_theme
 
 log = logging.getLogger(__name__)
+
+_DAY_LABELS = {
+    "ma": "Ma",
+    "di": "Di",
+    "wo": "Wo",
+    "do": "Do",
+    "vr": "Vr",
+    "za": "Za",
+    "zo": "Zo",
+}
 
 
 async def create_settings_page() -> None:
@@ -48,44 +58,52 @@ async def create_settings_page() -> None:
     with ui.element("div").classes("sp-cockpit-root"):
         create_nav_rail(active="settings", user_display_name=session.display_name)
 
-        with ui.element("div").style(
-            "flex:1;overflow-y:auto;padding:1.5rem;background:var(--c-bg);max-width:640px"
-        ):
+        with ui.element("div").classes("sp-page-content"):
             ui.label(t("settings.title")).style(
                 "font-size:22px;font-weight:700;color:var(--c-text);"
                 "letter-spacing:-.3px;margin-bottom:1.5rem;display:block"
             )
 
-            # ── Account & winkel ───────────────────────────────────────────
-            _section_card(
-                t("settings.account.title"), lambda: _render_account(session, user, user_id)
-            )
+            # Two-column layout on desktop, single column on mobile
+            with ui.element("div").style(
+                "display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));"
+                "gap:1rem;align-items:start"
+            ):
+                # ── Left column ────────────────────────────────────────────
+                with ui.element("div").style("display:flex;flex-direction:column;gap:1rem"):
+                    _section_card(
+                        t("settings.account.title"),
+                        lambda: _render_account(session, user, user_id),
+                    )
+                    _section_card("Weergave & gedrag", lambda: _render_behaviour(settings, _save))
+                    _section_card(
+                        "Indeling & sortering",
+                        lambda: _render_organisation(settings, _save),
+                    )
+                    _section_card(t("settings.ntfy.title"), lambda: _render_ntfy(settings, _save))
+                    _section_card(
+                        "Agenda-abonnement",
+                        lambda: _render_ical(settings, user_id, session, _save),
+                    )
 
-            # ── Weergave & gedrag ──────────────────────────────────────────
-            _section_card("Weergave & gedrag", lambda: _render_behaviour(settings, _save))
+                # ── Right column ───────────────────────────────────────────
+                with ui.element("div").style("display:flex;flex-direction:column;gap:1rem"):
+                    _section_card(
+                        t("settings.ml.title"),
+                        lambda: _render_ml(settings, user_id, _save),
+                    )
+                    _section_card(
+                        t("settings.weather.title"),
+                        lambda: _render_weather(settings, _save),
+                    )
 
-            # ── Indeling & sortering ───────────────────────────────────────
-            _section_card("Indeling & sortering", lambda: _render_organisation(settings, _save))
+                    from pyplus.jobs.preload import scheduler_next_runs
 
-            # ── Slimme suggesties (ML) ─────────────────────────────────────
-            _section_card(t("settings.ml.title"), lambda: _render_ml(settings, user_id, _save))
-
-            # ── Meldingen (ntfy) ───────────────────────────────────────────
-            _section_card(t("settings.ntfy.title"), lambda: _render_ntfy(settings, _save))
-
-            # ── Agenda-abonnement ─────────────────────────────────────────
-            _section_card(
-                "Agenda-abonnement", lambda: _render_ical(settings, user_id, session, _save)
-            )
-
-            # ── Gegevens & synchronisatie ─────────────────────────────────
-            from pyplus.jobs.preload import scheduler_next_runs
-
-            next_runs = scheduler_next_runs()
-            _section_card(
-                "Gegevens & synchronisatie",
-                lambda: _render_sync_status(sync_states, next_runs),
-            )
+                    next_runs = scheduler_next_runs()
+                    _section_card(
+                        "Gegevens & synchronisatie",
+                        lambda: _render_sync_status(sync_states, next_runs),
+                    )
 
 
 def _section_card(title: str, body_fn) -> None:
@@ -97,6 +115,23 @@ def _section_card(title: str, body_fn) -> None:
             "font-size:15px;font-weight:700;color:var(--c-text);margin-bottom:.875rem;display:block"
         )
         body_fn()
+
+
+def _infobox(
+    text: str,
+    icon: str = "info",
+    color: str = "#e0f2fe",
+    border: str = "#7dd3fc",
+    text_color: str = "#0369a1",
+) -> None:
+    """Styled information box for explaining settings to the user."""
+    with ui.element("div").style(
+        f"display:flex;align-items:flex-start;gap:.5rem;padding:.625rem .75rem;"
+        f"background:{color};border-radius:var(--r-md);border:1px solid {border};"
+        f"margin-bottom:.75rem"
+    ):
+        ui.icon(icon, size="16px").style(f"color:{text_color};flex-shrink:0;margin-top:1px")
+        ui.label(text).style(f"font-size:12px;color:{text_color};line-height:1.55")
 
 
 def _render_account(session, user, user_id: int) -> None:
@@ -334,6 +369,9 @@ def _render_behaviour(settings: UserSettings, save_fn) -> None:
         sld.on("change", lambda e: asyncio.ensure_future(_save_limit()))
 
 
+# ── ML Settings ───────────────────────────────────────────────────────────────
+
+
 def _render_ml(settings: UserSettings, user_id: int, save_fn) -> None:
     # Master toggle
     with ui.row().style("align-items:flex-start;gap:.75rem;margin-bottom:.875rem"):
@@ -386,65 +424,20 @@ def _render_ml(settings: UserSettings, user_id: int, save_fn) -> None:
             "ml_promo_match",
         )
 
-        # ── Recommender weights ────────────────────────────────────────────
-        with ui.element("div").style(
-            "border-top:1px solid var(--c-border);margin-top:.625rem;padding-top:.625rem"
-        ):
-            ui.label("Weegfactoren weekmenu-suggesties").style(
-                "font-size:13px;font-weight:600;color:var(--c-text)"
-            )
-            ui.label(
-                "Bepaalt waar de suggesties op letten. Herbereken hieronder na het aanpassen."
-            ).style("font-size:11px;color:var(--c-text-3);line-height:1.5;margin-bottom:.25rem")
+        # ── 📊 Weegfactoren ──────────────────────────────────────────────
+        _render_ml_weights(settings, save_fn)
 
-            def _weight(label: str, attr: str) -> None:
-                with ui.element("div").style("padding:.375rem 0"):
-                    with ui.row().style(
-                        "align-items:center;justify-content:space-between;width:100%"
-                    ):
-                        ui.label(label).style("font-size:12px;color:var(--c-text-2)")
-                        val_lbl = ui.label(f"{getattr(settings, attr):.0%}").style(
-                            "font-size:11px;color:var(--c-text-3);font-weight:600"
-                        )
-                    sl = ui.slider(min=0, max=1, step=0.05, value=getattr(settings, attr)).props(
-                        "color=primary"
-                    )
-                    sl.on(
-                        "update:model-value",
-                        lambda e, lbl=val_lbl, s=sl: lbl.set_text(f"{float(s.value):.0%}"),
-                    )
+        # ── 📅 Dagvoorkeuren ─────────────────────────────────────────────
+        _render_ml_day_preferences(settings, save_fn)
 
-                    async def _save_weight(a=attr, s=sl) -> None:
-                        setattr(settings, a, round(float(s.value), 2))
-                        await save_fn()
+        # ── 🎯 Weekdoelen ────────────────────────────────────────────────
+        _render_ml_week_constraints(settings, save_fn)
 
-                    sl.on("change", lambda e, f=_save_weight: asyncio.ensure_future(f()))
+        # ── 🔬 Geavanceerd ───────────────────────────────────────────────
+        _render_ml_advanced(settings, save_fn)
 
-            _weight("Afwisseling / variatie", "ml_afwisseling")
-            _weight("Vaste dagen (gewoontes)", "ml_vaste_dagen")
-            _weight("Voordeel (aanbiedingen)", "ml_voordeel")
-            _weight("Voorraad (bijna op)", "ml_voorraad")
-            _weight("Categorie-spreiding", "ml_variatie")
-
-        with ui.element("div").style(
-            "padding:.75rem;background:#fffbeb;border-radius:var(--r-md);"
-            "border:1px solid #fde68a;margin-top:.625rem"
-        ):
-            with ui.row().style("align-items:flex-start;gap:.625rem"):
-                autopilot_sw = ui.switch(value=settings.ml_autopilot).props("color=warning size=sm")
-                with ui.element("div"):
-                    ui.label(t("settings.ml.autopilot")).style(
-                        "font-size:13px;font-weight:600;color:#92400e"
-                    )
-                    ui.label(t("settings.ml.autopilot_hint")).style(
-                        "font-size:11px;color:#b45309;line-height:1.5"
-                    )
-
-            async def _on_autopilot(e) -> None:
-                settings.ml_autopilot = autopilot_sw.value
-                await save_fn()
-
-            autopilot_sw.on("update:model-value", lambda e: asyncio.ensure_future(_on_autopilot(e)))
+        # ── 🤖 Autopilot ─────────────────────────────────────────────────
+        _render_ml_autopilot(settings, save_fn)
 
     async def _on_master(e) -> None:
         settings.ml_enabled = master.value
@@ -480,6 +473,820 @@ def _render_ml(settings: UserSettings, user_id: int, save_fn) -> None:
         .props("flat rounded no-caps color=primary size=sm")
         .style("font-size:12px")
     )
+
+
+def _render_ml_weights(settings: UserSettings, save_fn) -> None:
+    """Signal weight sliders inside a collapsible expansion."""
+    with (
+        ui.expansion("Weegfactoren", icon="tune", value=True)
+        .style("border-top:1px solid var(--c-border);margin-top:.625rem")
+        .props("dense")
+    ):
+        _infobox(
+            "Elk signaal draagt bij aan de totaalscore van een gerecht per dagslot. "
+            "De gewichten bepalen hoeveel invloed elk signaal heeft — zet een gewicht op 0% "
+            "om een signaal volledig uit te schakelen. De totaalscore is een gewogen som; "
+            "hogere waarden krijgen meer voorkeur bij het plannen.",
+        )
+
+        def _weight(label: str, attr: str, hint: str = "") -> None:
+            with ui.element("div").style("padding:.375rem 0"):
+                with ui.row().style("align-items:center;justify-content:space-between;width:100%"):
+                    with ui.element("div").style("flex:1"):
+                        ui.label(label).style("font-size:12px;color:var(--c-text-2)")
+                        if hint:
+                            ui.label(hint).style(
+                                "font-size:10px;color:var(--c-text-4);line-height:1.4"
+                            )
+                    val_lbl = ui.label(f"{getattr(settings, attr):.0%}").style(
+                        "font-size:11px;color:var(--c-text-3);font-weight:600"
+                    )
+                sl = ui.slider(min=0, max=1, step=0.05, value=getattr(settings, attr)).props(
+                    "color=primary"
+                )
+                sl.on(
+                    "update:model-value",
+                    lambda e, lbl=val_lbl, s=sl: lbl.set_text(f"{float(s.value):.0%}"),
+                )
+
+                async def _save_weight(a=attr, s=sl) -> None:
+                    setattr(settings, a, round(float(s.value), 2))
+                    await save_fn()
+
+                sl.on("change", lambda e, f=_save_weight: asyncio.ensure_future(f()))
+
+        _weight(
+            "Afwisseling / variatie",
+            "ml_afwisseling",
+            "Boost voor gerechten die je recent niet hebt klaargemaakt.",
+        )
+        _weight(
+            "Vaste dagen (gewoontes)",
+            "ml_vaste_dagen",
+            "Boost als je een gerecht historisch vaak op deze weekdag klaarmaakt.",
+        )
+        _weight(
+            "Voordeel (aanbiedingen)",
+            "ml_voordeel",
+            "Boost voor gerechten waarvan ingrediënten in de aanbieding zijn.",
+        )
+        _weight(
+            "Voorraad (bijna op)",
+            "ml_voorraad",
+            "Boost voor gerechten die ingrediënten gebruiken die voorspeld bijna op zijn.",
+        )
+        _weight(
+            "Categorie-spreiding",
+            "ml_variatie",
+            "Bevordert diversiteit in eiwit- en zetmeelcategorieën over de week.",
+        )
+        _weight(
+            t("settings.ml.ingredient_overlap"),
+            "ml_ingredient_overlap",
+            "Geeft voorkeur aan gerechten die ingrediënten delen — minder verspilling.",
+        )
+        _weight(
+            t("settings.ml.budget"),
+            "ml_budget",
+            "Geeft voorkeur aan goedkopere gerechten op basis van ingrediëntprijzen.",
+        )
+        _weight(
+            "Weer: oven/airfryer vermijden",
+            "ml_weather_no_oven",
+            "Straft gerechten met oven of airfryer af op warme dagen (vereist Weer aan).",
+        )
+        _weight(
+            "Weer: voorkeur koud",
+            "ml_weather_cold",
+            "Geeft voorkeur aan koude gerechten op warme dagen (vereist Weer aan).",
+        )
+
+
+def _render_ml_day_preferences(settings: UserSettings, save_fn) -> None:
+    """Per-day planning preferences with a tab bar for Ma–Zo + a lunch panel."""
+    from pyplus.db.models import MEAT_TYPES, PREP_TIME_BUCKETS, STARCH_TYPES
+    from pyplus.ui.format import meat_emoji, meat_label, starch_emoji, starch_label
+
+    with (
+        ui.expansion(t("settings.ml.day_prefs"), icon="calendar_month")
+        .style("border-top:1px solid var(--c-border)")
+        .props("dense")
+    ):
+        _infobox(
+            "Stel per dag in welke gerechten het model mag voorstellen. Blokkeer "
+            "bepaalde eiwittypes (bijv. vleesvrije maandag) of zetmeelsoorten, of stel een "
+            "maximum bereidingstijd in voor doordeweekse dagen. Dagen op 'uit' worden "
+            "overgeslagen bij het automatisch invullen.",
+        )
+
+        with ui.tabs().style("margin-bottom:.5rem").props("dense inline-label") as tabs:
+            day_tabs = {}
+            for day_key, day_label in _DAY_LABELS.items():
+                day_tabs[day_key] = ui.tab(day_key, label=day_label)
+            ui.tab("lunch", label="Lunch")
+
+        with ui.tab_panels(tabs, value="ma").style("min-height:auto"):
+            for day_key in _DAY_LABELS:
+                with ui.tab_panel(day_key):
+                    _render_single_day_pref(
+                        settings,
+                        day_key,
+                        save_fn,
+                        MEAT_TYPES,
+                        STARCH_TYPES,
+                        PREP_TIME_BUCKETS,
+                        meat_emoji,
+                        meat_label,
+                        starch_emoji,
+                        starch_label,
+                    )
+            with ui.tab_panel("lunch"):
+                _infobox(
+                    "Deze voorkeuren gelden voor alle vijf lunchslots. "
+                    "De lunch-slots delen dezelfde regels — ze worden niet "
+                    "individueel ingesteld.",
+                    icon="restaurant",
+                    color="#fef3c7",
+                    border="#fde68a",
+                    text_color="#92400e",
+                )
+                _render_single_day_pref(
+                    settings,
+                    "lunch",
+                    save_fn,
+                    MEAT_TYPES,
+                    STARCH_TYPES,
+                    PREP_TIME_BUCKETS,
+                    meat_emoji,
+                    meat_label,
+                    starch_emoji,
+                    starch_label,
+                )
+
+
+def _get_day_pref(settings: UserSettings, key: str) -> DayPreference:
+    """Load or initialise a DayPreference from settings.day_preferences."""
+    raw = settings.day_preferences.get(key, {})
+    if isinstance(raw, DayPreference):
+        return raw
+    return DayPreference.model_validate(raw)
+
+
+def _save_day_pref(settings: UserSettings, key: str, pref: DayPreference) -> None:
+    """Write a DayPreference back into the settings dict."""
+    if key == "lunch":
+        for i in range(1, 6):
+            settings.day_preferences[f"lunch{i}"] = pref.model_dump()
+    else:
+        settings.day_preferences[key] = pref.model_dump()
+
+
+def _render_single_day_pref(
+    settings,
+    day_key,
+    save_fn,
+    meat_types,
+    starch_types,
+    prep_buckets,
+    meat_emoji_fn,
+    meat_label_fn,
+    starch_emoji_fn,
+    starch_label_fn,
+) -> None:
+    pref = _get_day_pref(settings, day_key)
+
+    # Enabled toggle
+    with ui.row().style("align-items:center;gap:.625rem;margin-bottom:.5rem"):
+        en_sw = ui.switch(value=pref.enabled).props("color=primary size=sm")
+        ui.label(t("settings.ml.day_enabled")).style(
+            "font-size:13px;font-weight:600;color:var(--c-text)"
+        )
+
+    async def _on_enabled(e, k=day_key) -> None:
+        p = _get_day_pref(settings, k)
+        p.enabled = en_sw.value
+        _save_day_pref(settings, k, p)
+        await save_fn()
+
+    en_sw.on("update:model-value", lambda e: asyncio.ensure_future(_on_enabled(e)))
+
+    # Max prep time
+    prep_opts = {None: t("settings.ml.day_no_limit")}
+    for m in prep_buckets:
+        prep_opts[m] = f"≤{m} min"
+
+    prep_sel = (
+        ui.select(prep_opts, value=pref.max_prep_minutes, label=t("settings.ml.day_max_prep"))
+        .props("outlined dense options-dense")
+        .style("max-width:220px;margin-bottom:.5rem")
+    )
+
+    async def _on_prep(e, k=day_key) -> None:
+        p = _get_day_pref(settings, k)
+        p.max_prep_minutes = prep_sel.value
+        _save_day_pref(settings, k, p)
+        await save_fn()
+
+    prep_sel.on("update:model-value", lambda e: asyncio.ensure_future(_on_prep(e)))
+
+    # Blocked meat types — multi-select chips
+    ui.label(t("settings.ml.day_meat_blocked")).style(
+        "font-size:12px;font-weight:600;color:var(--c-text-2);margin-bottom:.25rem"
+    )
+    _render_chip_multiselect(
+        items=list(meat_types),
+        selected=set(pref.blocked_meat_types),
+        label_fn=lambda m: f"{meat_emoji_fn(m)} {meat_label_fn(m)}".strip(),
+        on_change=lambda sel, k=day_key: asyncio.ensure_future(
+            _update_day_list(settings, k, "blocked_meat_types", sel, save_fn)
+        ),
+    )
+
+    # Blocked starch types
+    ui.label(t("settings.ml.day_starch_blocked")).style(
+        "font-size:12px;font-weight:600;color:var(--c-text-2);margin-top:.5rem;margin-bottom:.25rem"
+    )
+    _render_chip_multiselect(
+        items=list(starch_types),
+        selected=set(pref.blocked_starch_types),
+        label_fn=lambda s: f"{starch_emoji_fn(s)} {starch_label_fn(s)}".strip(),
+        on_change=lambda sel, k=day_key: asyncio.ensure_future(
+            _update_day_list(settings, k, "blocked_starch_types", sel, save_fn)
+        ),
+    )
+
+
+async def _update_day_list(
+    settings: UserSettings, day_key: str, field: str, selected: set[str], save_fn
+) -> None:
+    pref = _get_day_pref(settings, day_key)
+    setattr(pref, field, list(selected))
+    _save_day_pref(settings, day_key, pref)
+    await save_fn()
+
+
+def _render_chip_multiselect(
+    items: list[str],
+    selected: set[str],
+    label_fn,
+    on_change,
+) -> None:
+    """Horizontal row of toggleable chips for multi-selection."""
+    with ui.element("div").style("display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.25rem"):
+        for item in items:
+            is_on = item in selected
+            chip = (
+                ui.chip(
+                    label_fn(item),
+                    selectable=True,
+                    selected=is_on,
+                )
+                .props(f"{'color=primary' if is_on else 'outline'} size=sm clickable")
+                .style("font-size:11px")
+            )
+
+            def _toggle(e, it=item, c=chip) -> None:
+                if it in selected:
+                    selected.discard(it)
+                else:
+                    selected.add(it)
+                on_change(selected)
+
+            chip.on("update:selected", _toggle)
+
+
+def _render_ml_week_constraints(settings: UserSettings, save_fn) -> None:
+    """Cross-week diversity constraints."""
+    with (
+        ui.expansion(t("settings.ml.week_goals"), icon="rule")
+        .style("border-top:1px solid var(--c-border)")
+        .props("dense")
+    ):
+        _infobox(
+            "Deze regels gelden over de hele week. Het model probeert "
+            "hieraan te voldoen bij het invullen van lege slots. Als alle regels tegelijk "
+            "niet haalbaar zijn (bijv. min. 5 vega én min. 5 vis bij 7 diners), wordt "
+            "terugevallen op de best mogelijke verdeling.",
+        )
+
+        wc = settings.week_constraints
+
+        def _int_setting(label: str, attr: str, min_v: int, max_v: int, hint: str = "") -> None:
+            with ui.element("div").style("padding:.375rem 0"):
+                with ui.row().style("align-items:center;gap:.625rem"):
+                    with ui.element("div").style("flex:1"):
+                        ui.label(label).style("font-size:12px;color:var(--c-text-2)")
+                        if hint:
+                            ui.label(hint).style(
+                                "font-size:10px;color:var(--c-text-4);line-height:1.4"
+                            )
+                    num = (
+                        ui.number(value=getattr(wc, attr), min=min_v, max=max_v)
+                        .props("outlined dense")
+                        .style("max-width:80px")
+                    )
+
+                async def _on(a=attr, n=num) -> None:
+                    setattr(wc, a, int(n.value or 0))
+                    settings.week_constraints = wc
+                    await save_fn()
+
+                num.on("change", lambda e, f=_on: asyncio.ensure_future(f()))
+
+        _int_setting(
+            t("settings.ml.min_vega"),
+            "min_vega_days",
+            0,
+            7,
+            "Minimaal aantal vegetarische diners per week.",
+        )
+        _int_setting(
+            t("settings.ml.max_vega"),
+            "max_vega_days",
+            0,
+            7,
+            "Maximaal aantal vegetarische diners per week.",
+        )
+        _int_setting(
+            t("settings.ml.min_fish"),
+            "min_fish_days",
+            0,
+            7,
+            "Minimaal aantal visdagen per week.",
+        )
+        _int_setting(
+            t("settings.ml.max_same_meat"),
+            "max_same_meat_type",
+            1,
+            7,
+            "Max. keren dat één eiwittype (bijv. kip) in de week mag voorkomen.",
+        )
+        _int_setting(
+            t("settings.ml.min_unique_starch"),
+            "min_unique_starch_types",
+            0,
+            7,
+            "Minimaal aantal verschillende zetmeelbases (aardappels, pasta, rijst…).",
+        )
+        _int_setting(
+            t("settings.ml.max_consec_meat"),
+            "max_consecutive_same_meat",
+            1,
+            7,
+            "Max. opeenvolgende dagen met dezelfde eiwitsoort.",
+        )
+        _int_setting(
+            t("settings.ml.max_consec_starch"),
+            "max_consecutive_same_starch",
+            1,
+            7,
+            "Max. opeenvolgende dagen met dezelfde zetmeelbasis.",
+        )
+        _int_setting(
+            t("settings.ml.max_red_meat"),
+            "max_red_meat_days",
+            0,
+            7,
+            "Max. dagen per week met rund of varken (beperkt rood vlees).",
+        )
+
+        # Target avg veg count (slider 0–3, step 0.5)
+        with ui.element("div").style("padding:.5rem 0"):
+            with ui.row().style("align-items:center;justify-content:space-between;width:100%"):
+                with ui.element("div").style("flex:1"):
+                    ui.label(t("settings.ml.target_veg")).style(
+                        "font-size:12px;color:var(--c-text-2)"
+                    )
+                    ui.label(
+                        "Streefgemiddelde hoeveelheid groenten per maaltijd (0 = geen doel)."
+                    ).style("font-size:10px;color:var(--c-text-4);line-height:1.4")
+                veg_lbl = ui.label(f"{wc.target_avg_veg_count or 0:.1f}").style(
+                    "font-size:11px;color:var(--c-text-3);font-weight:600"
+                )
+            veg_sl = ui.slider(min=0, max=3, step=0.5, value=wc.target_avg_veg_count or 0).props(
+                "color=primary"
+            )
+            veg_sl.on(
+                "update:model-value",
+                lambda e: veg_lbl.set_text(f"{float(veg_sl.value):.1f}"),
+            )
+
+            async def _save_veg() -> None:
+                v = float(veg_sl.value)
+                wc.target_avg_veg_count = v if v > 0 else None
+                settings.week_constraints = wc
+                await save_fn()
+
+            veg_sl.on("change", lambda e: asyncio.ensure_future(_save_veg()))
+
+
+def _render_ml_advanced(settings: UserSettings, save_fn) -> None:
+    """Advanced ML knobs for power users."""
+    with (
+        ui.expansion(t("settings.ml.advanced"), icon="science")
+        .style("border-top:1px solid var(--c-border)")
+        .props("dense")
+    ):
+        _infobox(
+            "Dit zijn de interne parameters van het aanbevelingsmodel. "
+            "De standaardwaarden werken goed voor de meeste situaties. "
+            "De selectiemethode bepaalt hoe het model een gerecht kiest uit de kandidaten: "
+            "hebzuchtig pakt altijd de hoogste score, softmax maakt het probabilistisch "
+            "(temperatuur regelt de spreiding), en Thompson-steekproef gebruikt Bayesiaanse "
+            "exploratie met een Beta-verdeling.",
+            icon="science",
+            color="#f5f3ff",
+            border="#ddd6fe",
+            text_color="#6d28d9",
+        )
+
+        # Repeat cooldown
+        with ui.element("div").style("padding:.375rem 0"):
+            with ui.row().style("align-items:center;gap:.625rem"):
+                with ui.element("div").style("flex:1"):
+                    ui.label(t("settings.ml.cooldown")).style(
+                        "font-size:12px;color:var(--c-text-2)"
+                    )
+                    ui.label(t("settings.ml.cooldown_hint")).style(
+                        "font-size:10px;color:var(--c-text-4);line-height:1.4"
+                    )
+                cd_num = (
+                    ui.number(value=settings.ml_repeat_cooldown_weeks, min=0, max=12)
+                    .props("outlined dense suffix=weken")
+                    .style("max-width:120px")
+                )
+
+            async def _save_cd() -> None:
+                settings.ml_repeat_cooldown_weeks = int(cd_num.value or 0)
+                await save_fn()
+
+            cd_num.on("change", lambda e: asyncio.ensure_future(_save_cd()))
+
+        # Novelty ratio slider
+        _adv_slider(
+            t("settings.ml.novelty"),
+            t("settings.ml.novelty_hint"),
+            settings,
+            "ml_novelty_ratio",
+            0,
+            1,
+            0.05,
+            pct=True,
+            save_fn=save_fn,
+        )
+
+        # History window
+        hist_opts = {4: "4 weken", 8: "8 weken", 13: "13 weken", 26: "26 weken", 52: "52 weken"}
+        with ui.element("div").style("padding:.375rem 0"):
+            ui.label(t("settings.ml.history_window")).style("font-size:12px;color:var(--c-text-2)")
+            ui.label(t("settings.ml.history_hint")).style(
+                "font-size:10px;color:var(--c-text-4);line-height:1.4;margin-bottom:.25rem"
+            )
+            hist_sel = (
+                ui.select(hist_opts, value=settings.ml_history_window_weeks)
+                .props("outlined dense options-dense")
+                .style("max-width:160px")
+            )
+
+            async def _save_hist() -> None:
+                settings.ml_history_window_weeks = int(hist_sel.value)
+                await save_fn()
+
+            hist_sel.on("update:model-value", lambda e: asyncio.ensure_future(_save_hist()))
+
+        # Decay halflife slider
+        _adv_slider(
+            t("settings.ml.decay_halflife"),
+            t("settings.ml.decay_hint"),
+            settings,
+            "ml_trend_decay_halflife",
+            1,
+            26,
+            1,
+            pct=False,
+            unit=" wk",
+            save_fn=save_fn,
+        )
+
+        # Selection method
+        _infobox(
+            "Hebzuchtig: kiest altijd het best scorende gerecht — deterministisch en "
+            "voorspelbaar. Softmax: kansverdeling op basis van scores — temperatuur τ "
+            "bepaalt de entropie (τ→0 wordt hebzuchtig, τ→∞ wordt uniform). "
+            "Epsilon-hebzuchtig: met kans ε een willekeurig gerecht, anders de beste. "
+            "Thompson-steekproef: Bayesiaanse exploratie — trekt per kandidaat uit een "
+            "Beta(α,β)-verdeling gebaseerd op de score, kiest de hoogste sample. "
+            "Balanceert van nature exploratie en exploitatie.",
+            icon="casino",
+            color="#fef9c3",
+            border="#fde047",
+            text_color="#854d0e",
+        )
+
+        method_opts = {
+            "greedy": t("settings.ml.method_greedy"),
+            "softmax": t("settings.ml.method_softmax"),
+            "epsilon_greedy": t("settings.ml.method_epsilon"),
+            "thompson": t("settings.ml.method_thompson"),
+        }
+        with ui.element("div").style("padding:.375rem 0"):
+            ui.label(t("settings.ml.selection_method")).style(
+                "font-size:12px;font-weight:600;color:var(--c-text-2)"
+            )
+            meth_sel = (
+                ui.select(method_opts, value=settings.ml_selection_method)
+                .props("outlined dense options-dense")
+                .style("max-width:240px")
+            )
+
+            async def _save_method() -> None:
+                settings.ml_selection_method = str(meth_sel.value)
+                await save_fn()
+
+            meth_sel.on("update:model-value", lambda e: asyncio.ensure_future(_save_method()))
+
+        # Epsilon (only relevant for epsilon_greedy)
+        with ui.element("div").bind_visibility_from(
+            meth_sel, "value", backward=lambda v: v == "epsilon_greedy"
+        ):
+            _adv_slider(
+                t("settings.ml.exploration"),
+                t("settings.ml.exploration_hint"),
+                settings,
+                "ml_exploration_rate",
+                0,
+                0.5,
+                0.01,
+                pct=True,
+                save_fn=save_fn,
+            )
+
+        # Temperature (only relevant for softmax)
+        with ui.element("div").bind_visibility_from(
+            meth_sel, "value", backward=lambda v: v == "softmax"
+        ):
+            _adv_slider(
+                t("settings.ml.temperature"),
+                t("settings.ml.temperature_hint"),
+                settings,
+                "ml_temperature",
+                0.1,
+                5.0,
+                0.1,
+                pct=False,
+                unit="",
+                save_fn=save_fn,
+            )
+
+        # Confidence threshold
+        _adv_slider(
+            t("settings.ml.confidence"),
+            t("settings.ml.confidence_hint"),
+            settings,
+            "ml_confidence_threshold",
+            0,
+            1,
+            0.05,
+            pct=True,
+            save_fn=save_fn,
+        )
+
+
+def _adv_slider(
+    label: str,
+    hint: str,
+    settings: UserSettings,
+    attr: str,
+    min_v: float,
+    max_v: float,
+    step: float,
+    *,
+    pct: bool = False,
+    unit: str = "",
+    save_fn,
+) -> None:
+    """One labelled slider for an advanced numeric setting."""
+    with ui.element("div").style("padding:.375rem 0"):
+        with ui.row().style("align-items:center;justify-content:space-between;width:100%"):
+            with ui.element("div").style("flex:1"):
+                ui.label(label).style("font-size:12px;color:var(--c-text-2)")
+                if hint:
+                    ui.label(hint).style("font-size:10px;color:var(--c-text-4);line-height:1.4")
+            cur = getattr(settings, attr)
+            fmt = f"{cur:.0%}" if pct else f"{cur:.1f}{unit}"
+            val_lbl = ui.label(fmt).style("font-size:11px;color:var(--c-text-3);font-weight:600")
+        sl = ui.slider(min=min_v, max=max_v, step=step, value=cur).props("color=primary")
+
+        def _update_lbl(e, lbl=val_lbl, s=sl) -> None:
+            v = float(s.value)
+            lbl.set_text(f"{v:.0%}" if pct else f"{v:.1f}{unit}")
+
+        sl.on("update:model-value", _update_lbl)
+
+        async def _save(a=attr, s=sl) -> None:
+            setattr(settings, a, round(float(s.value), 2))
+            await save_fn()
+
+        sl.on("change", lambda e, f=_save: asyncio.ensure_future(f()))
+
+
+def _render_ml_autopilot(settings: UserSettings, save_fn) -> None:
+    """Autopilot section with per-meal toggles and slot limits."""
+    with ui.element("div").style(
+        "padding:.75rem;background:#fffbeb;border-radius:var(--r-md);"
+        "border:1px solid #fde68a;margin-top:.625rem"
+    ):
+        _infobox(
+            "Autopilot laat het model automatisch lege slots invullen — "
+            "je mandje wordt pas écht gevuld nadat je bevestigt op PLUS.nl. "
+            "Schakel diner en lunch apart in en begrens het aantal slots dat "
+            "automatisch wordt gevuld. Alle hierboven ingestelde regels, "
+            "dagvoorkeuren en weekdoelen worden gerespecteerd.",
+            icon="smart_toy",
+            color="#fef3c7",
+            border="#fde68a",
+            text_color="#92400e",
+        )
+
+        with ui.row().style("align-items:flex-start;gap:.625rem;padding:.375rem 0"):
+            ap_dinner = ui.switch(value=settings.ml_autopilot_dinner).props("color=warning size=sm")
+            with ui.element("div"):
+                ui.label(t("settings.ml.autopilot_dinner")).style(
+                    "font-size:13px;font-weight:600;color:#92400e"
+                )
+
+        async def _on_ap_dinner(e) -> None:
+            settings.ml_autopilot_dinner = ap_dinner.value
+            settings.ml_autopilot = settings.ml_autopilot_dinner or settings.ml_autopilot_lunch
+            await save_fn()
+
+        ap_dinner.on("update:model-value", lambda e: asyncio.ensure_future(_on_ap_dinner(e)))
+
+        with ui.row().style("align-items:flex-start;gap:.625rem;padding:.375rem 0"):
+            ap_lunch = ui.switch(value=settings.ml_autopilot_lunch).props("color=warning size=sm")
+            with ui.element("div"):
+                ui.label(t("settings.ml.autopilot_lunch")).style(
+                    "font-size:13px;font-weight:600;color:#92400e"
+                )
+
+        async def _on_ap_lunch(e) -> None:
+            settings.ml_autopilot_lunch = ap_lunch.value
+            settings.ml_autopilot = settings.ml_autopilot_dinner or settings.ml_autopilot_lunch
+            await save_fn()
+
+        ap_lunch.on("update:model-value", lambda e: asyncio.ensure_future(_on_ap_lunch(e)))
+
+        # Max slots
+        with ui.row().style("gap:.75rem;margin-top:.375rem"):
+            with ui.element("div"):
+                ui.label(t("settings.ml.autopilot_max_dinner")).style(
+                    "font-size:11px;color:#92400e"
+                )
+                max_d = (
+                    ui.number(value=settings.ml_autopilot_max_dinner, min=1, max=7)
+                    .props("outlined dense")
+                    .style("max-width:80px")
+                )
+
+                async def _save_max_d() -> None:
+                    settings.ml_autopilot_max_dinner = int(max_d.value or 7)
+                    await save_fn()
+
+                max_d.on("change", lambda e: asyncio.ensure_future(_save_max_d()))
+
+            with ui.element("div"):
+                ui.label(t("settings.ml.autopilot_max_lunch")).style("font-size:11px;color:#92400e")
+                max_l = (
+                    ui.number(value=settings.ml_autopilot_max_lunch, min=1, max=5)
+                    .props("outlined dense")
+                    .style("max-width:80px")
+                )
+
+                async def _save_max_l() -> None:
+                    settings.ml_autopilot_max_lunch = int(max_l.value or 5)
+                    await save_fn()
+
+                max_l.on("change", lambda e: asyncio.ensure_future(_save_max_l()))
+
+
+# ── Weather ──────────────────────────────────────────────────────────────────
+
+
+def _render_weather(settings: UserSettings, save_fn) -> None:
+    _infobox(
+        "Het model kan het weer meenemen bij suggesties: op warme dagen gerechten "
+        "met oven of airfryer vermijden en koude gerechten voorrang geven. "
+        "De temperatuur wordt dagelijks opgehaald via Open-Meteo (gratis, geen API-sleutel nodig).",
+    )
+
+    _toggle_setting(
+        settings,
+        "weather_enabled",
+        t("settings.weather.enabled"),
+        t("settings.weather.enabled_hint"),
+        save_fn,
+    )
+
+    # Location search
+    ui.label(t("settings.weather.location")).style(
+        "font-size:13px;font-weight:600;color:var(--c-text);margin-top:.5rem"
+    )
+    ui.label(t("settings.weather.location_hint")).style(
+        "font-size:11px;color:var(--c-text-3);line-height:1.5;margin-bottom:.375rem;display:block"
+    )
+
+    loc_input = (
+        ui.input(
+            label="Plaatsnaam",
+            value=settings.weather_location_name,
+            placeholder="bijv. Amsterdam",
+        )
+        .props("outlined dense clearable")
+        .style("max-width:280px;margin-bottom:.375rem")
+    )
+
+    coord_label = ui.label(
+        f"({settings.weather_latitude:.2f}, {settings.weather_longitude:.2f})"
+        if settings.weather_latitude is not None
+        else ""
+    ).style("font-size:11px;color:var(--c-text-4);margin-bottom:.5rem;display:block")
+
+    async def _geocode() -> None:
+        name = (loc_input.value or "").strip()
+        if not name:
+            return
+        try:
+            import httpx
+
+            async with httpx.AsyncClient() as client:
+                r = await client.get(
+                    "https://geocoding-api.open-meteo.com/v1/search",
+                    params={"name": name, "count": 1, "language": "nl"},
+                    timeout=10,
+                )
+            data = r.json()
+            results = data.get("results", [])
+            if results:
+                hit = results[0]
+                settings.weather_latitude = round(hit["latitude"], 2)
+                settings.weather_longitude = round(hit["longitude"], 2)
+                settings.weather_location_name = hit.get("name", name)
+                loc_input.set_value(settings.weather_location_name)
+                coord_label.set_text(
+                    f"({settings.weather_latitude:.2f}, {settings.weather_longitude:.2f})"
+                )
+                await save_fn()
+                ui.notify(
+                    f"Locatie: {settings.weather_location_name}", type="positive", timeout=1500
+                )
+            else:
+                ui.notify("Plaats niet gevonden", type="warning", timeout=2000)
+        except Exception as exc:
+            ui.notify(f"Geocoding mislukt: {exc}", type="negative", timeout=3000)
+
+    loc_input.on("keydown.enter", lambda _: asyncio.ensure_future(_geocode()))
+    ui.button("Zoeken", on_click=lambda: asyncio.ensure_future(_geocode())).props(
+        "flat rounded no-caps color=primary size=sm"
+    ).style("font-size:12px;margin-bottom:.5rem")
+
+    # Threshold slider
+    with ui.element("div").style("padding:.375rem 0"):
+        with ui.row().style("align-items:center;justify-content:space-between;width:100%"):
+            with ui.element("div").style("flex:1"):
+                ui.label(t("settings.weather.threshold")).style(
+                    "font-size:12px;color:var(--c-text-2)"
+                )
+                ui.label(t("settings.weather.threshold_hint")).style(
+                    "font-size:10px;color:var(--c-text-4);line-height:1.4"
+                )
+            thresh_lbl = ui.label(f"{settings.weather_hot_threshold:.0f}°C").style(
+                "font-size:11px;color:var(--c-text-3);font-weight:600"
+            )
+        thresh_sl = ui.slider(min=20, max=40, step=1, value=settings.weather_hot_threshold).props(
+            "color=primary"
+        )
+        thresh_sl.on(
+            "update:model-value",
+            lambda e: thresh_lbl.set_text(f"{float(thresh_sl.value):.0f}°C"),
+        )
+
+        async def _save_thresh() -> None:
+            settings.weather_hot_threshold = float(thresh_sl.value)
+            await save_fn()
+
+        thresh_sl.on("change", lambda e: asyncio.ensure_future(_save_thresh()))
+
+    _infobox(
+        "Stel de gewichten in bij Weegfactoren → 'Weer: oven/airfryer vermijden' "
+        "en 'Weer: voorkeur koud' om het effect op suggesties te bepalen.",
+        icon="tune",
+        color="#f5f3ff",
+        border="#ddd6fe",
+        text_color="#6d28d9",
+    )
+
+
+# ── ntfy ──────────────────────────────────────────────────────────────────────
 
 
 def _render_ntfy(settings: UserSettings, save_fn) -> None:
@@ -590,6 +1397,9 @@ async def _test_ntfy(settings: UserSettings) -> None:
         ui.notify(f"Fout: {exc}", type="negative", position="top")
 
 
+# ── iCal ──────────────────────────────────────────────────────────────────────
+
+
 def _render_ical(settings: UserSettings, user_id: int, session, save_fn) -> None:
     from pyplus.ui.components.meals import render_ical_subscription_body
 
@@ -605,6 +1415,8 @@ def _render_ical(settings: UserSettings, user_id: int, session, save_fn) -> None
     )
 
 
+# ── Sync status ───────────────────────────────────────────────────────────────
+
 # Resource → Dutch label, in display order. Keys match jobs/registry resource names.
 _SYNC_LABELS: list[tuple[str, str]] = [
     ("catalogue", "Productcatalogus"),
@@ -613,10 +1425,9 @@ _SYNC_LABELS: list[tuple[str, str]] = [
     ("purchase_catalogue", "Eerder gekochte producten"),
     ("orders", "Bestelgeschiedenis"),
     ("ml", "Slimme suggesties"),
+    ("weather", "Weer"),
 ]
 
-# Resource → the scheduler job that next refreshes it. The catalogue has its own
-# weekly job; everything else is refreshed by the nightly full preload.
 _RESOURCE_TO_JOB: dict[str, str] = {
     "catalogue": "catalogue_weekly",
     "products": "full_preload_nightly",
@@ -624,6 +1435,7 @@ _RESOURCE_TO_JOB: dict[str, str] = {
     "purchase_catalogue": "full_preload_nightly",
     "orders": "full_preload_nightly",
     "ml": "full_preload_nightly",
+    "weather": "full_preload_nightly",
 }
 
 

@@ -33,6 +33,31 @@ class PurchaseRecord:
     dates_complete: bool  # True when ≥2 dated online orders exist (enough for cadence)
 
 
+class DayPreference(BaseModel):
+    """Per-slot planning configuration (stored inside UserSettings.day_preferences)."""
+
+    enabled: bool = True
+    max_prep_minutes: int | None = None
+    allowed_meat_types: list[str] = []
+    blocked_meat_types: list[str] = []
+    preferred_starch_types: list[str] = []
+    blocked_starch_types: list[str] = []
+
+
+class WeekConstraints(BaseModel):
+    """Cross-week diversity constraints for the recommender."""
+
+    min_vega_days: int = 0
+    max_vega_days: int = 7
+    min_fish_days: int = 0
+    max_same_meat_type: int = 7
+    min_unique_starch_types: int = 0
+    max_consecutive_same_meat: int = 7
+    max_consecutive_same_starch: int = 7
+    max_red_meat_days: int = 7
+    target_avg_veg_count: float | None = None
+
+
 class UserSettings(BaseModel):
     """Per-user ML and notification preferences.  All ML off by default."""
 
@@ -54,6 +79,43 @@ class UserSettings(BaseModel):
     ml_voordeel: float = 0.6  # dishes whose ingredients are on promotion
     ml_voorraad: float = 0.4  # dishes that use staples predicted as due
     ml_variatie: float = 0.5  # category spread across the week
+    ml_ingredient_overlap: float = 0.0  # shared ingredients across week (waste reduction)
+    ml_budget: float = 0.0  # prefer cheaper dishes
+    ml_weather_no_oven: float = 0.0  # penalise oven/airfryer on hot days
+    ml_weather_cold: float = 0.0  # boost cold dishes on hot days
+
+    # ── Per-day preferences ────────────────────────────────────────────────
+    day_preferences: dict[str, DayPreference] = {}
+
+    # ── Weekly diversity constraints ───────────────────────────────────────
+    week_constraints: WeekConstraints = WeekConstraints()
+
+    # ── Advanced ML knobs ──────────────────────────────────────────────────
+    ml_repeat_cooldown_weeks: int = 0
+    ml_novelty_ratio: float = 0.0
+    ml_history_window_weeks: int = 26
+    ml_trend_decay_halflife: float = 8.0
+    ml_exploration_rate: float = 0.0
+    ml_temperature: float = 1.0
+    ml_selection_method: str = "greedy"
+    ml_confidence_threshold: float = 0.0
+
+    # ── Autopilot extensions ───────────────────────────────────────────────
+    ml_autopilot_dinner: bool = False
+    ml_autopilot_lunch: bool = False
+    ml_autopilot_max_dinner: int = 7
+    ml_autopilot_max_lunch: int = 5
+
+    # ── Weather-aware planning ────────────────────────────────────────────────
+    weather_enabled: bool = False
+    weather_latitude: float | None = None
+    weather_longitude: float | None = None
+    weather_location_name: str = ""
+    weather_hot_threshold: float = 25.0
+    # Kept for migration compat — superseded by ml_weather_* weights below
+    weather_avoid_oven_airfryer: bool = True
+    weather_prefer_cold: bool = True
+    weather_cold_boost: float = 1.5
 
     # ── Notifications (ntfy) ─────────────────────────────────────────────────
     ntfy_url: str = ""

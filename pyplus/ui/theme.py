@@ -545,9 +545,10 @@ body {
 .sp-nav-btn.active { background: var(--c-brand-tint-2); color: var(--c-brand-dark); }
 .sp-nav-spacer { flex: 1; }
 
-/* Main stage */
+/* Main stage — 2 columns, sized so each column = cart width (3 equal visual lanes) */
 .sp-cockpit-stage {
   flex: 2 1 0;
+  min-width: 0;
   overflow-y: auto;
   padding: 1.25rem;
   display: grid;
@@ -557,16 +558,24 @@ body {
   align-content: start;
 }
 
-/* Cart column */
+/* Cart column — 1 part of the 3-part layout (stage takes 2 parts) */
 .sp-cockpit-cart-col {
-  min-width: 280px;
-  flex: 1 0 280px;
+  flex: 1 1 0;
+  min-width: 0;
   border-left: 1px solid var(--c-border);
   overflow: hidden;
   display: flex;
   flex-direction: column;
   padding: 0;
   background: var(--c-surface);
+}
+
+/* Full-width content area for dishes/settings (fills all space after nav rail) */
+.sp-page-content {
+  overflow-y: auto;
+  padding: 1.5rem;
+  background: var(--c-bg);
+  width: calc(100vw - 68px);
 }
 
 /* Cart item row */
@@ -620,12 +629,15 @@ body {
 .sp-dish-card {
   background: var(--c-surface);
   border: 1px solid var(--c-border);
-  border-radius: var(--r-lg);
-  padding: .875rem 1rem;
+  border-radius: var(--r-xl);
+  padding: 1.125rem 1.25rem;
   transition: box-shadow var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
 }
 .sp-dish-card:hover {
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-md);
   border-color: var(--c-border-strong);
 }
 .sp-dish-card-name {
@@ -865,7 +877,7 @@ body {
     width: 100%; height: 58px; flex-direction: row;
     justify-content: space-around; border-right: none;
     border-top: 1px solid var(--c-border); order: 3; padding: 0 .5rem;
-    position: fixed; bottom: 58px; left: 0; right: 0; z-index: 100;
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
     background: var(--c-surface);
   }
   .sp-nav-logo { display: none; }
@@ -877,8 +889,9 @@ body {
     overflow-y: auto;
   }
   .sp-cockpit-cart-col { display: none; }  /* replaced by bottom bar */
+  .sp-page-content { width: 100%; padding-bottom: calc(58px + 1.25rem); }  /* nav bar */
   .sp-deals-body, .sp-meals-body, .sp-staples-body { max-height: none; overflow-y: visible; }
-  .sp-mobile-cart-bar { display: flex; }
+  .sp-mobile-cart-bar { display: flex; bottom: 58px; }
 }
 """
 

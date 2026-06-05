@@ -16,6 +16,7 @@ from pyplus.db import repo
 from pyplus.db.engine import AsyncSessionLocal
 from pyplus.db.models import FixedProduct, IngredientSku
 from pyplus.i18n import t
+from pyplus.ui.format import thumbnail_url
 
 log = logging.getLogger(__name__)
 
@@ -26,8 +27,26 @@ async def create_staples_lane(session) -> None:
     store = session.store_number or 0
     list_ref: dict = {"fn": None}  # current row-list refresher (for cart-change updates)
 
-    # Register the cart listener once; it points at whichever _list is current.
-    session.add_cart_listener(lambda: list_ref["fn"].refresh() if list_ref["fn"] else None)
+    # Per-row qty label refs for in-place updates (no full list refresh for qty changes).
+    _qty_labels: dict[str, "ui.label"] = {}
+    _last_in_cart: list[frozenset] = [frozenset()]
+    _last_syncing: list[frozenset] = [frozenset()]
+    _all_skus: list[frozenset] = [frozenset()]
+
+    def _on_cart() -> None:
+        if list_ref["fn"] is None:
+            return
+        cart_qty_map = {it.sku: it.quantity for it in session.cart.items}
+        skus = _all_skus[0]
+        in_cart_now = frozenset(s for s in skus if cart_qty_map.get(s, 0) > 0)
+        syncing_now = frozenset(skus & session.syncing_skus)
+        if in_cart_now != _last_in_cart[0] or syncing_now != _last_syncing[0]:
+            list_ref["fn"].refresh()
+        else:
+            for sku, lbl in _qty_labels.items():
+                lbl.set_text(str(cart_qty_map.get(sku, 0)))
+
+    session.add_cart_listener(_on_cart)
 
     with ui.element("div").classes("sp-lane"):
         # ── Header ────────────────────────────────────────────────────────
@@ -149,8 +168,8 @@ async def create_staples_lane(session) -> None:
             else:
                 sorted_products = products
 
-            def _row(fp) -> None:
-                _render_row(
+            def _row(fp):
+                return _render_row(
                     fp,
                     sku_cache.get(fp.sku),
                     catalogue.get(fp.sku),
@@ -165,6 +184,17 @@ async def create_staples_lane(session) -> None:
 
             @ui.refreshable
             def _list() -> None:
+                _qty_labels.clear()
+                cart_qty_map = {it.sku: it.quantity for it in session.cart.items}
+                skus: set[str] = set()
+
+                def _row_tracked(fp) -> None:
+                    qty_lbl = _row(fp)
+                    if fp.sku:
+                        skus.add(fp.sku)
+                        if qty_lbl is not None:
+                            _qty_labels[fp.sku] = qty_lbl
+
                 if prefs.staples_group_by_category:
                     buckets: dict = {}
                     for fp in sorted_products:
@@ -172,10 +202,14 @@ async def create_staples_lane(session) -> None:
                     for cat in group_order(list(buckets)):
                         ui.label(cat).classes("sp-cat-header")
                         for fp in buckets[cat]:
-                            _row(fp)
+                            _row_tracked(fp)
                 else:
                     for fp in sorted_products:
-                        _row(fp)
+                        _row_tracked(fp)
+
+                _all_skus[0] = frozenset(skus)
+                _last_in_cart[0] = frozenset(s for s in skus if cart_qty_map.get(s, 0) > 0)
+                _last_syncing[0] = frozenset(skus & session.syncing_skus)
 
             list_ref["fn"] = _list
             _list()
@@ -240,7 +274,7 @@ def _render_add_search(session, store: int, body_refresh) -> None:
                         .on("click", _pick)
                     ):
                         if prod.image_url:
-                            ui.image(prod.image_url).style(
+                            ui.image(thumbnail_url(prod.image_url, 28)).style(
                                 "width:28px;height:28px;object-fit:contain;border-radius:4px;"
                                 "background:var(--c-border);flex-shrink:0"
                             )
@@ -303,7 +337,7 @@ def _render_row(
     body_refresh=None,
     promo=None,
     purchased=None,
-) -> None:
+) -> "ui.label | None":
     cart_qty = next((it.quantity for it in session.cart.items if it.sku == fp.sku), 0)
     is_syncing = fp.sku in session.syncing_skus
 
@@ -349,7 +383,7 @@ def _render_row(
         # Product thumbnail (with availability dot overlaid in the corner)
         with ui.element("div").style("position:relative;width:34px;height:34px;flex-shrink:0"):
             if image:
-                ui.image(image).style(
+                ui.image(thumbnail_url(image, 34)).style(
                     "width:34px;height:34px;border-radius:var(--r-sm);"
                     "object-fit:contain;background:var(--c-surface-2)"
                 )
@@ -405,8 +439,11 @@ def _render_row(
 
         # Stepper — only for products that can actually be bought. A
         # "Niet verkrijgbaar" product has no add control.
+        qty_lbl = None
         if not discontinued:
-            _render_stepper(fp, cart_qty, is_syncing, name, subtitle, price, image, cart_service)
+            qty_lbl = _render_stepper(
+                fp, cart_qty, is_syncing, name, subtitle, price, image, cart_service
+            )
 
         # Remove from staples
         if body_refresh is not None:
@@ -420,14 +457,19 @@ def _render_row(
                 "flat round dense size=xs color=grey-5"
             ).tooltip("Verwijderen uit vaste boodschappen")
 
+    return qty_lbl
 
-def _render_stepper(fp, cart_qty, syncing, name, subtitle, price, image, cart_service) -> None:
+
+def _render_stepper(
+    fp, cart_qty, syncing, name, subtitle, price, image, cart_service
+) -> "ui.label | None":
+    """Returns qty count label for in-cart items, None otherwise."""
     if syncing:
         with ui.element("div").style(
             "width:32px;height:32px;display:flex;align-items:center;justify-content:center"
         ):
             ui.spinner(size="14px", color="primary")
-        return
+        return None
 
     if cart_qty == 0:
         default_qty = fp.default_qty or 1
@@ -455,45 +497,47 @@ def _render_stepper(fp, cart_qty, syncing, name, subtitle, price, image, cart_se
             ui.label("+").style(
                 "font-size:18px;font-weight:700;color:var(--c-brand-dark);line-height:1;pointer-events:none"
             )
-    else:
-        with ui.element("div").classes("sp-qty"):
-            with (
-                ui.element("div")
-                .classes("sp-qty-btn")
-                .on(
-                    "click",
-                    lambda _, f=fp: (
-                        asyncio.ensure_future(cart_service.remove(f.sku)) if cart_service else None
-                    ),
-                )
-            ):
-                ui.label("−").style(
-                    "font-size:15px;font-weight:700;line-height:1;pointer-events:none"
-                )
-            ui.label(str(cart_qty)).classes("sp-qty-count")
-            with (
-                ui.element("div")
-                .classes("sp-qty-btn")
-                .on(
-                    "click",
-                    lambda _, f=fp, n=name, s=subtitle, p=price, img=image: (
-                        asyncio.ensure_future(
-                            cart_service.add(
-                                f.sku,
-                                product_name=n,
-                                product_unit=s,
-                                product_price=p,
-                                product_image=img,
-                            )
+        return None
+
+    with ui.element("div").classes("sp-qty"):
+        with (
+            ui.element("div")
+            .classes("sp-qty-btn")
+            .on(
+                "click",
+                lambda _, f=fp: (
+                    asyncio.ensure_future(cart_service.remove(f.sku)) if cart_service else None
+                ),
+            )
+        ):
+            ui.label("−").style(
+                "font-size:15px;font-weight:700;line-height:1;pointer-events:none"
+            )
+        qty_lbl = ui.label(str(cart_qty)).classes("sp-qty-count")
+        with (
+            ui.element("div")
+            .classes("sp-qty-btn")
+            .on(
+                "click",
+                lambda _, f=fp, n=name, s=subtitle, p=price, img=image: (
+                    asyncio.ensure_future(
+                        cart_service.add(
+                            f.sku,
+                            product_name=n,
+                            product_unit=s,
+                            product_price=p,
+                            product_image=img,
                         )
-                        if cart_service
-                        else None
-                    ),
-                )
-            ):
-                ui.label("+").style(
-                    "font-size:15px;font-weight:700;line-height:1;pointer-events:none"
-                )
+                    )
+                    if cart_service
+                    else None
+                ),
+            )
+        ):
+            ui.label("+").style(
+                "font-size:15px;font-weight:700;line-height:1;pointer-events:none"
+            )
+    return qty_lbl
 
 
 async def _add_all(

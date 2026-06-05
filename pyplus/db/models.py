@@ -61,6 +61,8 @@ class MlKind(str, enum.Enum):
 # on Dish.meat_type; the UI maps them to icons via pyplus.i18n.
 MEAT_TYPES = ("vega", "kip", "rund", "varken", "vis", "gecombineerd")
 PREP_TIME_BUCKETS = (20, 40, 60, 120)  # minutes — upper bound of each bucket
+STARCH_TYPES = ("aardappels", "pasta", "rijst", "noedels", "deeg", "geen_anders")
+COOKING_METHODS = ("kookplaat", "oven", "magnetron", "airfryer")
 
 
 # ── Core user tables ───────────────────────────────────────────────────────────
@@ -133,6 +135,13 @@ class Dish(Base):
     # Optional planning metadata (carried over from the R app's "Gerechten beheren").
     prep_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 20/40/60/120
     meat_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # see MEAT_TYPES
+    starch_type: Mapped[Optional[str]] = mapped_column(
+        String(30), nullable=True
+    )  # see STARCH_TYPES
+    cooking_methods: Mapped[str] = mapped_column(
+        Text, default="[]"
+    )  # JSON list from COOKING_METHODS
+    is_cold: Mapped[bool] = mapped_column(Boolean, default=False)
     veg_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 0–3
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=datetime.datetime.utcnow
@@ -382,3 +391,20 @@ class MlArtifact(Base):
     input_hash: Mapped[str] = mapped_column(String(64), default="")
 
     user: Mapped["User"] = relationship(back_populates="ml_artifacts")
+
+
+# ── Weather cache ─────────────────────────────────────────────────────────────
+
+
+class WeatherCache(Base):
+    """Daily temperature cache — fetched from Open-Meteo, used by ML for weather-aware planning."""
+
+    __tablename__ = "weather_cache"
+
+    date: Mapped[datetime.date] = mapped_column(Date, primary_key=True)
+    latitude: Mapped[float] = mapped_column(Float, primary_key=True)
+    longitude: Mapped[float] = mapped_column(Float, primary_key=True)
+    temperature_max: Mapped[float] = mapped_column(Float, nullable=False)
+    fetched_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime, default=datetime.datetime.utcnow
+    )

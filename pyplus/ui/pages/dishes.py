@@ -25,6 +25,187 @@ log = logging.getLogger(__name__)
 _UNITS = ["stuks", "g", "kg", "ml", "l", "tl", "el", "mok", "snufje", "plak", "teen", "takje"]
 
 
+@dataclass
+class _DishCardData:
+    """Pre-fetched data for rendering a dish card without DB calls."""
+
+    ingredients: list = field(default_factory=list)
+    img_urls: list = field(default_factory=list)
+    avail: int = 0
+    unavail: int = 0
+    unknown: int = 0
+    discontinued: list = field(default_factory=list)
+
+
+# ── Filters ───────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class _DishFilters:
+    search: str = ""
+    meat_types: set = field(default_factory=set)
+    starch_types: set = field(default_factory=set)
+    cooking_methods: set = field(default_factory=set)
+    prep_max: int | None = None
+    is_cold: bool | None = None
+    availability: str | None = None  # None=all, "ok", "issue"
+
+
+def _apply_filters(dishes: list, filters: _DishFilters) -> list:
+    import json as _json
+
+    result = []
+    search = filters.search.lower().strip()
+    for d in dishes:
+        if search and search not in d.name.lower():
+            continue
+        if filters.meat_types and (d.meat_type or "") not in filters.meat_types:
+            continue
+        if filters.starch_types and (d.starch_type or "") not in filters.starch_types:
+            continue
+        if filters.cooking_methods:
+            try:
+                cm = set(_json.loads(d.cooking_methods or "[]"))
+            except Exception:
+                cm = set()
+            if not (filters.cooking_methods & cm):
+                continue
+        if filters.prep_max is not None and d.prep_minutes is not None:
+            if d.prep_minutes > filters.prep_max:
+                continue
+        if filters.is_cold is True and not d.is_cold:
+            continue
+        result.append(d)
+    return result
+
+
+def _render_filters(filters: _DishFilters, refresh_fn) -> None:
+    from pyplus.db.models import COOKING_METHODS, MEAT_TYPES, PREP_TIME_BUCKETS, STARCH_TYPES
+    from pyplus.ui.format import (
+        cooking_emoji,
+        cooking_label,
+        meat_emoji,
+        meat_label,
+        prep_time_label,
+        starch_emoji,
+        starch_label,
+    )
+
+    with ui.element("div").style(
+        "display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;"
+        "margin-bottom:1.25rem;padding:.75rem 1rem;"
+        "background:var(--c-surface);border:1px solid var(--c-border);"
+        "border-radius:var(--r-xl)"
+    ):
+        # Search
+        search_input = (
+            ui.input(placeholder="Zoek gerecht…", value=filters.search)
+            .props("outlined dense clearable")
+            .style("width:180px;flex-shrink:0")
+        )
+
+        def _on_search(e):
+            val = e.value if hasattr(e, "value") else search_input.value
+            filters.search = val or ""
+            refresh_fn()
+
+        search_input.on("update:model-value", _on_search)
+        search_input.on("clear", lambda: (_on_search(type("E", (), {"value": ""})()),))
+
+        # Separator
+        ui.element("div").style("width:1px;height:24px;background:var(--c-border);flex-shrink:0")
+
+        # Meat type chips
+        for mt in MEAT_TYPES:
+            lbl = f"{meat_emoji(mt)} {meat_label(mt)}"
+            is_on = mt in filters.meat_types
+            chip = (
+                ui.chip(lbl, selectable=True, selected=is_on)
+                .props(f"{'color=primary' if is_on else 'outline'} size=sm clickable")
+                .style("font-size:11px")
+            )
+
+            def _toggle_meat(e, m=mt):
+                if m in filters.meat_types:
+                    filters.meat_types.discard(m)
+                else:
+                    filters.meat_types.add(m)
+                refresh_fn()
+
+            chip.on("update:selected", _toggle_meat)
+
+        ui.element("div").style("width:1px;height:24px;background:var(--c-border);flex-shrink:0")
+
+        # Starch chips
+        for st in STARCH_TYPES:
+            lbl = f"{starch_emoji(st)} {starch_label(st)}"
+            is_on = st in filters.starch_types
+            chip = (
+                ui.chip(lbl, selectable=True, selected=is_on)
+                .props(f"{'color=primary' if is_on else 'outline'} size=sm clickable")
+                .style("font-size:11px")
+            )
+
+            def _toggle_starch(e, s=st):
+                if s in filters.starch_types:
+                    filters.starch_types.discard(s)
+                else:
+                    filters.starch_types.add(s)
+                refresh_fn()
+
+            chip.on("update:selected", _toggle_starch)
+
+        ui.element("div").style("width:1px;height:24px;background:var(--c-border);flex-shrink:0")
+
+        # Cooking method chips
+        for cm in COOKING_METHODS:
+            lbl = f"{cooking_emoji(cm)} {cooking_label(cm)}"
+            is_on = cm in filters.cooking_methods
+            chip = (
+                ui.chip(lbl, selectable=True, selected=is_on)
+                .props(f"{'color=primary' if is_on else 'outline'} size=sm clickable")
+                .style("font-size:11px")
+            )
+
+            def _toggle_cm(e, c=cm):
+                if c in filters.cooking_methods:
+                    filters.cooking_methods.discard(c)
+                else:
+                    filters.cooking_methods.add(c)
+                refresh_fn()
+
+            chip.on("update:selected", _toggle_cm)
+
+        ui.element("div").style("width:1px;height:24px;background:var(--c-border);flex-shrink:0")
+
+        # Prep time select
+        prep_opts = {None: "Bereidingstijd", **{m: prep_time_label(m) for m in PREP_TIME_BUCKETS}}
+        prep_sel = (
+            ui.select(prep_opts, value=filters.prep_max)
+            .props("outlined dense options-dense")
+            .style("width:130px;flex-shrink:0")
+        )
+
+        def _on_prep(e):
+            filters.prep_max = prep_sel.value
+            refresh_fn()
+
+        prep_sel.on("update:model-value", _on_prep)
+
+        # Cold toggle
+        cold_chip = (
+            ui.chip("❄️ Koud", selectable=True, selected=filters.is_cold is True)
+            .props(f"{'color=info' if filters.is_cold else 'outline'} size=sm clickable")
+            .style("font-size:11px")
+        )
+
+        def _toggle_cold(e):
+            filters.is_cold = True if filters.is_cold is None else None
+            refresh_fn()
+
+        cold_chip.on("update:selected", _toggle_cold)
+
+
 # ── Page entry ─────────────────────────────────────────────────────────────────
 
 
@@ -40,13 +221,10 @@ async def create_dishes_page() -> None:
     with ui.element("div").classes("sp-cockpit-root"):
         create_nav_rail(active="dishes", user_display_name=session.display_name)
 
-        with ui.element("div").style(
-            "flex:1;overflow-y:auto;padding:1.5rem;background:var(--c-bg)"
-        ):
+        with ui.element("div").classes("sp-page-content"):
             # ── Page header ────────────────────────────────────────────
             with ui.element("div").style(
-                "display:flex;align-items:center;justify-content:space-between;"
-                "margin-bottom:1.25rem"
+                "display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem"
             ):
                 ui.label(t("dishes.title")).style(
                     "font-size:22px;font-weight:700;color:var(--c-text);letter-spacing:-.3px"
@@ -60,21 +238,26 @@ async def create_dishes_page() -> None:
                         "font-size:13px;font-weight:600"
                     )
 
-            # ── Dish grid ──────────────────────────────────────────────
+            # ── Filters ───────────────────────────────────────────────
+            filters = _DishFilters()
+            _render_filters(filters, lambda: dish_grid_refresh.refresh())
+
+            # ── Dish grid ─────────────────────────────────────────────
             @ui.refreshable
             async def dish_grid_refresh() -> None:
-                await _render_dish_grid(user_id, session, show_archived.value, dish_grid_refresh)
+                await _render_dish_grid(
+                    user_id, session, show_archived.value, filters, dish_grid_refresh
+                )
 
             await dish_grid_refresh()
 
-            # Re-render when archive toggle changes
             show_archived.on(
                 "update:model-value",
                 lambda _: dish_grid_refresh.refresh(),
             )
 
 
-async def _render_dish_grid(user_id, session, include_archived, refresh_fn) -> None:
+async def _render_dish_grid(user_id, session, include_archived, filters, refresh_fn) -> None:
     async with AsyncSessionLocal() as db:
         dishes = await repo.get_dishes(db, user_id, include_archived=include_archived)
 
@@ -90,106 +273,165 @@ async def _render_dish_grid(user_id, session, include_archived, refresh_fn) -> N
             ).props("unelevated rounded color=primary no-caps")
         return
 
-    with ui.element("div").style(
-        "display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1rem"
-    ):
-        for dish in dishes:
-            await _render_dish_card(dish, user_id, session, refresh_fn)
+    filtered = _apply_filters(dishes, filters)
+    if not filtered and dishes:
+        ui.label("Geen gerechten gevonden met deze filters.").style(
+            "font-size:14px;color:var(--c-text-3);padding:2rem 0"
+        )
+        return
 
-
-async def _render_dish_card(dish, user_id, session, refresh_fn) -> None:
+    # Pre-fetch all ingredient images + availability in one batch
+    dish_data: dict[int, _DishCardData] = {}
     async with AsyncSessionLocal() as db:
-        ingredients = await repo.get_ingredients(db, dish.id)
-        avail, unavail, unknown = await repo.get_dish_availability(db, user_id, dish.id)
-        discontinued = await repo.get_dish_discontinued_skus(db, session.store_number or 0, dish.id)
-
-    total = len(ingredients)
-
-    with ui.element("div").classes("sp-dish-card").style("opacity:.6" if dish.archived else ""):
-        # Ingredient thumbnails (first 4)
-        with ui.element("div").style("display:flex;gap:4px;margin-bottom:.625rem;height:40px"):
-            async with AsyncSessionLocal() as db:
-                for ing in ingredients[:4]:
-                    cached = await repo.get_ingredient_sku(db, user_id, ing.sku)
-                    img_url = cached.image_url if cached else ""
-            for ing in ingredients[:4]:
-                async with AsyncSessionLocal() as db:
-                    cached = await repo.get_ingredient_sku(db, user_id, ing.sku)
-                    img_url = cached.image_url if cached and cached.image_url else ""
-                if img_url:
-                    ui.image(img_url).style(
-                        "width:40px;height:40px;border-radius:var(--r-sm);"
-                        "object-fit:contain;background:var(--c-surface);"
-                        "border:1px solid var(--c-border)"
-                    )
-                else:
-                    ui.element("div").style(
-                        "width:40px;height:40px;border-radius:var(--r-sm);"
-                        "background:var(--c-surface);border:1px solid var(--c-border);flex-shrink:0"
-                    )
-            if total > 4:
-                ui.label(f"+{total - 4}").style(
-                    "font-size:11px;color:var(--c-text-4);align-self:center;padding-left:2px"
-                )
-
-        # Name
-        ui.label(dish.name).classes("sp-dish-card-name").style("margin-bottom:.25rem")
-
-        # Planning metadata chips (prep time / meat / vegetables)
-        from pyplus.ui.format import dish_meta_chips
-
-        chips = dish_meta_chips(dish) if session.settings.show_dish_metadata else []
-        if chips:
-            with ui.element("div").style(
-                "display:flex;flex-wrap:wrap;gap:.25rem;margin-bottom:.5rem"
-            ):
-                for chip in chips:
-                    ui.label(chip).style(
-                        "font-size:11px;color:var(--c-text-2);background:var(--c-surface-2);"
-                        "border-radius:var(--r-sm);padding:1px 7px"
-                    )
-
-        # Ingredient count + availability
-        with ui.element("div").style(
-            "display:flex;align-items:center;gap:.5rem;margin-bottom:.625rem"
-        ):
-            ui.label(f"{total} ingrediënt{'en' if total != 1 else ''}").style(
-                "font-size:12px;color:var(--c-text-3)"
+        for dish in filtered:
+            ings = await repo.get_ingredients(db, dish.id)
+            avail, unavail, unknown = await repo.get_dish_availability(db, user_id, dish.id)
+            disc = await repo.get_dish_discontinued_skus(db, session.store_number or 0, dish.id)
+            img_urls = []
+            for ing in ings:
+                cached = await repo.get_ingredient_sku(db, user_id, ing.sku)
+                img_urls.append(cached.image_url if cached and cached.image_url else "")
+            dish_data[dish.id] = _DishCardData(
+                ingredients=ings,
+                img_urls=img_urls,
+                avail=avail,
+                unavail=unavail,
+                unknown=unknown,
+                discontinued=disc,
             )
 
+    with ui.element("div").style(
+        "display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:1.25rem"
+    ):
+        for dish in filtered:
+            _render_dish_card(dish, dish_data.get(dish.id), session, refresh_fn)
+
+
+def _render_dish_card(dish, data: _DishCardData | None, session, refresh_fn) -> None:
+    from pyplus.ui.format import (
+        cooking_emoji,
+        meat_emoji,
+        meat_label,
+        parse_cooking_methods,
+        prep_time_label,
+        starch_emoji,
+        starch_label,
+        veg_emoji,
+    )
+
+    user_id = session.user_id
+    d = data or _DishCardData()
+    total = len(d.ingredients)
+    show_meta = session.settings.show_dish_metadata
+
+    with (
+        ui.element("div")
+        .classes("sp-dish-card")
+        .style("opacity:.6" if dish.archived else "")
+        .on("click", lambda di=dish: _open_editor(user_id, session, di.id, refresh_fn))
+    ):
+        # ── Top zone: thumbnails + badges (flex-grows to align titles) ────
+        with ui.element("div").style("flex:1"):
+            with ui.element("div").style(
+                "display:flex;align-items:flex-start;justify-content:space-between"
+            ):
+                with ui.element("div").style(
+                    "display:flex;gap:5px;align-items:center;flex-wrap:wrap"
+                ):
+                    for url in d.img_urls:
+                        if url:
+                            ui.image(url).style(
+                                "width:38px;height:38px;border-radius:var(--r-sm);"
+                                "object-fit:contain;background:var(--c-surface);"
+                                "border:1px solid var(--c-border)"
+                            )
+                        else:
+                            ui.element("div").style(
+                                "width:38px;height:38px;border-radius:var(--r-sm);"
+                                "background:var(--c-surface);border:1px solid var(--c-border)"
+                            )
+
+                if show_meta:
+                    with ui.element("div").style(
+                        "display:flex;gap:5px;align-items:center;flex-shrink:0;margin-left:.5rem"
+                    ):
+                        st = getattr(dish, "starch_type", None)
+                        if st and starch_emoji(st):
+                            ui.label(f"{starch_emoji(st)} {starch_label(st)}").style(
+                                "font-size:10px;color:var(--c-text-2);"
+                                "background:#f5f0e8;border-radius:var(--r-full);"
+                                "padding:2px 9px;font-weight:500;white-space:nowrap"
+                            )
+                        if getattr(dish, "is_cold", False):
+                            ui.label("❄️").style(
+                                "font-size:14px;background:#e0f2fe;"
+                                "border-radius:var(--r-full);"
+                                "padding:2px 7px;line-height:1.3"
+                            ).tooltip("Koud gerecht")
+
+        # ── Bottom zone: title + meta + count + actions (pinned) ──────────
+        ui.label(dish.name).classes("sp-dish-card-name").style(
+            "margin-bottom:.25rem;margin-top:.75rem"
+        )
+
+        if show_meta:
+            parts: list[str] = []
+            me = meat_emoji(dish.meat_type)
+            if me:
+                parts.append(f"{me} {meat_label(dish.meat_type)}")
+            for m in parse_cooking_methods(dish):
+                ce = cooking_emoji(m)
+                if ce:
+                    parts.append(ce)
+            prep = prep_time_label(dish.prep_minutes)
+            if prep:
+                parts.append(f"⏱ {prep}")
+            ve = veg_emoji(dish.veg_count)
+            if ve:
+                parts.append(ve)
+            if parts:
+                ui.label(" · ".join(parts)).style(
+                    "font-size:11px;color:var(--c-text-3);margin-bottom:.375rem"
+                )
+
+        with ui.element("div").style(
+            "display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem"
+        ):
+            ui.label(f"{total} ingrediënt{'en' if total != 1 else ''}").style(
+                "font-size:11px;color:var(--c-text-4)"
+            )
             if total > 0:
-                if discontinued:
-                    ui.label(t("dishes.discontinued_count", n=len(discontinued))).classes(
+                if d.discontinued:
+                    ui.label(t("dishes.discontinued_count", n=len(d.discontinued))).classes(
                         "sp-badge sp-badge-unavailable"
                     ).style("font-size:10px").tooltip(t("status.discontinued"))
-                elif unavail > 0:
-                    ui.label(t("dishes.partial_unavail", n=unavail)).classes(
+                elif d.unavail > 0:
+                    ui.label(t("dishes.partial_unavail", n=d.unavail)).classes(
                         "sp-badge sp-badge-unavailable"
                     ).style("font-size:10px")
-                elif unknown == total:
-                    pass  # no badge — availability never checked
+                elif d.unknown == total:
+                    pass
                 else:
                     ui.label(t("dishes.fully_available")).classes(
                         "sp-badge sp-badge-available"
                     ).style("font-size:10px")
 
-        # Action buttons
-        with ui.element("div").style("display:flex;gap:.375rem"):
+        with ui.element("div").style(
+            "display:flex;gap:.375rem;padding-top:.375rem;border-top:1px solid var(--c-border)"
+        ):
             ui.button(
                 t("action.edit"),
-                on_click=lambda d=dish: _open_editor(user_id, session, d.id, refresh_fn),
-            ).props("flat dense no-caps color=primary").style("font-size:12px")
-
+                on_click=lambda di=dish: _open_editor(user_id, session, di.id, refresh_fn),
+            ).props("flat dense no-caps color=primary").style("font-size:11px")
             ui.button(
                 t("dishes.duplicate"),
-                on_click=lambda d=dish: _duplicate(user_id, d.id, refresh_fn),
-            ).props("flat dense no-caps color=grey").style("font-size:12px")
-
+                on_click=lambda di=dish: _duplicate(user_id, di.id, refresh_fn),
+            ).props("flat dense no-caps color=grey").style("font-size:11px")
             label = t("dishes.restore") if dish.archived else t("dishes.archive")
             ui.button(
                 label,
-                on_click=lambda d=dish: _toggle_archive(user_id, d, refresh_fn),
-            ).props("flat dense no-caps color=negative").style("font-size:12px")
+                on_click=lambda di=dish: _toggle_archive(user_id, di, refresh_fn),
+            ).props("flat dense no-caps color=negative").style("font-size:11px")
 
 
 # ── CRUD helpers ───────────────────────────────────────────────────────────────
@@ -252,7 +494,15 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
         notes_val = dish.prep_notes
         prep_val = dish.prep_minutes
         meat_val = dish.meat_type
+        starch_val = dish.starch_type
         veg_val = dish.veg_count
+        import json as _json
+
+        try:
+            cooking_val = _json.loads(dish.cooking_methods or "[]")
+        except Exception:
+            cooking_val = []
+        cold_val = dish.is_cold
     else:
         dish = None
         raw_ings = []
@@ -260,10 +510,19 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
         notes_val = ""
         prep_val = None
         meat_val = None
+        starch_val = None
         veg_val = None
+        cooking_val = []
+        cold_val = False
 
-    # Mutable holder for the optional planning metadata, mutated by the selects below.
-    meta = {"prep_minutes": prep_val, "meat_type": meat_val, "veg_count": veg_val}
+    meta = {
+        "prep_minutes": prep_val,
+        "meat_type": meat_val,
+        "starch_type": starch_val,
+        "veg_count": veg_val,
+        "cooking_methods": list(cooking_val),
+        "is_cold": cold_val,
+    }
 
     # Build mutable ingredient row state
     rows: list[_IngRow] = []
@@ -400,19 +659,79 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
                 )
 
 
+def _infer_starch_type(name: str, ingredients: list[_IngRow]) -> str | None:
+    """Guess starch type from the dish name or ingredient names."""
+    name_lower = name.lower()
+    ing_names = " ".join(r.display_name.lower() for r in ingredients if r.display_name)
+    combined = f"{name_lower} {ing_names}"
+
+    if any(w in combined for w in ("aardappel", "aardappelen", "puree", "frites", "krieltje")):
+        return "aardappels"
+    if any(
+        w in combined
+        for w in (
+            "pasta",
+            "spaghetti",
+            "penne",
+            "macaroni",
+            "fusilli",
+            "tagliatelle",
+            "lasagne",
+            "linguine",
+            "farfalle",
+            "rigatoni",
+            "orzo",
+        )
+    ):
+        return "pasta"
+    if any(w in combined for w in ("rijst", "nasi", "bami")):
+        return "rijst"
+    if any(w in combined for w in ("noedel", "noodle", "mie", "ramen", "udon", "soba")):
+        return "noedels"
+    if any(
+        w in combined
+        for w in (
+            "deeg",
+            "bladerdeeg",
+            "filodeeg",
+            "pizza",
+            "brood",
+            "wrap",
+            "tortilla",
+            "taco",
+            "naan",
+            "pita",
+        )
+    ):
+        return "deeg"
+    return None
+
+
 def _render_meta_fields(meta: dict) -> None:
-    """Render the optional prep-time / meat / vegetable selects in one row."""
-    from pyplus.db.models import MEAT_TYPES, PREP_TIME_BUCKETS
-    from pyplus.ui.format import meat_emoji, meat_label, prep_time_label, veg_emoji
+    """Render the optional prep-time / meat / starch / cooking / cold / vegetable fields."""
+    from pyplus.db.models import COOKING_METHODS, MEAT_TYPES, PREP_TIME_BUCKETS, STARCH_TYPES
+    from pyplus.ui.format import (
+        cooking_emoji,
+        cooking_label,
+        meat_emoji,
+        meat_label,
+        prep_time_label,
+        starch_emoji,
+        starch_label,
+        veg_emoji,
+    )
 
     unset = t("dishes.meta_unset")
 
     prep_opts = {None: unset} | {m: prep_time_label(m) for m in PREP_TIME_BUCKETS}
     meat_opts = {None: unset} | {m: f"{meat_emoji(m)} {meat_label(m)}".strip() for m in MEAT_TYPES}
+    starch_opts = {None: unset} | {
+        s: f"{starch_emoji(s)} {starch_label(s)}".strip() for s in STARCH_TYPES
+    }
     veg_opts = {None: unset} | {n: (veg_emoji(n) or "➖") for n in (0, 1, 2, 3)}
 
     with ui.element("div").style(
-        "display:grid;grid-template-columns:repeat(3,1fr);gap:.625rem;margin-bottom:1rem"
+        "display:grid;grid-template-columns:repeat(2,1fr);gap:.625rem;margin-bottom:1rem"
     ):
         prep_sel = (
             ui.select(prep_opts, value=meta["prep_minutes"], label=t("dishes.prep_time_label"))
@@ -428,12 +747,52 @@ def _render_meta_fields(meta: dict) -> None:
         )
         meat_sel.on("update:model-value", lambda e: meta.update(meat_type=e.value))
 
+        starch_sel = (
+            ui.select(starch_opts, value=meta["starch_type"], label=t("dishes.starch_label"))
+            .props("outlined dense options-dense")
+            .style("width:100%")
+        )
+        starch_sel.on("update:model-value", lambda e: meta.update(starch_type=e.value))
+
         veg_sel = (
             ui.select(veg_opts, value=meta["veg_count"], label=t("dishes.veg_label"))
             .props("outlined dense options-dense")
             .style("width:100%")
         )
         veg_sel.on("update:model-value", lambda e: meta.update(veg_count=e.value))
+
+    # Cooking methods — checkboxes (not combined, each separate)
+    ui.label(t("dishes.cooking_methods_label")).style(
+        "font-size:12px;font-weight:600;color:var(--c-text-2);margin-bottom:.25rem"
+    )
+    with ui.element("div").style("display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:.75rem"):
+        for method in COOKING_METHODS:
+            checked = method in meta.get("cooking_methods", [])
+            cb = ui.checkbox(
+                f"{cooking_emoji(method)} {cooking_label(method)}",
+                value=checked,
+            ).props("dense")
+
+            def _on_cooking(e, m=method, c=cb) -> None:
+                methods = meta.get("cooking_methods", [])
+                if c.value and m not in methods:
+                    methods.append(m)
+                elif not c.value and m in methods:
+                    methods.remove(m)
+                meta["cooking_methods"] = methods
+
+            cb.on("update:model-value", _on_cooking)
+
+    # Is cold checkbox
+    cold_cb = (
+        ui.checkbox(f"❄️ {t('dishes.is_cold_label')}", value=meta.get("is_cold", False))
+        .props("dense")
+        .style("margin-bottom:1rem")
+    )
+    cold_cb.on(
+        "update:model-value",
+        lambda e: meta.update(is_cold=bool(cold_cb.value)),
+    )
 
 
 def _add_new_row(rows: list[_IngRow], refresh_fn) -> None:
@@ -809,6 +1168,16 @@ async def _save_dish(
         ui.notify("Voer een naam in", type="negative")
         return
 
+    import json as _json
+
+    cooking_json = _json.dumps(meta.get("cooking_methods", []))
+
+    # Auto-infer starch if not set by user
+    if not meta.get("starch_type"):
+        inferred = _infer_starch_type(name, rows)
+        if inferred:
+            meta["starch_type"] = inferred
+
     async with AsyncSessionLocal() as db:
         if dish_id is None:
             dish = await repo.create_dish(
@@ -818,6 +1187,9 @@ async def _save_dish(
                 prep_notes=notes,
                 prep_minutes=meta.get("prep_minutes"),
                 meat_type=meta.get("meat_type"),
+                starch_type=meta.get("starch_type"),
+                cooking_methods=cooking_json,
+                is_cold=bool(meta.get("is_cold", False)),
                 veg_count=meta.get("veg_count"),
             )
         else:
@@ -829,6 +1201,9 @@ async def _save_dish(
                 prep_notes=notes,
                 prep_minutes=meta.get("prep_minutes"),
                 meat_type=meta.get("meat_type"),
+                starch_type=meta.get("starch_type"),
+                cooking_methods=cooking_json,
+                is_cold=bool(meta.get("is_cold", False)),
                 veg_count=meta.get("veg_count"),
             )
 
