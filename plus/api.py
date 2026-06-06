@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from .models import Cart, CartItem
+from .models import Cart
 
 SCREENSERVICES = "https://www.plus.nl/screenservices"
 CHANNEL_ID = "1690b994-7511-41cc-a1bc-aacf2726f218"  # web channel — stable
@@ -206,16 +206,11 @@ class PlusDirectClient:
         return checkout
 
     def cart_from_checkout(self, checkout: dict) -> Cart:
-        """Parse a Checkout dict (from add_to_cart response) into a Cart model."""
-        items = []
-        for line in checkout.get("LineItemList", {}).get("List", []):
-            items.append(
-                CartItem(
-                    product=line.get("Name", ""),
-                    unit=line.get("Subtitle", ""),
-                    price=float(line.get("Price", 0)),
-                    quantity=line.get("Quantity", 0),
-                )
-            )
-        total = float(checkout.get("Receipt", {}).get("Price", 0))
-        return Cart(items=items, final_total=total)
+        """Parse a Checkout dict into a Cart model (incl. korting + statiegeld).
+
+        Delegates to the shared parser in client.py so the two never diverge;
+        the import is local to avoid the client→api import cycle.
+        """
+        from .client import _parse_cart_from_checkout
+
+        return _parse_cart_from_checkout(checkout)

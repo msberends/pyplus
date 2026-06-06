@@ -275,10 +275,14 @@ def test_overlay_pending_drops_item_when_pending_removal():
 # ── Savings parsing in _parse_cart_from_checkout ─────────────────────────────────
 
 
-def _checkout(lines, price, discount=None):
+def _checkout(lines, price, discount=None, discounted_price=None, deposit=None):
     receipt = {"Price": str(price)}
     if discount is not None:
         receipt["Discount"] = str(discount)
+    if discounted_price is not None:
+        receipt["DiscountedPrice"] = str(discounted_price)
+    if deposit is not None:
+        receipt["DepositFeeCosts"] = str(deposit)
     return {
         "Version": 1,
         "LineItemList": {
@@ -312,6 +316,30 @@ def test_savings_zero_when_gross_equals_net():
 
     cart = _parse_cart_from_checkout(_checkout([("a", 1.50, 2)], price=3.0, discount=0))
     assert cart.savings == 0.0
+
+
+def test_savings_uses_discounted_price_field():
+    """Newer responses report the korting under Receipt.DiscountedPrice."""
+    from plus.client import _parse_cart_from_checkout
+
+    cart = _parse_cart_from_checkout(
+        _checkout([("a", 1.50, 2)], price=2.0, discounted_price=1.0)
+    )
+    assert cart.savings == 1.0
+
+
+def test_deposit_parsed_and_excluded_from_derived_savings():
+    """Statiegeld inflates the charged total; it must not be counted as korting.
+
+    Gross 10.00, deposit 0.50 → net product total 9.50 → derived savings 0.50,
+    and deposit surfaced separately as 0.50 (mirrors a real PLUS receipt shape).
+    """
+    from plus.client import _parse_cart_from_checkout
+
+    cart = _parse_cart_from_checkout(_checkout([("a", 5.00, 2)], price=10.00, deposit=0.50))
+    assert cart.final_total == 10.00
+    assert cart.deposit == 0.50
+    assert cart.savings == 0.50  # gross 10.00 − (total 10.00 − deposit 0.50)
 
 
 # ── Optimistic total preserves applied discounts (no "bump" to gross) ────────────

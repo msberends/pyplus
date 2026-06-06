@@ -475,6 +475,29 @@ body {
   color: var(--c-brand-dark) !important;
   opacity: .7;
 }
+/* Statiegeld line in the cart footer — neutral (grey), since the deposit is a
+   cost already counted in the total, not a saving. Deliberately *not* the green
+   korting language, so the two read as distinct. */
+.sp-cart-deposit-line {
+  display: flex;
+  align-items: center;
+  gap: .375rem;
+  margin-bottom: .5rem;
+  padding: .4rem .625rem;
+  background: var(--c-surface-2);
+  border-radius: var(--r-md);
+  font-size: var(--t-sm);
+  color: var(--c-text-3);
+}
+.sp-cart-deposit-amount {
+  font-weight: var(--w-bold) !important;
+  color: var(--c-text) !important;
+}
+.sp-cart-deposit-note {
+  font-size: var(--t-xs) !important;
+  color: var(--c-text-3) !important;
+  opacity: .7;
+}
 /* Mobile bottom-bar discount pill — same green language, compact. */
 .sp-bar-savings {
   margin-left: auto;

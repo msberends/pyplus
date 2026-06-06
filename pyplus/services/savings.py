@@ -34,10 +34,21 @@ class Saving:
     new_qty: int
     new_pack: str
     new_cost: float
+    cur_subtitle: str = ""  # full pack subtitle of the current product
+    new_subtitle: str = ""  # full pack subtitle of the suggested product
+    new_image: str = ""  # catalogue image of the suggested product
 
     @property
     def saving(self) -> float:
         return round(self.cur_cost - self.new_cost, 2)
+
+    @property
+    def cur_unit_price(self) -> float:
+        return round(self.cur_cost / self.cur_qty, 2) if self.cur_qty else 0.0
+
+    @property
+    def new_unit_price(self) -> float:
+        return round(self.new_cost / self.new_qty, 2) if self.new_qty else 0.0
 
 
 def _pack_base(subtitle: str) -> tuple[float | None, str | None]:
@@ -109,6 +120,9 @@ def best_swap(
                 new_qty=n,
                 new_pack=_pack_label(getattr(cand, "subtitle", "")),
                 new_cost=cost,
+                cur_subtitle=cur_subtitle or "",
+                new_subtitle=getattr(cand, "subtitle", "") or "",
+                new_image=getattr(cand, "image_url", "") or "",
             )
     return best
 

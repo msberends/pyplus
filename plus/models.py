@@ -24,7 +24,8 @@ class CartItem(BaseModel):
 class Cart(BaseModel):
     items: list[CartItem]
     final_total: float
-    savings: float = 0.0  # promotional savings; populated when available
+    savings: float = 0.0  # promotional discount (korting); from Receipt.DiscountedPrice
+    deposit: float = 0.0  # statiegeld included in final_total; from Receipt.DepositFeeCosts
 
     @property
     def total_items(self) -> int:
@@ -41,6 +42,8 @@ class Cart(BaseModel):
         lines.append(f"  Totaal:     €{self.final_total:>6.2f}")
         if self.savings > 0:
             lines.append(f"  Bespaard:  -€{self.savings:>6.2f}")
+        if self.deposit > 0:
+            lines.append(f"  Statiegeld: €{self.deposit:>6.2f}")
         return "\n".join(lines)
 
 

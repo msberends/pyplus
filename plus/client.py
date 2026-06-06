@@ -2152,15 +2152,21 @@ def _parse_cart_from_checkout(checkout: dict) -> "Cart":
         )
     receipt = checkout.get("Receipt", {})
     total = _safe_float(receipt.get("Price", "0"))
-    # Promotional savings. PLUS reports it under Receipt.Discount on some responses
-    # but leaves it empty on others — in which case we derive it from the gross
-    # (sum of full line prices) minus the net total the server charged. That gross-
-    # minus-net delta is precisely the discount applied (the amount the optimistic
-    # full-price total drops by on reconcile), so savings is never silently lost.
-    explicit = _safe_float(receipt.get("Discount", "0"))
+    # Statiegeld (deposit) — added on top of the product/discount total; reported
+    # under Receipt.DepositFeeCosts. Kept separate so the UI can distinguish it
+    # from the promotional korting below.
+    deposit = _safe_float(receipt.get("DepositFeeCosts", "0"))
+    # Promotional discount (korting). PLUS reports it under Receipt.DiscountedPrice
+    # (older responses used Discount). When neither is present, derive it from the
+    # gross (sum of full line prices) minus the *product* net — i.e. the total with
+    # the deposit fee removed, since deposit inflates the charged total but is not a
+    # discount. That gross-minus-net delta is the discount applied.
+    explicit = _safe_float(receipt.get("DiscountedPrice", "0")) or _safe_float(
+        receipt.get("Discount", "0")
+    )
     gross = round(sum(it.price_total for it in items), 2)
-    savings = explicit if explicit > 0 else max(0.0, round(gross - total, 2))
-    return Cart(items=items, final_total=total, savings=savings)
+    savings = explicit if explicit > 0 else max(0.0, round(gross - (total - deposit), 2))
+    return Cart(items=items, final_total=total, savings=savings, deposit=deposit)
 
 
 def _safe_float(value) -> float:

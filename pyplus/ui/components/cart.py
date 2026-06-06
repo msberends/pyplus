@@ -94,6 +94,14 @@ def create_cart_panel(session) -> None:
                 saving = savings_by_sku.get(item.sku)
                 if saving is None or item.sku in session.syncing_skus:
                     return
+
+                def _open(s=saving):
+                    # Read the current image at click time — _load_images may backfill
+                    # image_by_sku after this hint was filled.
+                    it = _cart_item(s.sku)
+                    img = (it.image_url if it else "") or image_by_sku.get(s.sku, "")
+                    _show_swap_dialog(session, cart_service, s, img)
+
                 with slot:
                     with (
                         ui.element("div")
@@ -103,7 +111,7 @@ def create_cart_panel(session) -> None:
                         )
                         .on(
                             "click",
-                            lambda _, s=saving: _apply_saving(session, cart_service, s),
+                            lambda _, f=_open: f(),
                         )
                         .tooltip(
                             t(
@@ -142,7 +150,9 @@ def create_cart_panel(session) -> None:
                         stepper_button(
                             "−",
                             aria_label=t("a11y.qty_decrease"),
-                            on_click=lambda _, s=sku: cart_service.remove(s) if cart_service else None,
+                            on_click=lambda _, s=sku: (
+                                cart_service.remove(s) if cart_service else None
+                            ),
                         )
                         refs["qty"] = ui.label(str(item.quantity)).classes("sp-qty-count")
                         stepper_button(
@@ -378,12 +388,22 @@ def create_cart_panel(session) -> None:
                 ui.label(t("cart.savings_from")).classes("sp-cart-savings-from")
             savings_row.set_visibility(False)
 
+            # Statiegeld line — a cost already counted in the total, not a discount.
+            # Neutral styling keeps it visually distinct from the green korting banner.
+            with ui.element("div").classes("sp-cart-deposit-line") as deposit_row:
+                ui.icon("recycling", size="15px")
+                deposit_label = ui.label("").classes("sp-cart-deposit-amount")
+                ui.label(t("cart.deposit_note")).classes("sp-cart-deposit-note")
+            deposit_row.set_visibility(False)
+
             # ── Savings / optimise ─────────────────────────────────────
             optimise_btn = (
                 ui.button(
                     t("cart.optimise"),
                     icon="savings",
-                    on_click=lambda: _show_optimise_dialog(session, cart_service, savings_by_sku),
+                    on_click=lambda: _show_optimise_dialog(
+                        session, cart_service, savings_by_sku, image_by_sku
+                    ),
                 )
                 .props("flat rounded no-caps color=primary")
                 .classes("sp-optimise-btn")
@@ -458,6 +478,14 @@ def create_cart_panel(session) -> None:
             savings_row.set_visibility(True)
         else:
             savings_row.set_visibility(False)
+
+        if cart.deposit > 0.01:
+            deposit_label.set_text(
+                f"€ {cart.deposit:.2f} {t('cart.deposit').lower()}".replace(".", ",")
+            )
+            deposit_row.set_visibility(True)
+        else:
+            deposit_row.set_visibility(False)
 
         # Reconcile the keyed rows: qty/sync changes update in place (images keep
         # their DOM element), only added/removed/reordered rows touch the structure.
@@ -571,15 +599,138 @@ async def _apply_saving(session, cart_service, s) -> None:
             s.new_sku,
             s.new_qty,
             product_name=s.name,
-            product_unit=f"Per {s.new_pack}",
+            product_unit=s.new_subtitle or f"Per {s.new_pack}",
             product_price=per_unit,
+            product_image=s.new_image,
         )
     amt = f"{s.saving:.2f}".replace(".", ",")
     ui.notify(t("cart.save_amount", amount=amt).capitalize(), type="positive", position="top")
 
 
-def _show_optimise_dialog(session, cart_service, savings_by_sku: dict) -> None:
+def _swap_product_row(
+    label: str,
+    image: str,
+    name: str,
+    subtitle: str,
+    qty: int,
+    unit_price: float,
+    total: float,
+    highlight: bool,
+) -> None:
+    """One product row in the swap dialog — formatted like a staples/promo row:
+    image · name + subtitle · quantity × unit price + total."""
+    border = "var(--c-brand)" if highlight else "var(--c-border)"
+    with ui.element("div").style(
+        "display:flex;align-items:center;gap:.625rem;padding:.5rem .625rem;"
+        f"border:1px solid {border};border-radius:var(--r-sm)"
+    ):
+        if image:
+            ui.image(thumbnail_url(image, 44)).style(
+                "width:44px;height:44px;object-fit:contain;border-radius:var(--r-sm);"
+                "background:var(--c-surface-2);flex-shrink:0"
+            ).props(f'alt="{_alt(name)}"')
+        else:
+            ui.element("div").style(
+                "width:44px;height:44px;border-radius:var(--r-sm);"
+                "background:var(--c-border);flex-shrink:0"
+            )
+        with ui.element("div").style("flex:1;min-width:0;overflow:hidden"):
+            ui.label(label).style(
+                "font-size:10px;font-weight:600;text-transform:uppercase;"
+                "letter-spacing:.03em;color:var(--c-text-4)"
+            )
+            ui.label(name).style(
+                "font-size:13px;font-weight:600;color:var(--c-text);line-height:1.3;"
+                "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            )
+            if subtitle:
+                ui.label(subtitle).style("font-size:11px;color:var(--c-text-3);line-height:1.2")
+        with ui.element("div").style(
+            "display:flex;flex-direction:column;align-items:flex-end;flex-shrink:0"
+        ):
+            ui.label(f"{qty}× € {unit_price:.2f}".replace(".", ",")).style(
+                "font-size:10px;color:var(--c-text-4)"
+            )
+            ui.label(f"€ {total:.2f}".replace(".", ",")).style(
+                "font-size:14px;font-weight:700;color:var(--c-text)"
+            )
+
+
+def _show_swap_dialog(session, cart_service, s, cur_image: str) -> None:
+    """Confirm a cheaper-pack swap, showing the current and suggested product as rows."""
+    with ui.dialog(value=True) as dlg:
+        with ui.card().style(
+            "min-width:300px;max-width:420px;width:100%;padding:0;overflow:hidden"
+        ):
+            with ui.element("div").style(
+                "display:flex;align-items:center;justify-content:space-between;"
+                "padding:.875rem 1rem;border-bottom:1px solid var(--c-border)"
+            ):
+                ui.label(t("cart.swap_title")).style(
+                    "font-size:16px;font-weight:700;color:var(--c-text)"
+                )
+                ui.button(icon="close", on_click=dlg.close).props(
+                    "flat round dense size=sm color=grey"
+                )
+
+            with ui.element("div").style(
+                "padding:.75rem 1rem;display:flex;flex-direction:column;gap:.5rem"
+            ):
+                _swap_product_row(
+                    t("cart.swap_current"),
+                    cur_image,
+                    s.name,
+                    s.cur_subtitle or s.cur_pack,
+                    s.cur_qty,
+                    s.cur_unit_price,
+                    s.cur_cost,
+                    highlight=False,
+                )
+                ui.icon("south", size="18px").style("color:var(--c-text-4);align-self:center")
+                _swap_product_row(
+                    t("cart.swap_suggested"),
+                    s.new_image,
+                    s.name,
+                    s.new_subtitle or s.new_pack,
+                    s.new_qty,
+                    s.new_unit_price,
+                    s.new_cost,
+                    highlight=True,
+                )
+                amt = f"{s.saving:.2f}".replace(".", ",")
+                with ui.element("div").style(
+                    "display:flex;align-items:center;gap:.25rem;align-self:center;margin-top:.125rem"
+                ):
+                    ui.icon("savings", size="14px").style("color:var(--c-brand-dark)")
+                    ui.label(t("cart.save_amount", amount=amt).capitalize()).style(
+                        "font-size:13px;font-weight:700;color:var(--c-brand-dark)"
+                    )
+
+            with ui.element("div").style(
+                "display:flex;justify-content:flex-end;gap:.5rem;"
+                "padding:.75rem 1rem;border-top:1px solid var(--c-border)"
+            ):
+                ui.button(t("action.cancel"), on_click=dlg.close).props("flat rounded no-caps")
+
+                async def _confirm() -> None:
+                    dlg.close()
+                    await _apply_saving(session, cart_service, s)
+
+                ui.button(t("cart.swap_confirm"), on_click=lambda: _confirm()).props(
+                    "unelevated rounded no-caps color=primary"
+                )
+
+
+def _show_optimise_dialog(
+    session, cart_service, savings_by_sku: dict, image_by_sku: dict | None = None
+) -> None:
     savings = sorted(savings_by_sku.values(), key=lambda s: s.saving, reverse=True)
+    image_by_sku = image_by_sku or {}
+
+    def _cur_image(sku: str) -> str:
+        it = next((i for i in session.cart.items if i.sku == sku), None)
+        return (it.image_url if it else "") or image_by_sku.get(sku, "")
+
     with ui.dialog(value=True) as dlg:
         with ui.card().style(
             "min-width:300px;max-width:440px;width:100%;padding:0;overflow:hidden"
@@ -601,35 +752,53 @@ def _show_optimise_dialog(session, cart_service, savings_by_sku: dict) -> None:
                         "font-size:13px;color:var(--c-text-3);padding:.5rem 0"
                     )
                 for s in savings:
+                    # Each swap: current → suggested rows (like the per-row dialog),
+                    # with its own savings line + per-product apply button.
                     with ui.element("div").style(
-                        "display:flex;align-items:center;gap:.5rem;padding:.5rem 0;"
+                        "display:flex;flex-direction:column;gap:.375rem;padding:.625rem 0;"
                         "border-bottom:1px solid var(--c-border)"
                     ):
-                        with ui.element("div").style("flex:1;min-width:0"):
-                            ui.label(s.name).style(
-                                "font-size:13px;font-weight:600;color:var(--c-text);"
-                                "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                            )
-                            ui.label(
-                                t(
-                                    "cart.swap_desc",
-                                    cur_qty=s.cur_qty,
-                                    cur_pack=s.cur_pack,
-                                    new_qty=s.new_qty,
-                                    new_pack=s.new_pack,
-                                )
-                            ).style("font-size:11px;color:var(--c-text-3)")
-                        amt = f"{s.saving:.2f}".replace(".", ",")
-                        ui.label(t("cart.save_amount", amount=amt)).style(
-                            "font-size:12px;font-weight:700;color:var(--c-brand-dark);flex-shrink:0"
+                        _swap_product_row(
+                            t("cart.swap_current"),
+                            _cur_image(s.sku),
+                            s.name,
+                            s.cur_subtitle or s.cur_pack,
+                            s.cur_qty,
+                            s.cur_unit_price,
+                            s.cur_cost,
+                            highlight=False,
                         )
+                        ui.icon("south", size="16px").style(
+                            "color:var(--c-text-4);align-self:center"
+                        )
+                        _swap_product_row(
+                            t("cart.swap_suggested"),
+                            s.new_image,
+                            s.name,
+                            s.new_subtitle or s.new_pack,
+                            s.new_qty,
+                            s.new_unit_price,
+                            s.new_cost,
+                            highlight=True,
+                        )
+                        with ui.element("div").style(
+                            "display:flex;align-items:center;gap:.5rem;margin-top:.125rem"
+                        ):
+                            amt = f"{s.saving:.2f}".replace(".", ",")
+                            with ui.element("div").style(
+                                "display:flex;align-items:center;gap:.25rem;flex:1"
+                            ):
+                                ui.icon("savings", size="14px").style("color:var(--c-brand-dark)")
+                                ui.label(t("cart.save_amount", amount=amt)).style(
+                                    "font-size:12px;font-weight:700;color:var(--c-brand-dark)"
+                                )
 
-                        async def _one(snap=s) -> None:
-                            await _apply_saving(session, cart_service, snap)
+                            async def _one(snap=s) -> None:
+                                await _apply_saving(session, cart_service, snap)
 
-                        ui.button(
-                            t("cart.apply"), on_click=lambda _, f=_one: f()
-                        ).props("flat dense no-caps size=sm color=primary").style("flex-shrink:0")
+                            ui.button(t("cart.swap_confirm"), on_click=lambda _, f=_one: f()).props(
+                                "flat dense no-caps size=sm color=primary"
+                            ).style("flex-shrink:0")
 
             if savings:
                 total = sum(s.saving for s in savings)
