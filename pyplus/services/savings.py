@@ -94,6 +94,8 @@ def best_swap(
 
     best: Saving | None = None
     for cand in group:
+        if not getattr(cand, "is_available", True):
+            continue
         cand_price = getattr(cand, "price", 0.0) or 0.0
         if cand_price <= 0:
             continue

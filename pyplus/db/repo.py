@@ -584,7 +584,9 @@ async def get_pack_alternatives(
     names = {row.name for row in base.values()}
     result = await db.execute(
         select(ProductCache).where(
-            ProductCache.store_number == store_number, ProductCache.name.in_(names)
+            ProductCache.store_number == store_number,
+            ProductCache.name.in_(names),
+            ProductCache.is_available == True,  # noqa: E712
         )
     )
     groups: dict[tuple[str, str], list[ProductCache]] = {}

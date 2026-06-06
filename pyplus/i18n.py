@@ -81,6 +81,14 @@ _STRINGS: dict[str, str] = {
     "cart.swap_confirm": "Vervangen",
     "cart.optimise_none": "Geen besparingen gevonden in je mandje.",
     "cart.optimise_total": "Totaal te besparen: € {amount}",
+    # ── Free delivery ─────────────────────────────────────────────────────
+    "cart.free_delivery": "Gratis bezorging",
+    "cart.free_delivery_add": "Toevoegen",
+    "cart.free_delivery_active": "Toegevoegd",
+    "cart.free_delivery_remaining": "Nog € {amount} tot gratis bezorging",
+    # ── Stock alert ───────────────────────────────────────────────────────
+    "error.product_not_in_stock_title": "Niet beschikbaar",
+    "error.product_not_in_stock_body": "{name} is momenteel niet beschikbaar in jouw winkel.",
     # ── Dishes ─────────────────────────────────────────────────────────────────
     "dishes.title": "Gerechten beheren",
     "dishes.new": "Nieuw gerecht",

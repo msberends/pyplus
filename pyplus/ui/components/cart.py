@@ -366,9 +366,23 @@ def create_cart_panel(session) -> None:
                         if refs and item:
                             _fill_image(refs, item)  # updates only this row's thumbnail
 
+            async def _load_free_delivery() -> None:
+                """Load free delivery promo info (cache-only) and update the banner."""
+                store = getattr(session, "store_number", 0) or 0
+                if not store:
+                    return
+                from pyplus.services.promos import get_free_delivery_info
+
+                info = await get_free_delivery_info(store)
+                if info:
+                    _fd["sku"] = info[0]
+                    _fd["threshold"] = info[1]
+                    _on_cart()  # re-evaluate the banner with the loaded data
+
             _sync()
             asyncio.ensure_future(_load_promos())  # drives on-offer row emphasis + tags
             asyncio.ensure_future(_load_images())
+            asyncio.ensure_future(_load_free_delivery())
             if prefs.cart_group_by_category:
                 asyncio.ensure_future(_load_categories())
 
@@ -395,6 +409,34 @@ def create_cart_panel(session) -> None:
                 deposit_label = ui.label("").classes("sp-cart-deposit-amount")
                 ui.label(t("cart.deposit_note")).classes("sp-cart-deposit-note")
             deposit_row.set_visibility(False)
+
+            # ── Free delivery ──────────────────────────────────────────
+            _fd: dict = {}  # populated async: {"sku": str, "threshold": float}
+            with ui.element("div").style(
+                "display:flex;align-items:center;gap:.375rem;padding:.25rem 0;"
+                "font-size:12px;color:var(--c-text-3)"
+            ) as free_delivery_row:
+                ui.icon("local_shipping", size="15px")
+                free_delivery_label = ui.label("").style("flex:1")
+                free_delivery_btn = (
+                    ui.button(
+                        t("cart.free_delivery_add"),
+                        on_click=lambda: (
+                            asyncio.ensure_future(
+                                cart_service.add(
+                                    _fd["sku"],
+                                    product_name=t("cart.free_delivery"),
+                                    check_stock=False,
+                                )
+                            )
+                            if cart_service and _fd.get("sku")
+                            else None
+                        ),
+                    )
+                    .props("flat dense no-caps size=sm color=primary")
+                    .style("flex-shrink:0")
+                )
+            free_delivery_row.set_visibility(False)
 
             # ── Savings / optimise ─────────────────────────────────────
             optimise_btn = (
@@ -487,6 +529,35 @@ def create_cart_panel(session) -> None:
         else:
             deposit_row.set_visibility(False)
 
+        # Free delivery banner (only when promo data has been loaded)
+        fd_sku = _fd.get("sku")
+        fd_threshold = _fd.get("threshold", 0.0)
+        if fd_sku and fd_threshold > 0:
+            has_fd = any(it.sku == fd_sku for it in cart.items)
+            if cart.final_total >= fd_threshold:
+                if has_fd:
+                    free_delivery_label.set_text(t("cart.free_delivery_active"))
+                    free_delivery_label.style("color:var(--c-brand-dark);font-weight:600")
+                    free_delivery_btn.set_visibility(False)
+                else:
+                    free_delivery_label.set_text(t("cart.free_delivery"))
+                    free_delivery_label.style("color:var(--c-text-3);font-weight:400")
+                    free_delivery_btn.set_visibility(True)
+                free_delivery_row.set_visibility(True)
+            elif cart.final_total > 0:
+                remaining = fd_threshold - cart.final_total
+                free_delivery_label.set_text(
+                    t(
+                        "cart.free_delivery_remaining",
+                        amount=f"{remaining:.2f}".replace(".", ","),
+                    )
+                )
+                free_delivery_label.style("color:var(--c-text-3);font-weight:400")
+                free_delivery_btn.set_visibility(False)
+                free_delivery_row.set_visibility(True)
+            else:
+                free_delivery_row.set_visibility(False)
+
         # Reconcile the keyed rows: qty/sync changes update in place (images keep
         # their DOM element), only added/removed/reordered rows touch the structure.
         _sync()
@@ -533,8 +604,33 @@ def create_cart_panel(session) -> None:
     def _on_error(msg: str) -> None:
         ui.notify(msg, type="warning", position="top-right", timeout=3000, close_button=True)
 
+    def _on_stock_alert(product_name: str) -> None:
+        with (
+            ui.dialog(value=True) as dlg,
+            ui.card().style("max-width:340px;width:100%;padding:0;overflow:hidden"),
+        ):
+            with ui.element("div").style(
+                "padding:1.25rem 1rem;display:flex;flex-direction:column;gap:.5rem"
+            ):
+                with ui.element("div").style("display:flex;align-items:center;gap:.5rem"):
+                    ui.icon("error_outline", size="22px").style("color:var(--c-danger)")
+                    ui.label(t("error.product_not_in_stock_title")).style(
+                        "font-size:16px;font-weight:700;color:var(--c-text)"
+                    )
+                ui.label(t("error.product_not_in_stock_body", name=product_name)).style(
+                    "font-size:13px;color:var(--c-text-3);line-height:1.4"
+                )
+            with ui.element("div").style(
+                "display:flex;justify-content:flex-end;padding:.75rem 1rem;"
+                "border-top:1px solid var(--c-border)"
+            ):
+                ui.button(t("action.close"), on_click=dlg.close).props(
+                    "flat rounded no-caps autofocus"
+                )
+
     session.add_cart_listener(_on_cart)
     session.add_error_listener(_on_error)
+    session.add_stock_alert_listener(_on_stock_alert)
     _on_cart()
 
 
@@ -587,15 +683,14 @@ def _confirm_clear_cart(cart_service) -> None:
 
 
 async def _apply_saving(session, cart_service, s) -> None:
-    """Swap to the cheaper pack: drop the current sku, add the alternative."""
+    """Swap to the cheaper pack: add the alternative first, then drop the current sku."""
     if not cart_service:
         return
     per_unit = round(s.new_cost / s.new_qty, 2) if s.new_qty else 0.0
     if s.new_sku == s.sku:
         await cart_service.set_quantity(s.sku, s.new_qty)
     else:
-        await cart_service.set_quantity(s.sku, 0)
-        await cart_service.add(
+        added = await cart_service.add(
             s.new_sku,
             s.new_qty,
             product_name=s.name,
@@ -603,6 +698,9 @@ async def _apply_saving(session, cart_service, s) -> None:
             product_price=per_unit,
             product_image=s.new_image,
         )
+        if not added:
+            return
+        await cart_service.set_quantity(s.sku, 0)
     amt = f"{s.saving:.2f}".replace(".", ",")
     ui.notify(t("cart.save_amount", amount=amt).capitalize(), type="positive", position="top")
 

@@ -23,6 +23,7 @@ class UserSession:
     _settings: object = field(default=None)  # pyplus.ml.interface.UserSettings
     _cart_listeners: list[Callable] = field(default_factory=list)
     _error_listeners: list[Callable[[str], None]] = field(default_factory=list)
+    _stock_alert_listeners: list[Callable[[str], None]] = field(default_factory=list)
 
     # Set of SKUs whose qty is currently being sent to the API.
     # The cart component checks this to render a sync indicator per line.
@@ -99,6 +100,18 @@ class UserSession:
                 cb(message)
             except Exception:
                 log.debug("Error listener error", exc_info=True)
+
+    # ── Stock alert listeners ─────────────────────────────────────────────
+
+    def add_stock_alert_listener(self, cb: Callable[[str], None]) -> None:
+        self._stock_alert_listeners.append(cb)
+
+    def notify_stock_alert(self, product_name: str) -> None:
+        for cb in list(self._stock_alert_listeners):
+            try:
+                cb(product_name)
+            except Exception:
+                log.debug("Stock alert listener error", exc_info=True)
 
     # ── Cart refresh from PLUS API ─────────────────────────────────────────────
 

@@ -36,25 +36,29 @@ class CartService:
         product_unit: str = "",
         product_price: float = 0.0,
         product_image: str = "",
-    ) -> None:
-        """Add qty units of sku. Warns (non-blocking) if the item is cached as unavailable."""
-        # Best-effort availability check — reads cached DB value, never blocks the add
-        try:
-            import datetime as _dt
+        check_stock: bool = True,
+    ) -> bool:
+        """Add qty units of sku. Returns False (and fires stock alert) if out of stock."""
+        if check_stock:
+            try:
+                from pyplus.db import repo as _repo
+                from pyplus.db.engine import AsyncSessionLocal as _ASL
 
-            from pyplus.db import repo as _repo
-            from pyplus.db.engine import AsyncSessionLocal as _ASL
-
-            async with _ASL() as _db:
-                _cached = await _repo.get_ingredient_sku(_db, self.session.user_id, sku)
-            if _cached and _cached.last_seen_available is False and _cached.last_checked_at:
-                _age_days = (_dt.datetime.utcnow() - _cached.last_checked_at).days
-                if _age_days < 7:
-                    from pyplus.i18n import t
-
-                    self.session.notify_error(t("error.product_unavailable_cached"))
-        except Exception:
-            pass  # never block the add due to availability check failure
+                store = self.session.store_number
+                if store:
+                    async with _ASL() as _db:
+                        cache = await _repo.get_product_cache_by_skus(_db, store, [sku])
+                        pc = cache.get(sku)
+                        if pc is not None and not pc.is_available:
+                            self.session.notify_stock_alert(product_name or pc.name)
+                            return False
+                        if pc is None:
+                            count = await _repo.count_product_cache(_db, store)
+                            if count > 0:
+                                self.session.notify_stock_alert(product_name or sku)
+                                return False
+            except Exception:
+                pass  # never block the add due to check failure
 
         await self._queue(
             sku,
@@ -64,6 +68,7 @@ class CartService:
             price=product_price,
             image=product_image,
         )
+        return True
 
     async def remove(self, sku: str, qty: int = 1) -> None:
         """Remove qty units of sku."""
