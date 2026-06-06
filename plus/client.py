@@ -10,6 +10,7 @@ to replace browser automation entirely.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from typing import Optional
 
@@ -29,6 +30,8 @@ from .models import (
     PromotionResult,
     PurchasedProduct,
 )
+
+log = logging.getLogger(__name__)
 
 _PROMOTIONS_URL = (
     "https://www.plus.nl/screenservices/ECP_Composition_CW/Promotions"
@@ -461,7 +464,7 @@ class PlusClient:
                         and self._real_search_payload is None
                     ):
                         self._real_search_payload = body
-                        print(
+                        log.debug(
                             "[diag] captured real browser search payload — "
                             "compare with _build_search_payload to fix availability"
                         )
@@ -533,6 +536,8 @@ class PlusClient:
             store = body.get("data", {}).get("Store", {})
             if store.get("Store_Number"):
                 self._session.store_number = int(store["Store_Number"])
+                if store.get("Store_Name"):
+                    self._session.store_name = str(store["Store_Name"])
         except Exception:
             pass
 
@@ -635,7 +640,7 @@ class PlusClient:
             payload,
         )
         elapsed = time.perf_counter() - t0
-        print(f"[API] ActionCheckoutItem_Add → 200 in {elapsed * 1000:.0f}ms")
+        log.debug("[API] ActionCheckoutItem_Add → 200 in %.0fms", elapsed * 1000)
 
         data = result.get("data", {})
         if "Checkout" not in data:
@@ -733,7 +738,7 @@ class PlusClient:
         )
         elapsed = _time.perf_counter() - t0
         _log.info("get_cart_api — page.evaluate klaar in %.0f ms", elapsed * 1000)
-        print(f"[API] DataActionGetCartById → 200 in {elapsed * 1000:.0f}ms")
+        log.debug("[API] DataActionGetCartById → 200 in %.0fms", elapsed * 1000)
 
         vi = result.get("versionInfo", {})
         if vi.get("hasApiVersionChanged"):
@@ -824,8 +829,10 @@ class PlusClient:
         )
         elapsed = _time.perf_counter() - t0
         label = "volgende week" if next_week else "huidige week"
-        print(
-            f"[API] DataActionGetPromotionList_Optimization ({label}) → 200 in {elapsed * 1000:.0f}ms"
+        log.debug(
+            "[API] DataActionGetPromotionList_Optimization (%s) → 200 in %.0fms",
+            label,
+            elapsed * 1000,
         )
 
         vi = result.get("versionInfo", {})
@@ -925,7 +932,9 @@ class PlusClient:
             payload,
         )
         elapsed = _time.perf_counter() - t0
-        print(f"[API] DataActionPromotionOfferDetail_Get ({slug}) → 200 in {elapsed * 1000:.0f}ms")
+        log.debug(
+            "[API] DataActionPromotionOfferDetail_Get (%s) → 200 in %.0fms", slug, elapsed * 1000
+        )
 
         vi = result.get("versionInfo", {})
         if vi.get("hasApiVersionChanged"):
@@ -1290,8 +1299,10 @@ class PlusClient:
             payload,
         )
         elapsed = _time.perf_counter() - t0
-        print(
-            f"[API] DataActionGetProductListAndCategoryInfo ({query!r}) → 200 in {elapsed * 1000:.0f}ms"
+        log.debug(
+            "[API] DataActionGetProductListAndCategoryInfo (%r) → 200 in %.0fms",
+            query,
+            elapsed * 1000,
         )
 
         vi = result.get("versionInfo", {})
@@ -1806,7 +1817,10 @@ class PlusClient:
 
         await self._page.fill("#username", email)
         await self._page.fill("#password", password)
-        print(f"[*] Submitting credentials for {email}…")
+        _local, _, _domain = email.partition("@")
+        log.debug(
+            "[*] Submitting credentials for %s…", f"{_local[:1]}***@{_domain}" if _domain else "***"
+        )
         await self._page.click("#loginFormUsernameAndPasswordButton")
 
         # Wait for redirect back to plus.nl
@@ -1825,11 +1839,7 @@ class PlusClient:
                 ".gtm-account-options .popover-top-label span",
                 timeout=10_000,
             )
-            account_el = await self._page.query_selector(
-                ".gtm-account-options .popover-top-label span"
-            )
-            name = (await account_el.inner_text()).strip() if account_el else email
-            print(f"[+] Logged in as: {name}")
+            log.debug("[+] Logged in (account indicator confirmed)")
             return True
         except Exception:
             # The selector might have changed; check URL as fallback
@@ -2142,7 +2152,14 @@ def _parse_cart_from_checkout(checkout: dict) -> "Cart":
         )
     receipt = checkout.get("Receipt", {})
     total = _safe_float(receipt.get("Price", "0"))
-    savings = _safe_float(receipt.get("Discount", "0"))
+    # Promotional savings. PLUS reports it under Receipt.Discount on some responses
+    # but leaves it empty on others — in which case we derive it from the gross
+    # (sum of full line prices) minus the net total the server charged. That gross-
+    # minus-net delta is precisely the discount applied (the amount the optimistic
+    # full-price total drops by on reconcile), so savings is never silently lost.
+    explicit = _safe_float(receipt.get("Discount", "0"))
+    gross = round(sum(it.price_total for it in items), 2)
+    savings = explicit if explicit > 0 else max(0.0, round(gross - total, 2))
     return Cart(items=items, final_total=total, savings=savings)
 
 

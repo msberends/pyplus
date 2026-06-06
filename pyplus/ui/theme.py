@@ -30,11 +30,11 @@ _CSS = """
   --c-border:         #e5e8ef;
   --c-border-strong:  #cfd4de;
 
-  /* Text */
+  /* Text — text-3/text-4 darkened to meet WCAG AA (4.5:1) on white at small sizes */
   --c-text:    #0f1923;
   --c-text-2:  #374151;
-  --c-text-3:  #6b7280;
-  --c-text-4:  #9ca3af;
+  --c-text-3:  #5b6470;   /* ~6.0:1 */
+  --c-text-4:  #6b7280;   /* ~4.8:1 — lightest text that still passes AA */
 
   /* Shadows */
   --shadow-xs: 0 1px 2px rgba(0,0,0,.05);
@@ -309,14 +309,16 @@ body {
   background: var(--c-surface);
 }
 .sp-qty-btn {
-  width: 32px; height: 32px;
+  width: 36px; height: 36px;
   display: flex; align-items: center; justify-content: center;
-  background: none; border: none; cursor: pointer;
+  background: none; border: none; padding: 0; margin: 0;
+  font: inherit; cursor: pointer; user-select: none;
   color: var(--c-text-2);
   font-size: 18px; font-weight: var(--w-bold);
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 .sp-qty-btn:hover { background: var(--c-brand-tint); color: var(--c-brand-dark); }
+.sp-qty-btn:active { transform: scale(.92); }
 .sp-qty-count {
   min-width: 28px; text-align: center;
   font-size: var(--t-md); font-weight: var(--w-semibold);
@@ -419,8 +421,8 @@ body {
   flex-direction: column;
   overflow: hidden;
   position: sticky;
-  top: 1rem;
-  max-height: calc(100vh - 2rem);
+  top: 0;  /* the cart column supplies the 1.25rem top inset (aligns with the lanes) */
+  max-height: calc(100vh - 2.5rem);
 }
 .sp-cart-header {
   padding: 1rem 1.25rem .75rem;
@@ -454,6 +456,38 @@ body {
   font-size: var(--t-sm) !important;
   color: var(--c-brand-dark) !important;
   font-weight: var(--w-semibold) !important;
+}
+/* Promotional-discount banner in the cart footer — green, tag-led, so the
+   discount reads as savings on offers (matches the Aanbiedingen palette). */
+.sp-cart-savings-banner {
+  display: flex;
+  align-items: center;
+  gap: .375rem;
+  margin-bottom: .5rem;
+  padding: .4rem .625rem;
+  background: var(--c-brand-tint);
+  border-radius: var(--r-md);
+  color: var(--c-brand-dark);
+}
+.sp-cart-savings-banner .sp-cart-savings { font-weight: var(--w-bold) !important; }
+.sp-cart-savings-from {
+  font-size: var(--t-xs) !important;
+  color: var(--c-brand-dark) !important;
+  opacity: .7;
+}
+/* Mobile bottom-bar discount pill — same green language, compact. */
+.sp-bar-savings {
+  margin-left: auto;
+  font-size: 11px !important;
+  font-weight: var(--w-bold) !important;
+  color: var(--c-brand-dark) !important;
+  background: var(--c-brand-tint);
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 /* ─── Dish card ──────────────────────────────────────────────────────────── */
@@ -558,16 +592,17 @@ body {
   align-content: start;
 }
 
-/* Cart column — 1 part of the 3-part layout (stage takes 2 parts) */
+/* Cart column — 1 part of the 3-part layout (stage takes 2 parts).
+   Mirrors the stage's padding so the cart panel lines up as a third lane;
+   no own border/background — the panel card supplies its own chrome. */
 .sp-cockpit-cart-col {
   flex: 1 1 0;
   min-width: 0;
-  border-left: 1px solid var(--c-border);
-  overflow: hidden;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  padding: 0;
-  background: var(--c-surface);
+  padding: 1.25rem;
+  padding-left: 0;
 }
 
 /* Full-width content area for dishes/settings (fills all space after nav rail) */
@@ -585,6 +620,16 @@ body {
   border-bottom: 1px solid var(--c-border-subtle, #f1f3f7);
 }
 .sp-cart-item:last-child { border-bottom: none; }
+/* On-offer rows: green tint + a green accent rail (matches the korting banner /
+   Aanbiedingen palette) so the products responsible for the discount stand out. */
+.sp-cart-item.sp-cart-item-promo {
+  background: var(--c-brand-tint);
+  border-radius: var(--r-sm);
+  border-bottom-color: transparent;
+  box-shadow: inset 3px 0 0 0 var(--c-brand);
+  padding-left: .5rem;
+  padding-right: .5rem;
+}
 .sp-cart-item-img {
   width: 44px; height: 44px;
   border-radius: var(--r-sm);
@@ -821,12 +866,12 @@ body {
   flex-shrink: 0;
 }
 .sp-search-add-btn {
-  width: 32px; height: 32px;
+  width: 36px; height: 36px;
   border-radius: var(--r-full);
   background: var(--c-brand-tint);
   border: 1.5px solid var(--c-brand-tint-2);
   display: flex; align-items: center; justify-content: center;
-  cursor: pointer;
+  padding: 0; cursor: pointer;
   transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
 }
 .sp-search-add-btn:hover { background: var(--c-brand-tint-2); transform: scale(1.08); }
@@ -837,20 +882,9 @@ body {
   opacity: .65;
   pointer-events: none;
 }
-.sp-qty-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--r-xs);
-  cursor: pointer;
-  user-select: none;
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-  color: var(--c-text-2);
-}
-.sp-qty-btn:hover { background: var(--c-brand-tint); color: var(--c-brand-dark); }
-.sp-qty-btn:active { transform: scale(.9); }
+/* Give the rounded stepper border-radius (the canonical .sp-qty-btn rule lives
+   in the Qty stepper section above; this only adds the corner shaping). */
+.sp-qty-btn { border-radius: var(--r-xs); }
 
 /* Mobile cart bottom bar */
 .sp-mobile-cart-bar {
@@ -889,6 +923,17 @@ body {
     overflow-y: auto;
   }
   .sp-cockpit-cart-col { display: none; }  /* replaced by bottom bar */
+  /* In the mobile cart sheet the dialog card is the frame, so the panel fills
+     it edge-to-edge with no second border/radius and no sticky/height cap. */
+  .sp-cart-panel {
+    flex: 1;
+    width: 100%;
+    min-width: 0;  /* let content clip/wrap instead of widening the panel off-screen */
+    border: none;
+    border-radius: 0;
+    position: static;
+    max-height: none;
+  }
   .sp-page-content { width: 100%; padding-bottom: calc(58px + 1.25rem); }  /* nav bar */
   .sp-deals-body, .sp-meals-body, .sp-staples-body { max-height: none; overflow-y: visible; }
   .sp-mobile-cart-bar { display: flex; bottom: 58px; }

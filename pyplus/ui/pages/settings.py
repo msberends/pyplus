@@ -66,7 +66,9 @@ async def create_settings_page() -> None:
 
             # Two-column layout on desktop, single column on mobile
             with ui.element("div").style(
-                "display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));"
+                # min(380px, 100%) lets the column collapse to the viewport width on
+                # narrow phones instead of forcing a 380px column (horizontal scroll).
+                "display:grid;grid-template-columns:repeat(auto-fit,minmax(min(380px,100%),1fr));"
                 "gap:1rem;align-items:start"
             ):
                 # ── Left column ────────────────────────────────────────────
@@ -102,7 +104,7 @@ async def create_settings_page() -> None:
                     next_runs = scheduler_next_runs()
                     _section_card(
                         "Gegevens & synchronisatie",
-                        lambda: _render_sync_status(sync_states, next_runs),
+                        lambda: _render_sync_status(session, user_id, sync_states, next_runs),
                     )
 
 
@@ -160,9 +162,14 @@ def _render_account(session, user, user_id: int) -> None:
             ui.label("Winkel").style(
                 "font-size:11px;font-weight:600;color:var(--c-text-4);letter-spacing:.06em;text-transform:uppercase"
             )
-            ui.label(f"PLUS winkel #{user.store_number}").style(
-                "font-size:14px;color:var(--c-text-2)"
+            # Store name (e.g. "PLUS Wolters") is captured at login; fall back to the
+            # bare number for users whose name hasn't been captured yet.
+            store_label = (
+                f"{user.store_name} (#{user.store_number})"
+                if getattr(user, "store_name", "")
+                else f"PLUS winkel #{user.store_number}"
             )
+            ui.label(store_label).style("font-size:14px;color:var(--c-text-2)")
     else:
         ui.element("div").style("margin-bottom:1rem")
 
@@ -458,8 +465,9 @@ def _render_ml(settings: UserSettings, user_id: int, save_fn) -> None:
             await recompute_ml(user_id=user_id)
             recompute_label.set_text("Klaar.")
             recompute_label.style("display:block;color:var(--c-brand-dark)")
-        except Exception as exc:
-            recompute_label.set_text(f"Mislukt: {exc}")
+        except Exception:
+            log.warning("ML recompute failed", exc_info=True)
+            recompute_label.set_text("Mislukt — probeer het later opnieuw.")
             recompute_label.style("display:block;color:var(--c-danger)")
         finally:
             recompute_btn.props("loading=false")
@@ -583,7 +591,7 @@ def _render_ml_day_preferences(settings: UserSettings, save_fn) -> None:
             day_tabs = {}
             for day_key, day_label in _DAY_LABELS.items():
                 day_tabs[day_key] = ui.tab(day_key, label=day_label)
-            ui.tab("lunch", label="Lunch")
+            ui.tab("lunch", label="Extra")
 
         with ui.tab_panels(tabs, value="ma").style("min-height:auto"):
             for day_key in _DAY_LABELS:
@@ -602,8 +610,8 @@ def _render_ml_day_preferences(settings: UserSettings, save_fn) -> None:
                     )
             with ui.tab_panel("lunch"):
                 _infobox(
-                    "Deze voorkeuren gelden voor alle vijf lunchslots. "
-                    "De lunch-slots delen dezelfde regels — ze worden niet "
+                    "Deze voorkeuren gelden voor alle vijf extra-slots. "
+                    "De extra-slots delen dezelfde regels — ze worden niet "
                     "individueel ingesteld.",
                     icon="restaurant",
                     color="#fef3c7",
@@ -765,7 +773,7 @@ def _render_ml_week_constraints(settings: UserSettings, save_fn) -> None:
         _infobox(
             "Deze regels gelden over de hele week. Het model probeert "
             "hieraan te voldoen bij het invullen van lege slots. Als alle regels tegelijk "
-            "niet haalbaar zijn (bijv. min. 5 vega én min. 5 vis bij 7 diners), wordt "
+            "niet haalbaar zijn (bijv. min. 5 vega én min. 5 vis bij 7 avondeten), wordt "
             "terugevallen op de best mogelijke verdeling.",
         )
 
@@ -798,14 +806,14 @@ def _render_ml_week_constraints(settings: UserSettings, save_fn) -> None:
             "min_vega_days",
             0,
             7,
-            "Minimaal aantal vegetarische diners per week.",
+            "Minimaal aantal vegetarische dagen per week.",
         )
         _int_setting(
             t("settings.ml.max_vega"),
             "max_vega_days",
             0,
             7,
-            "Maximaal aantal vegetarische diners per week.",
+            "Maximaal aantal vegetarische dagen per week.",
         )
         _int_setting(
             t("settings.ml.min_fish"),
@@ -1099,7 +1107,7 @@ def _render_ml_autopilot(settings: UserSettings, save_fn) -> None:
         _infobox(
             "Autopilot laat het model automatisch lege slots invullen — "
             "je mandje wordt pas écht gevuld nadat je bevestigt op PLUS.nl. "
-            "Schakel diner en lunch apart in en begrens het aantal slots dat "
+            "Schakel avondeten en extra apart in en begrens het aantal slots dat "
             "automatisch wordt gevuld. Alle hierboven ingestelde regels, "
             "dagvoorkeuren en weekdoelen worden gerespecteerd.",
             icon="smart_toy",
@@ -1241,12 +1249,67 @@ def _render_weather(settings: UserSettings, save_fn) -> None:
                 )
             else:
                 ui.notify("Plaats niet gevonden", type="warning", timeout=2000)
-        except Exception as exc:
-            ui.notify(f"Geocoding mislukt: {exc}", type="negative", timeout=3000)
+        except Exception:
+            log.warning("Geocoding failed", exc_info=True)
+            ui.notify(
+                "Locatie opzoeken mislukt — probeer het later opnieuw",
+                type="negative",
+                timeout=3000,
+            )
 
-    loc_input.on("keydown.enter", lambda _: asyncio.ensure_future(_geocode()))
-    ui.button("Zoeken", on_click=lambda: asyncio.ensure_future(_geocode())).props(
+    loc_input.on("keydown.enter", lambda _: _geocode())
+    ui.button("Zoeken", on_click=lambda: _geocode()).props(
         "flat rounded no-caps color=primary size=sm"
+    ).style("font-size:12px;margin-bottom:.5rem")
+
+    async def _download_weather() -> None:
+        lat = settings.weather_latitude
+        lon = settings.weather_longitude
+        if lat is None or lon is None:
+            ui.notify("Stel eerst een locatie in", type="warning", timeout=2000)
+            return
+        try:
+            import datetime
+
+            import httpx
+
+            from pyplus.db import repo
+            from pyplus.db.engine import AsyncSessionLocal
+
+            async with httpx.AsyncClient() as client:
+                r = await client.get(
+                    "https://api.open-meteo.com/v1/forecast",
+                    params={
+                        "latitude": round(lat, 2),
+                        "longitude": round(lon, 2),
+                        "daily": "temperature_2m_max",
+                        "timezone": "Europe/Amsterdam",
+                        "past_days": 30,
+                        "forecast_days": 14,
+                    },
+                    timeout=20,
+                )
+            data = r.json()
+            dates = data.get("daily", {}).get("time", [])
+            temps = data.get("daily", {}).get("temperature_2m_max", [])
+            async with AsyncSessionLocal() as db:
+                for d_str, temp in zip(dates, temps):
+                    if temp is None:
+                        continue
+                    await repo.upsert_weather(
+                        db,
+                        datetime.date.fromisoformat(d_str),
+                        round(lat, 2),
+                        round(lon, 2),
+                        float(temp),
+                    )
+            ui.notify(f"{len(dates)} dagen weerdata opgehaald", type="positive", timeout=2000)
+        except Exception:
+            log.warning("Weather download failed", exc_info=True)
+            ui.notify("Weerdata ophalen mislukt — probeer het later opnieuw", type="negative", timeout=3000)
+
+    ui.button("Weerdata ophalen (44 dagen)", on_click=lambda: _download_weather()).props(
+        "flat rounded no-caps color=secondary size=sm"
     ).style("font-size:12px;margin-bottom:.5rem")
 
     # Threshold slider
@@ -1371,6 +1434,14 @@ async def _test_ntfy(settings: UserSettings) -> None:
     if not settings.ntfy_url or not settings.ntfy_topic:
         ui.notify("Stel eerst de ntfy-URL en het topic in", type="warning", position="top")
         return
+    from pyplus.security.net import UnsafeUrlError, assert_safe_url
+
+    try:
+        await assert_safe_url(settings.ntfy_url)
+    except UnsafeUrlError as exc:
+        ui.notify(str(exc), type="warning", position="top")
+        return
+
     try:
         import httpx
 
@@ -1393,8 +1464,13 @@ async def _test_ntfy(settings: UserSettings) -> None:
             ui.notify("Test-melding verstuurd", type="positive", position="top")
         else:
             ui.notify(f"ntfy antwoordde met {r.status_code}", type="warning", position="top")
-    except Exception as exc:
-        ui.notify(f"Fout: {exc}", type="negative", position="top")
+    except Exception:
+        log.warning("ntfy test failed", exc_info=True)
+        ui.notify(
+            "Versturen mislukt — controleer de ntfy-instellingen",
+            type="negative",
+            position="top",
+        )
 
 
 # ── iCal ──────────────────────────────────────────────────────────────────────
@@ -1457,9 +1533,51 @@ def _format_until(dt) -> str:
     return f"over {mins}m"
 
 
-def _render_sync_status(sync_states: dict, next_runs: dict | None = None) -> None:
+def _status_dot_colour(status: str | None) -> str:
+    """Colour-code the status dot: green ok, amber in-progress, red error, grey never."""
+    if status == "ok":
+        return "var(--c-brand)"
+    if status == "in_progress":
+        return "var(--c-warning, #d97706)"
+    if status == "error":
+        return "var(--c-danger)"
+    return "var(--c-border)"
+
+
+async def _run_sync_job(resource: str, session) -> None:
+    """Run the job behind a sync resource on the live (logged-in) session.
+
+    Reuses the active browser session, so no second login is needed. Each job writes
+    its own ``in_progress``/``ok``/``error`` sync_state and is per-resource locked.
+    """
+    from pyplus.jobs import registry
+
+    uid = session.user_id
+    client = getattr(session, "client", None)
+    store = getattr(session, "store_number", 0) or 0
+
+    if resource == "catalogue":
+        await registry.refresh_product_catalogue(user_id=uid, client=client, store_number=store)
+    elif resource == "products":
+        await registry.refresh_products(user_id=uid, client=client, store_number=store)
+    elif resource == "promotions":
+        await registry.refresh_promotions(user_id=uid, client=client, store_number=store)
+    elif resource == "purchase_catalogue":
+        await registry.refresh_purchase_catalogue(user_id=uid, client=client)
+    elif resource == "orders":
+        await registry.refresh_orders(user_id=uid, client=client)
+    elif resource == "ml":
+        await registry.recompute_ml(user_id=uid)
+    elif resource == "weather":
+        await registry.refresh_weather(user_id=uid)
+
+
+def _render_sync_status(
+    session, user_id: int, sync_states: dict, next_runs: dict | None = None
+) -> None:
     """Show when each background cache last refreshed and, if the in-app scheduler
-    is active, when it runs again."""
+    is active, when it runs again. Each row has a "run now" button that triggers the
+    job on the live session and updates that row's timer + status in place."""
     from pyplus.ui.format import humanize_since
 
     next_runs = next_runs or {}
@@ -1472,37 +1590,67 @@ def _render_sync_status(sync_states: dict, next_runs: dict | None = None) -> Non
 
     for resource, label in _SYNC_LABELS:
         row = sync_states.get(resource)
-        when = humanize_since(row.last_synced_at if row else None)
-        status = row.last_status if row else None
-
-        # Colour-code the status dot: green ok, amber in-progress, red error, grey never.
-        if status == "ok":
-            dot = "var(--c-brand)"
-        elif status == "in_progress":
-            dot = "var(--c-warning, #d97706)"
-        elif status == "error":
-            dot = "var(--c-danger)"
-        else:
-            dot = "var(--c-border)"
-
+        when0 = humanize_since(row.last_synced_at if row else None)
+        status0 = row.last_status if row else None
         next_dt = next_runs.get(_RESOURCE_TO_JOB.get(resource, ""))
 
         with ui.element("div").style(
             "display:flex;align-items:center;gap:.625rem;padding:.45rem 0;"
             "border-bottom:1px solid var(--c-border)"
         ):
-            ui.element("div").style(
-                f"width:8px;height:8px;border-radius:50%;background:{dot};flex-shrink:0"
+            dot = ui.element("div").style(
+                f"width:8px;height:8px;border-radius:50%;flex-shrink:0;"
+                f"background:{_status_dot_colour(status0)}"
             )
             ui.label(label).style("font-size:13px;color:var(--c-text-2);flex:1")
             with ui.element("div").style(
                 "display:flex;flex-direction:column;align-items:flex-end;line-height:1.3"
             ):
-                ui.label(when).style("font-size:12px;color:var(--c-text-3)")
+                when_lbl = ui.label(when0).style("font-size:12px;color:var(--c-text-3)")
                 if next_dt is not None:
                     ui.label(_format_until(next_dt)).style(
                         "font-size:11px;color:var(--c-text-4)"
                     ).tooltip(f"Volgende automatische run: {next_dt:%a %d %b %H:%M}")
+
+            run_btn = (
+                ui.button(icon="refresh")
+                .props("flat round dense size=sm color=grey-6")
+                .tooltip("Nu uitvoeren")
+            )
+
+            async def _run(_=None, res=resource, btn=run_btn, dot_el=dot, lbl=when_lbl) -> None:
+                btn.props("loading")
+                dot_el.style(f"background:{_status_dot_colour('in_progress')}")
+                try:
+                    await _run_sync_job(res, session)
+                    status = "ok"
+                except Exception as exc:  # noqa: BLE001 — surface, don't crash the page
+                    status = "error"
+                    ui.notify(
+                        f"Uitvoeren mislukt: {exc}",
+                        type="warning",
+                        position="top-right",
+                        timeout=4000,
+                        close_button=True,
+                    )
+                finally:
+                    btn.props(remove="loading")
+                # Reflect the authoritative sync_state the job just wrote.
+                from pyplus.db import repo
+                from pyplus.db.engine import AsyncSessionLocal
+
+                fresh = None
+                try:
+                    async with AsyncSessionLocal() as db:
+                        fresh = await repo.get_sync_state(db, user_id, res)
+                except Exception:
+                    pass
+                if fresh is not None:
+                    status = fresh.last_status or status
+                    lbl.set_text(humanize_since(fresh.last_synced_at))
+                dot_el.style(f"background:{_status_dot_colour(status)}")
+
+            run_btn.on_click(_run)
 
     if not sync_states:
         ui.label("Nog niets gesynchroniseerd.").style(

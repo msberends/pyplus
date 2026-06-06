@@ -7,6 +7,7 @@ import enum
 from typing import Optional
 
 from sqlalchemy import (
+    DDL,
     Boolean,
     Date,
     DateTime,
@@ -17,6 +18,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -75,6 +77,7 @@ class User(Base):
     plus_email_enc: Mapped[str] = mapped_column(Text, nullable=False)
     display_name: Mapped[str] = mapped_column(String(200), default="")
     store_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    store_name: Mapped[str] = mapped_column(String(200), default="")
     user_store_id: Mapped[str] = mapped_column(String(50), default="")
     one_welcome_user_id: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime.datetime] = mapped_column(
@@ -408,3 +411,12 @@ class WeatherCache(Base):
     fetched_at: Mapped[datetime.datetime] = mapped_column(
         DateTime, default=datetime.datetime.utcnow
     )
+
+
+# ── Product catalogue full-text index ──────────────────────────────────────────
+# Created right after product_cache on any create_all() (e.g. the test suite).
+# Production DBs get the identical DDL through an Alembic migration. See db/fts.py.
+from pyplus.db import fts as _fts  # noqa: E402
+
+for _stmt in _fts.ALL_STATEMENTS:
+    event.listen(ProductCache.__table__, "after_create", DDL(_stmt))

@@ -79,9 +79,30 @@ async def refresh_promotions(*, user_id: int, client, store_number: int) -> None
     try:
         result = await client.get_promotions_api(next_week=False)
 
+        # Resolve each group deal's children up front so the cart can flag them as
+        # on-offer: the promo index maps every child SKU → its parent deal, and the
+        # deals lane can open "Bekijken" straight from cache (no live call). Single-
+        # product deals already carry their own SKU. Per-deal failures are tolerated
+        # — a missing child list just means no hint / a live fetch on expand.
+        children: dict[str, list] = {}
+        for promo in result.promotions:
+            if promo.is_single_product or promo.is_free_delivery or not promo.slug:
+                continue
+            try:
+                prods = await client.get_promotion_products_api(promo.slug)
+                children[promo.slug] = [
+                    dataclasses.asdict(p)
+                    for p in prods
+                    if p.sku and not p.sku.startswith("0")
+                ]
+            except Exception as exc:
+                log.warning("[promotions] children fetch failed for %s: %s", promo.slug, exc)
+
         today = datetime.date.today()
         week_start = today - datetime.timedelta(days=today.weekday())
-        payload_json = json.dumps(dataclasses.asdict(result))
+        payload = dataclasses.asdict(result)
+        payload["children"] = children
+        payload_json = json.dumps(payload)
 
         from pyplus.db import repo
         from pyplus.db.engine import AsyncSessionLocal
@@ -91,10 +112,11 @@ async def refresh_promotions(*, user_id: int, client, store_number: int) -> None
 
         await _set_status(user_id, resource, "ok")
         log.info(
-            "[promotions] user=%d store=%d — %d promotions cached",
+            "[promotions] user=%d store=%d — %d promotions cached (%d group deals w/ children)",
             user_id,
             store_number,
             len(result.promotions),
+            len(children),
         )
     except Exception as exc:
         await _set_status(user_id, resource, "error", str(exc)[:500])
@@ -647,6 +669,15 @@ async def weekly_ntfy(*, user_id: int, client=None, store_number: int = 0) -> No
 
         # Build and push message
         from pyplus.config import settings as app_settings
+        from pyplus.security.net import UnsafeUrlError, assert_safe_url
+
+        # SSRF guard: ntfy_url is user-controlled; never POST to an internal address.
+        try:
+            await assert_safe_url(settings.ntfy_url)
+        except UnsafeUrlError as exc:
+            log.warning("[ntfy] user=%d unsafe ntfy_url — skipping push: %s", user_id, exc)
+            await _set_status(user_id, resource, "error", "unsafe_url")
+            return
 
         body = _build_ntfy_message(relevant, base_url=app_settings.base_url)
         await _push_ntfy(settings, body)

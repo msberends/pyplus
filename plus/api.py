@@ -44,6 +44,7 @@ class SessionState:
     checkout_version: int = 0
     onewelcome_user_id: str = ""
     store_number: int = 0  # from ActionStoreWrapper_GetGeneralDetails
+    store_name: str = ""  # from ActionStoreWrapper_GetGeneralDetails (Store_Name)
     user_store_id: str = ""  # from ActionCustomerTemp_GetDetails.PreferredStoreId
     cookies: dict[str, str] = field(default_factory=dict)
 

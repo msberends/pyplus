@@ -28,7 +28,7 @@ _STRINGS: dict[str, str] = {
     "cockpit.title": "Boodschappen doen",
     # Lane ① — meals
     "lane.meals.title": "Deze week",
-    "lane.meals.subtitle": "7 diners · 5 lunches",
+    "lane.meals.subtitle": "7 avondeten · 5 extra",
     "lane.meals.empty_slot": "kies gerecht",
     "lane.meals.add_all": "Weekmenu toevoegen aan mandje",
     "lane.meals.swap": "Wisselen",
@@ -36,8 +36,8 @@ _STRINGS: dict[str, str] = {
     "lane.meals.view_prep": "Bereidingswijze",
     "lane.meals.plan_week": "Mijn week plannen",
     "lane.meals.shuffle": "Shuffle",
-    "lane.meals.dinner": "Diner",
-    "lane.meals.lunch": "Lunch",
+    "lane.meals.dinner": "Avondeten",
+    "lane.meals.lunch": "Extra",
     # Lane ② — staples
     "lane.staples.title": "Vaste boodschappen",
     "lane.staples.add_all": "Alle verwachte toevoegen",
@@ -63,7 +63,8 @@ _STRINGS: dict[str, str] = {
     "cart.clear_confirm_body": "Alle producten worden uit je winkelwagen verwijderd.",
     "cart.clear_failed": "Winkelwagen leegmaken mislukt",
     "cart.total": "Totaal",
-    "cart.savings": "Bespaard",
+    "cart.savings": "Korting",
+    "cart.savings_from": "van aanbiedingen",
     "cart.items": "{n} producten",
     "cart.sync_error": "Kan winkelwagen niet bijwerken",
     "cart.unavailable": "Niet beschikbaar",
@@ -135,7 +136,7 @@ _STRINGS: dict[str, str] = {
     "settings.ml.day_starch_pref": "Voorkeur basis/zetmeel",
     "settings.ml.day_starch_blocked": "Basis / zetmeel",
     "settings.ml.day_no_limit": "Geen limiet",
-    "settings.ml.lunch_combined": "Lunch (alle slots)",
+    "settings.ml.lunch_combined": "Extra (alle slots)",
     # ── Week constraints ──────────────────────────────────────────────────
     "settings.ml.week_goals": "Weekdoelen",
     "settings.ml.week_goals_hint": (
@@ -184,10 +185,10 @@ _STRINGS: dict[str, str] = {
     "settings.ml.ingredient_overlap": "Ingrediënt-hergebruik",
     "settings.ml.budget": "Budgetvoorkeur",
     # ── Autopilot extensions ──────────────────────────────────────────────
-    "settings.ml.autopilot_dinner": "Diner automatisch plannen",
-    "settings.ml.autopilot_lunch": "Lunch automatisch plannen",
-    "settings.ml.autopilot_max_dinner": "Max. dinerslots",
-    "settings.ml.autopilot_max_lunch": "Max. lunchslots",
+    "settings.ml.autopilot_dinner": "Avondeten automatisch plannen",
+    "settings.ml.autopilot_lunch": "Extra automatisch plannen",
+    "settings.ml.autopilot_max_dinner": "Max. avondeten-slots",
+    "settings.ml.autopilot_max_lunch": "Max. extra-slots",
     # ── Starch labels ─────────────────────────────────────────────────────
     "starch.aardappels": "Aardappels",
     "starch.pasta": "Pasta",
@@ -265,6 +266,10 @@ _STRINGS: dict[str, str] = {
     "error.api_version_changed": "PLUS.nl heeft een update uitgerold — herstart de app",
     "error.product_unavailable": "{name} is niet beschikbaar in jouw winkel",
     "error.product_unavailable_cached": "Let op: dit product stond recent als niet beschikbaar geregistreerd.",
+    # ── Accessibility (screen-reader labels for icon-only controls) ─────────────
+    "a11y.add_to_cart": "Toevoegen aan winkelwagen",
+    "a11y.qty_increase": "Aantal verhogen",
+    "a11y.qty_decrease": "Aantal verlagen",
 }
 
 

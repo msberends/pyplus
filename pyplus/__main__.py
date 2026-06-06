@@ -137,9 +137,36 @@ app.on_startup(_on_startup)
 app.on_shutdown(_on_shutdown)
 
 
+# ── HTTP security headers ───────────────────────────────────────────────────
+# Set conservatively: clickjacking + MIME-sniff + referrer protection, and CSP
+# directives that don't touch resource loading (a full script-src CSP would break
+# NiceGUI's inline Vue/Quasar). Tighten further at the reverse proxy if desired.
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):  # type: ignore[no-untyped-def]
+    response = await call_next(request)
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault(
+        "Content-Security-Policy", "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+    )
+    return response
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-_storage_secret = settings.secret_key or secrets.token_hex(32)
+# Cookie-signing secret is derived from the master key (not the raw key, which
+# also encrypts credentials). Falls back to an ephemeral key when unset, so
+# sessions simply don't survive a restart rather than being signed with nothing.
+_storage_secret = secrets.token_hex(32)
+if settings.secret_key:
+    from pyplus.security.secrets import derive_key
+
+    _derived = derive_key(b"pyplus/cookie/v1")
+    if _derived:
+        _storage_secret = _derived.hex()
 
 if __name__ in {"__main__", "__mp_main__"}:
     ui.run(

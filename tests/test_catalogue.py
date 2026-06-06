@@ -100,3 +100,40 @@ async def test_available_sorts_first(session_factory):
         )
         hits = await repo.search_product_cache(db, 720, "appel")
     assert hits[0].sku == "2"  # available first
+
+
+@pytest.mark.asyncio
+async def test_fts_index_present_on_create_all(session_factory):
+    # The after_create hook must build the FTS index even under create_all (tests).
+    async with session_factory() as db:
+        assert await repo._fts_available(db) is True
+
+
+@pytest.mark.asyncio
+async def test_search_matches_substring_in_compound_word(session_factory):
+    # Dutch compound words: "kaas" must match inside "Pindakaas" — the trigram
+    # tokenizer preserves substring semantics (a default tokenizer would not).
+    async with session_factory() as db:
+        await repo.upsert_product_cache(db, 720, [_p("1", "Pindakaas naturel")])
+        hits = await repo.search_product_cache(db, 720, "kaas")
+    assert {h.sku for h in hits} == {"1"}
+
+
+@pytest.mark.asyncio
+async def test_search_short_token_falls_back_to_like(session_factory):
+    # Tokens shorter than the trigram minimum (3) take the LIKE path and still match.
+    async with session_factory() as db:
+        await repo.upsert_product_cache(db, 720, [_p("1", "Eieren")])
+        hits = await repo.search_product_cache(db, 720, "ei")
+    assert {h.sku for h in hits} == {"1"}
+
+
+@pytest.mark.asyncio
+async def test_search_reflects_name_update_via_trigger(session_factory):
+    # The AFTER UPDATE trigger must re-sync FTS: searching the new name finds it,
+    # the old name no longer does.
+    async with session_factory() as db:
+        await repo.upsert_product_cache(db, 720, [_p("1", "Halfvolle melk")])
+        await repo.upsert_product_cache(db, 720, [_p("1", "Volle yoghurt")])
+        assert {h.sku for h in await repo.search_product_cache(db, 720, "yoghurt")} == {"1"}
+        assert await repo.search_product_cache(db, 720, "halfvolle") == []

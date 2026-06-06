@@ -19,6 +19,7 @@ from pyplus.db.engine import AsyncSessionLocal
 from pyplus.db.models import Dish
 from pyplus.i18n import t
 from pyplus.services.aggregate import AggLine, AggResult, aggregate, fmt_amount
+from pyplus.ui.format import alt_text as _alt
 from pyplus.ui.format import thumbnail_url
 
 log = logging.getLogger(__name__)
@@ -126,8 +127,11 @@ async def create_meals_lane(session) -> None:
     state = _MealsState(week_start=_current_monday())
     load_error = ""
     try:
-        await _load_slots(state, session.user_id)
-        state._weather = await _load_weather(session, state.week_start)
+        # The slot/dish load and the weather load are independent — run concurrently.
+        _, state._weather = await asyncio.gather(
+            _load_slots(state, session.user_id),
+            _load_weather(session, state.week_start),
+        )
     except Exception as exc:
         log.error("Meals lane load failed: %s", exc)
         load_error = "Weekmenu kon niet worden geladen."
@@ -143,8 +147,8 @@ async def create_meals_lane(session) -> None:
                     with ui.element("div").style("display:flex;align-items:center;gap:0px"):
                         ui.button(
                             icon="chevron_left",
-                            on_click=lambda: asyncio.ensure_future(
-                                _navigate(session.user_id, state, -1, week_lbl, _render, session)
+                            on_click=lambda: _navigate(
+                                session.user_id, state, -1, week_lbl, _render, session
                             ),
                         ).props("flat round dense size=sm color=grey-6")
                         week_lbl = ui.label(_format_week(state.week_start)).style(
@@ -153,16 +157,14 @@ async def create_meals_lane(session) -> None:
                         )
                         ui.button(
                             icon="chevron_right",
-                            on_click=lambda: asyncio.ensure_future(
-                                _navigate(session.user_id, state, +1, week_lbl, _render, session)
+                            on_click=lambda: _navigate(
+                                session.user_id, state, +1, week_lbl, _render, session
                             ),
                         ).props("flat round dense size=sm color=grey-6")
                         plan_btn = (
                             ui.button(
                                 icon="auto_awesome",
-                                on_click=lambda: asyncio.ensure_future(
-                                    _plan_week(session, state, _render)
-                                ),
+                                on_click=lambda: _plan_week(session, state, _render),
                             )
                             .props("flat round dense size=sm color=primary")
                             .tooltip(t("lane.meals.plan_week"))
@@ -171,9 +173,7 @@ async def create_meals_lane(session) -> None:
                         asyncio.ensure_future(_check_recommender_available(session, plan_btn))
                         ui.button(
                             icon="event",
-                            on_click=lambda: asyncio.ensure_future(
-                                _show_ical_dialog(session, state.week_start)
-                            ),
+                            on_click=lambda: _show_ical_dialog(session, state.week_start),
                         ).props("flat round dense size=sm color=grey-6").tooltip(
                             "Agenda-abonnement"
                         )
@@ -198,7 +198,7 @@ async def create_meals_lane(session) -> None:
             ui.button(
                 t("lane.meals.add_all"),
                 icon="add_shopping_cart",
-                on_click=lambda: asyncio.ensure_future(_add_weekmenu_to_cart(session, state)),
+                on_click=lambda: _add_weekmenu_to_cart(session, state),
             ).props("unelevated rounded color=primary no-caps").style(
                 "width:100%;font-size:13px;font-weight:600;height:40px"
             )
@@ -610,7 +610,7 @@ def _show_resolve_dialog(session, dishes_with_ings, flexibles: list, optionals: 
                 ui.button(
                     "Doorgaan",
                     icon="arrow_forward",
-                    on_click=lambda: asyncio.ensure_future(_continue()),
+                    on_click=lambda: _continue(),
                 ).props("unelevated rounded color=primary no-caps").style("flex:2;font-weight:600")
 
 
@@ -692,7 +692,7 @@ def _render_flex_picker(session, flex_ing, st: dict, flex_choice: dict, refresh_
                                         ui.image(thumbnail_url(prod.image_url, 28)).style(
                                             "width:28px;height:28px;object-fit:contain;"
                                             "border-radius:4px;background:var(--c-border);flex-shrink:0"
-                                        )
+                                        ).props(f'alt="{_alt(prod.name)}"')
                                     ui.label(prod.name).style(
                                         "font-size:12px;flex:1;min-width:0;overflow:hidden;"
                                         "text-overflow:ellipsis;white-space:nowrap"
@@ -771,7 +771,7 @@ def _show_agg_dialog(session, agg: AggResult) -> None:
                         ):
                             ui.icon("savings", size="15px").style("color:var(--c-brand-dark)")
                             total_str = f"{agg.total_savings:.2f}".replace(".", ",")
-                            ui.label(f"Totaal bespaard: € {total_str}").style(
+                            ui.label(f"Totaal korting: € {total_str}").style(
                                 "font-size:13px;font-weight:700;color:var(--c-brand-dark)"
                             )
 
@@ -785,9 +785,7 @@ def _show_agg_dialog(session, agg: AggResult) -> None:
                 ui.button(
                     t("agg.confirm"),
                     icon="add_shopping_cart",
-                    on_click=lambda: asyncio.ensure_future(
-                        _confirm_add(session, agg, overrides, dlg)
-                    ),
+                    on_click=lambda: _confirm_add(session, agg, overrides, dlg),
                 ).props("unelevated rounded color=primary no-caps").style("flex:2;font-weight:600")
 
 
@@ -921,7 +919,7 @@ async def _plan_week(session, state: "_MealsState", refresh_fn) -> None:
 
         current = {slot: (dish.id if dish else None) for slot, dish in state.slots.items()}
         suggestions = plan_week(
-            artifact, [d.id for d in dishes], current, settings=session.settings
+            artifact, [d.id for d in dishes], current, settings=session.settings, n_lunch=0
         )
 
         if not suggestions:
@@ -1017,7 +1015,7 @@ def render_ical_subscription_body(user_id: int) -> None:
             url_display.set_value(f"{origin}{path}")
 
     if not initial:
-        ui.timer(0.2, lambda: asyncio.ensure_future(_set_url()), once=True)
+        ui.timer(0.2, _set_url, once=True)
 
     ui.label(
         "iOS: Agenda → Accounts → Voeg account toe → Andere → Agenda-abonnement\n"
@@ -1054,9 +1052,7 @@ async def _show_ical_dialog(session, week_start: datetime.date) -> None:
                 ui.button(
                     f"Download .ics (week {week_start.strftime('%-d %b')})",
                     icon="download",
-                    on_click=lambda ws=week_start, uid=session.user_id: asyncio.ensure_future(
-                        _one_off_download(uid, ws)
-                    ),
+                    on_click=lambda ws=week_start, uid=session.user_id: _one_off_download(uid, ws),
                 ).props("flat rounded no-caps color=primary size=sm").style("font-size:12px")
 
             # Footer

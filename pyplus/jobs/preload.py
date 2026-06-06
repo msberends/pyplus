@@ -122,6 +122,23 @@ async def _run_full_preload_all_users() -> None:
             log.error("[scheduler] full_preload for user=%d failed: %s", user.id, exc)
 
 
+# Abandoned interactive sessions (and their Playwright browsers) are reaped after
+# this much idle time. Activity = navigation or any cart mutation.
+_SESSION_MAX_IDLE_SECONDS = 2 * 3600
+
+
+async def _reap_idle_sessions() -> None:
+    """Scheduler entry point: close interactive sessions idle beyond the threshold."""
+    from pyplus.session import manager
+
+    try:
+        n = await manager.reap_idle(_SESSION_MAX_IDLE_SECONDS)
+        if n:
+            log.info("[scheduler] reaped %d idle session(s)", n)
+    except Exception as exc:
+        log.error("[scheduler] session reaper failed: %s", exc)
+
+
 async def _run_weather_all_users() -> None:
     """APScheduler entry point: daily weather fetch for every user with weather enabled."""
     from pyplus.db import repo
@@ -145,14 +162,28 @@ def start_scheduler() -> None:
     if settings.disable_scheduler:
         log.info("In-app scheduler disabled (PYPLUS_DISABLE_SCHEDULER=1)")
         return
-    if not settings.secret_key:
-        log.info("No PYPLUS_SECRET_KEY — in-app scheduler disabled (no stored credentials)")
-        return
 
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from apscheduler.triggers.cron import CronTrigger
+    from apscheduler.triggers.interval import IntervalTrigger
 
     _scheduler = AsyncIOScheduler(timezone="Europe/Amsterdam")
+
+    # Idle-session reaper — independent of credentials; frees abandoned browsers.
+    _scheduler.add_job(
+        _reap_idle_sessions,
+        IntervalTrigger(minutes=15),
+        id="session_reaper",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+
+    if not settings.secret_key:
+        # Without a key there are no stored credentials, so the cache-warming jobs
+        # can't log in — but the session reaper still runs.
+        _scheduler.start()
+        log.info("No PYPLUS_SECRET_KEY — only the idle-session reaper is scheduled")
+        return
 
     # Full preload nightly at 02:30
     _scheduler.add_job(

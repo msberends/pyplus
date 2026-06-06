@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -27,6 +28,13 @@ class UserSession:
     # The cart component checks this to render a sync indicator per line.
     syncing_skus: set = field(default_factory=set)
 
+    # Monotonic timestamp of last user activity — drives the idle-session reaper
+    # so abandoned sessions (and their Playwright browsers) don't live forever.
+    last_active: float = field(default_factory=time.monotonic)
+
+    def mark_active(self) -> None:
+        self.last_active = time.monotonic()
+
     # ── Cart access ────────────────────────────────────────────────────────────
 
     @property
@@ -40,6 +48,7 @@ class UserSession:
     def set_cart(self, cart) -> None:
         """Replace the cart and notify all listeners."""
         self._cart = cart
+        self.mark_active()
         self._fire_cart_listeners()
 
     # ── User settings ──────────────────────────────────────────────────────────
@@ -58,6 +67,7 @@ class UserSession:
 
     def touch(self) -> None:
         """Re-notify listeners without changing cart data (e.g. syncing status changed)."""
+        self.mark_active()
         self._fire_cart_listeners()
 
     def _fire_cart_listeners(self) -> None:

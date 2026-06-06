@@ -219,3 +219,124 @@ async def test_api_failure_rolls_back():
                 }
             )()
         )
+
+
+# ── _overlay_pending: in-flight taps survive the authoritative reconcile ──────
+
+
+def _ci(sku, qty, price=1.50):
+    return CartItem(product=sku, unit="", price=price, quantity=qty, sku=sku)
+
+
+def test_overlay_pending_reapplies_in_flight_delta():
+    """A tap that arrived during the flush must not be clobbered by the response."""
+    svc = CartService(FakeSession())
+    server = Cart(items=[_ci("abc", 2)], final_total=3.0)  # what the flush returned
+    optimistic = Cart(items=[_ci("abc", 3)], final_total=4.5)  # newer tap already applied
+    svc._pending = {"abc": 1}
+
+    merged = svc._overlay_pending(server, optimistic)
+    item = next(i for i in merged.items if i.sku == "abc")
+    assert item.quantity == 3  # 2 (server) + 1 (still-pending)
+    assert merged.final_total == 4.5  # recomputed from line totals
+
+
+def test_overlay_pending_keeps_new_optimistic_item():
+    """An item added during the flush (not yet known to the server) is preserved."""
+    svc = CartService(FakeSession())
+    server = Cart(items=[_ci("abc", 2)], final_total=3.0)
+    optimistic = Cart(items=[_ci("abc", 2), _ci("zzz", 1, price=2.0)], final_total=5.0)
+    svc._pending = {"zzz": 1}
+
+    merged = svc._overlay_pending(server, optimistic)
+    assert {i.sku for i in merged.items} == {"abc", "zzz"}
+    assert merged.final_total == 5.0
+
+
+def test_overlay_pending_noop_without_pending():
+    svc = CartService(FakeSession())
+    server = Cart(items=[_ci("abc", 2)], final_total=3.0)
+    svc._pending = {}
+    assert svc._overlay_pending(server, server) is server
+
+
+def test_overlay_pending_drops_item_when_pending_removal():
+    """A pending removal to zero during the flush leaves the item out."""
+    svc = CartService(FakeSession())
+    server = Cart(items=[_ci("abc", 1)], final_total=1.5)
+    optimistic = Cart(items=[], final_total=0.0)
+    svc._pending = {"abc": -1}
+
+    merged = svc._overlay_pending(server, optimistic)
+    assert not any(i.sku == "abc" for i in merged.items)
+    assert merged.final_total == 0.0
+
+
+# ── Savings parsing in _parse_cart_from_checkout ─────────────────────────────────
+
+
+def _checkout(lines, price, discount=None):
+    receipt = {"Price": str(price)}
+    if discount is not None:
+        receipt["Discount"] = str(discount)
+    return {
+        "Version": 1,
+        "LineItemList": {
+            "List": [
+                {"SKU": s, "Name": "X", "Subtitle": "", "Price": str(p), "Quantity": q}
+                for (s, p, q) in lines
+            ]
+        },
+        "Receipt": receipt,
+    }
+
+
+def test_savings_uses_explicit_discount_when_present():
+    from plus.client import _parse_cart_from_checkout
+
+    cart = _parse_cart_from_checkout(_checkout([("a", 1.50, 2)], price=3.0, discount=1.25))
+    assert cart.savings == 1.25
+
+
+def test_savings_derived_from_gross_minus_net_when_discount_absent():
+    """Gross line total 10.00, net total 8.00 → 2.00 savings, even with no Discount key."""
+    from plus.client import _parse_cart_from_checkout
+
+    cart = _parse_cart_from_checkout(_checkout([("a", 5.00, 2)], price=8.00))
+    assert cart.final_total == 8.00
+    assert cart.savings == 2.00
+
+
+def test_savings_zero_when_gross_equals_net():
+    from plus.client import _parse_cart_from_checkout
+
+    cart = _parse_cart_from_checkout(_checkout([("a", 1.50, 2)], price=3.0, discount=0))
+    assert cart.savings == 0.0
+
+
+# ── Optimistic total preserves applied discounts (no "bump" to gross) ────────────
+
+
+def test_optimistic_add_preserves_existing_discount():
+    """Adding a unit adjusts the discounted total by one line's value — it does NOT
+    flash up to the undiscounted gross sum before the server reconciles."""
+    s = FakeSession()
+    # Two lines: gross 2*1.50 + 1*4.00 = 7.00, but the cart total is discounted to 5.50.
+    s._cart = Cart(
+        items=[_ci("abc", 2, price=1.50), _ci("xyz", 1, price=4.00)],
+        final_total=5.50,
+        savings=1.50,
+    )
+    svc = CartService(s)
+    svc._apply_optimistic("abc", 1, name="", unit="", price=0.0, image="")
+    assert s.cart.final_total == 7.00  # 5.50 + 1.50, NOT gross 8.50
+    assert s.cart.savings == 1.50  # discount carried through
+
+
+def test_optimistic_new_item_adds_its_price_to_discounted_base():
+    s = FakeSession()
+    s._cart = Cart(items=[_ci("abc", 2, price=1.50)], final_total=2.50, savings=0.50)
+    svc = CartService(s)
+    svc._apply_optimistic("new", 1, name="New", unit="", price=3.00, image="")
+    assert s.cart.final_total == 5.50  # 2.50 discounted base + 3.00
+    assert any(i.sku == "new" for i in s.cart.items)

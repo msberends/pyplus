@@ -10,6 +10,7 @@ import json as _json
 from nicegui import ui
 
 from pyplus.i18n import t
+from pyplus.ui.format import alt_text as _alt
 from pyplus.ui.format import thumbnail_url
 
 
@@ -22,11 +23,15 @@ def create_cart_panel(session) -> None:
     cat_by_sku: dict = {}  # sku → category breadcrumb (for grouping/sorting)
     prefs = session.settings
 
-    # Per-item label/image refs for in-place updates (cleared on full refresh)
-    _qty_labels: dict[str, "ui.label"] = {}
-    _price_labels: dict[str, "ui.label"] = {}
-    _image_els: dict[str, "ui.image"] = {}   # sku → image element (for backfill updates)
-    _rendered_skus: list[str] = []
+    # Keyed rows: sku → refs dict. Rows are reused across cart changes (created /
+    # deleted / moved as the SKU set changes, sub-parts updated in place otherwise)
+    # so product images are NEVER torn down and re-fetched on a qty change or add.
+    _rows: dict[str, dict] = {}
+    _headers: list = []  # category header label elements (grouping mode)
+    _structure: list = [None]  # signature of the last rendered order, to skip re-layout
+
+    def _cart_item(sku: str):
+        return next((it for it in session.cart.items if it.sku == sku), None)
 
     with ui.element("div").classes("sp-cart-panel"):
         # ── Header ─────────────────────────────────────────────────────
@@ -39,51 +44,261 @@ def create_cart_panel(session) -> None:
 
         # ── Scrollable item list ────────────────────────────────────────
         with ui.element("div").classes("sp-cart-body"):
+            body_inner = ui.element("div")  # stable container holding rows + headers
+            empty_holder = ui.element("div")  # holds the empty-cart placeholder
 
-            def _render_item(item) -> None:
-                qty_lbl, price_lbl, img_el = _render_cart_item(
-                    item,
-                    session,
-                    cart_service,
-                    savings_by_sku.get(item.sku),
-                    promo_by_sku.get(item.sku),
-                    image_by_sku.get(item.sku),
-                )
-                _qty_labels[item.sku] = qty_lbl
-                _price_labels[item.sku] = price_lbl
-                if img_el is not None:
-                    _image_els[item.sku] = img_el
-                _rendered_skus.append(item.sku)
+            # ── Per-row slot fillers (update one row's sub-part in place) ──
 
-            @ui.refreshable
-            def _items() -> None:
-                _qty_labels.clear()
-                _price_labels.clear()
-                _image_els.clear()
-                _rendered_skus.clear()
-                cart = session.cart
-                if not cart.items:
-                    with ui.element("div").classes("sp-lane-placeholder"):
-                        ui.label("🛒").classes("sp-lane-placeholder-icon")
-                        ui.label(t("cart.empty")).style(
-                            "font-size:13px;color:var(--c-text-3);margin-top:.25rem"
+            def _fill_image(refs, item) -> None:
+                holder = refs["img_holder"]
+                holder.clear()
+                url = item.image_url or image_by_sku.get(item.sku, "")
+                if url:
+                    with holder:
+                        ui.image(thumbnail_url(url, 44)).style(
+                            "width:100%;height:100%;object-fit:contain;border-radius:inherit"
+                        ).props(f'alt="{_alt(item.product)}"')
+
+            def _fill_perunit(refs, item) -> None:
+                slot = refs["perunit_slot"]
+                slot.clear()
+                if item.quantity > 1:
+                    with slot:
+                        ui.label(f"€ {item.price:.2f}/st".replace(".", ",")).style(
+                            "font-size:10px;color:var(--c-text-4);text-align:right"
                         )
-                    return
 
+            def _fill_promo(refs, item) -> None:
+                slot = refs["promo_slot"]
+                slot.clear()
+                promo = promo_by_sku.get(item.sku)
+                # Emphasise the row itself when its product is on offer — these are the
+                # "responsible" products behind the korting banner. The class is toggled
+                # regardless of the tag preference; the textual tag still respects it.
+                if promo is not None:
+                    refs["row"].classes(add="sp-cart-item-promo")
+                else:
+                    refs["row"].classes(remove="sp-cart-item-promo")
+                if promo is None or not prefs.show_promo_tags:
+                    return
+                from pyplus.services.promos import promo_tag_label
+
+                with slot:
+                    ui.label(promo_tag_label(promo)).classes("sp-promo-tag").style(
+                        "margin-top:2px"
+                    ).tooltip("In de aanbieding")
+
+            def _fill_saving(refs, item) -> None:
+                slot = refs["saving_slot"]
+                slot.clear()
+                saving = savings_by_sku.get(item.sku)
+                if saving is None or item.sku in session.syncing_skus:
+                    return
+                with slot:
+                    with (
+                        ui.element("div")
+                        .classes("sp-cart-saving-hint")
+                        .style(
+                            "display:flex;align-items:center;gap:.25rem;margin-top:2px;cursor:pointer"
+                        )
+                        .on(
+                            "click",
+                            lambda _, s=saving: _apply_saving(session, cart_service, s),
+                        )
+                        .tooltip(
+                            t(
+                                "cart.swap_desc",
+                                cur_qty=saving.cur_qty,
+                                cur_pack=saving.cur_pack,
+                                new_qty=saving.new_qty,
+                                new_pack=saving.new_pack,
+                            )
+                        )
+                    ):
+                        ui.icon("savings", size="12px").style("color:var(--c-brand-dark)")
+                        amt = f"{saving.saving:.2f}".replace(".", ",")
+                        ui.label(f"{t('cart.save_amount', amount=amt)} →").style(
+                            "font-size:10px;font-weight:600;color:var(--c-brand-dark);"
+                            "text-decoration:underline"
+                        )
+
+            def _fill_stepper(refs, item) -> None:
+                from pyplus.ui.components.controls import stepper_button
+
+                slot = refs["stepper_slot"]
+                slot.clear()
+                sku = item.sku
+                syncing = sku in session.syncing_skus
+                refs["syncing"] = syncing
+                with slot, ui.element("div").classes("sp-qty"):
+                    if syncing:
+                        with ui.element("div").style(
+                            "width:36px;height:36px;display:flex;align-items:center;justify-content:center"
+                        ):
+                            ui.spinner(size="14px", color="primary")
+                        refs["qty"] = ui.label(str(item.quantity)).classes("sp-qty-count")
+                        ui.element("div").style("width:36px;height:36px")
+                    else:
+                        stepper_button(
+                            "−",
+                            aria_label=t("a11y.qty_decrease"),
+                            on_click=lambda _, s=sku: cart_service.remove(s) if cart_service else None,
+                        )
+                        refs["qty"] = ui.label(str(item.quantity)).classes("sp-qty-count")
+                        stepper_button(
+                            "+",
+                            aria_label=t("a11y.qty_increase"),
+                            on_click=lambda _, s=sku: cart_service.add(s) if cart_service else None,
+                        )
+
+            def _build_row(item) -> dict:
+                """Create one cart row (with stable slots) in the current container."""
+                from pyplus.ui.format import plus_product_url
+
+                refs: dict = {"sku": item.sku}
+                with ui.element("div").classes("sp-cart-item") as row:
+                    refs["row"] = row
+                    refs["img_holder"] = (
+                        ui.element("div").classes("sp-cart-item-img").style("overflow:hidden")
+                    )
+                    with ui.element("div").style("flex:1;min-width:0;overflow:hidden"):
+                        product_url = plus_product_url(sku=item.sku)
+                        if product_url:
+                            ui.link(item.product, product_url, new_tab=True).classes(
+                                "sp-cart-item-name"
+                            ).style(
+                                "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                                "text-decoration:none;color:inherit;display:block"
+                            ).tooltip("Bekijken op plus.nl")
+                        else:
+                            ui.label(item.product).classes("sp-cart-item-name").style(
+                                "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                            )
+                        if item.unit:
+                            ui.label(item.unit).classes("sp-cart-item-unit")
+                        refs["promo_slot"] = ui.element("div").style("display:contents")
+                        refs["saving_slot"] = ui.element("div").style("display:contents")
+                    with ui.element("div").style(
+                        "display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0"
+                    ):
+                        refs["price"] = ui.label(
+                            f"€ {item.price_total:.2f}".replace(".", ",")
+                        ).classes("sp-cart-item-price")
+                        refs["perunit_slot"] = ui.element("div").style("display:contents")
+                        refs["stepper_slot"] = ui.element("div").style("display:contents")
+                _fill_image(refs, item)
+                _fill_perunit(refs, item)
+                _fill_stepper(refs, item)
+                _fill_promo(refs, item)
+                _fill_saving(refs, item)
+                return refs
+
+            def _update_row(refs, item) -> None:
+                """Update an existing row's sub-parts in place (image untouched).
+
+                Promo tag depends on neither qty nor sync (filled at build / by
+                _load_promos); the saving hint only needs re-filling when the sync
+                state flips (it hides while syncing). So a plain qty tick touches
+                just the qty/price/per-unit labels — no slot churn, no image work.
+                """
+                refs["price"].set_text(f"€ {item.price_total:.2f}".replace(".", ","))
+                _fill_perunit(refs, item)
+                now_sync = item.sku in session.syncing_skus
+                if now_sync != refs.get("syncing"):
+                    _fill_stepper(refs, item)  # toggle stepper ⇄ spinner
+                    _fill_saving(refs, item)  # hide/show hint for the new sync state
+                else:
+                    q = refs.get("qty")
+                    if q is not None:
+                        q.set_text(str(item.quantity))
+
+            def _sync() -> None:
+                """Reconcile rows against the current cart without rebuilding images.
+
+                Same order as last time → update rows in place. Order/SKU set changed
+                → add/remove/move only the affected rows; reused rows keep their image.
+                """
+                cart = session.cart
                 items = _sort_items(list(cart.items), prefs.cart_sort)
+                if not items:
+                    for refs in list(_rows.values()):
+                        refs["row"].delete()
+                    _rows.clear()
+                    for h in _headers:
+                        h.delete()
+                    _headers.clear()
+                    _structure[0] = ()
+                    empty_holder.clear()
+                    with empty_holder:
+                        with ui.element("div").classes("sp-lane-placeholder"):
+                            ui.label("🛒").classes("sp-lane-placeholder-icon")
+                            ui.label(t("cart.empty")).style(
+                                "font-size:13px;color:var(--c-text-3);margin-top:.25rem"
+                            )
+                    return
+                empty_holder.clear()
+
+                plan: list = []  # ("h", label) | ("i", item)
                 if prefs.cart_group_by_category:
                     for cat, group in _group_items(items, cat_by_sku):
-                        ui.label(cat).classes("sp-cat-header")
-                        for item in group:
-                            _render_item(item)
+                        plan.append(("h", cat))
+                        for it in group:
+                            plan.append(("i", it))
                 else:
-                    for item in items:
-                        _render_item(item)
+                    for it in items:
+                        plan.append(("i", it))
 
-            _items()
+                structure = tuple(
+                    (typ, payload if typ == "h" else payload.sku) for typ, payload in plan
+                )
+                if structure == _structure[0]:
+                    # Same layout — just refresh row contents in place.
+                    for typ, payload in plan:
+                        if typ == "i":
+                            _update_row(_rows[payload.sku], payload)
+                    return
+
+                # Structural change — reconcile order, adding/removing only what changed.
+                _structure[0] = structure
+                desired = {payload.sku for typ, payload in plan if typ == "i"}
+                for sku in list(_rows):
+                    if sku not in desired:
+                        _rows[sku]["row"].delete()
+                        del _rows[sku]
+                for h in _headers:
+                    h.delete()
+                _headers.clear()
+
+                new_skus = False
+                for idx, (typ, payload) in enumerate(plan):
+                    if typ == "h":
+                        with body_inner:
+                            hl = ui.label(payload).classes("sp-cat-header")
+                        hl.move(body_inner, idx)
+                        _headers.append(hl)
+                    else:
+                        sku = payload.sku
+                        if sku in _rows:
+                            _update_row(_rows[sku], payload)
+                            _rows[sku]["row"].move(body_inner, idx)
+                        else:
+                            with body_inner:
+                                refs = _build_row(payload)
+                            refs["row"].move(body_inner, idx)
+                            _rows[sku] = refs
+                            new_skus = True
+
+                # New items may need promo/category/image metadata fetched. Promos are
+                # loaded regardless of the tag preference — they also drive the on-offer
+                # row emphasis (cache-only read, so still fast-open compliant).
+                if new_skus:
+                    asyncio.ensure_future(_load_promos())
+                    asyncio.ensure_future(_load_images())
+                    if prefs.cart_group_by_category:
+                        asyncio.ensure_future(_load_categories())
 
             async def _load_categories() -> None:
-                """Load category breadcrumbs once for grouping (cache-only)."""
+                """Load category breadcrumbs for grouping (cache-only); re-sync if changed."""
                 skus = [it.sku for it in session.cart.items if it.sku]
                 if not skus:
                     return
@@ -92,12 +307,12 @@ def create_cart_panel(session) -> None:
                 idx = await get_category_index(
                     getattr(session, "store_number", 0) or 0, session.user_id, skus
                 )
-                if idx:
+                if idx and any(cat_by_sku.get(k) != v for k, v in idx.items()):
                     cat_by_sku.update(idx)
-                    _items.refresh()
+                    _sync()
 
             async def _load_promos() -> None:
-                """Load the (cache-only) promo index once and tag matching items."""
+                """Load the (cache-only) promo index and tag matching rows in place."""
                 store = getattr(session, "store_number", 0) or 0
                 if not store:
                     return
@@ -106,13 +321,19 @@ def create_cart_panel(session) -> None:
                 idx = await get_promo_index(store)
                 if idx:
                     promo_by_sku.update(idx)
-                    _items.refresh()
+                for sku, refs in list(_rows.items()):
+                    item = _cart_item(sku)
+                    if item:
+                        _fill_promo(refs, item)
 
             async def _load_images() -> None:
-                """Backfill product images from the catalogue for cart lines that
-                arrive from PLUS without an ImageURL."""
+                """Backfill catalogue images for cart lines lacking one — one row at a time."""
                 store = getattr(session, "store_number", 0) or 0
-                skus = [it.sku for it in session.cart.items if it.sku and not it.image_url]
+                skus = [
+                    it.sku
+                    for it in session.cart.items
+                    if it.sku and not it.image_url and not image_by_sku.get(it.sku)
+                ]
                 if not store or not skus:
                     return
                 from pyplus.db import repo
@@ -130,18 +351,13 @@ def create_cart_panel(session) -> None:
                     )
                     if img and image_by_sku.get(sku) != img:
                         image_by_sku[sku] = img
-                        # Update the image element in-place if it exists;
-                        # only fall back to full refresh when the element
-                        # is not yet rendered (e.g. backfill on initial load).
-                        el = _image_els.get(sku)
-                        if el is not None:
-                            el.set_source(thumbnail_url(img, 44))
-                        else:
-                            _items.refresh()
-                            return
+                        refs = _rows.get(sku)
+                        item = _cart_item(sku)
+                        if refs and item:
+                            _fill_image(refs, item)  # updates only this row's thumbnail
 
-            if prefs.show_promo_tags:
-                asyncio.ensure_future(_load_promos())
+            _sync()
+            asyncio.ensure_future(_load_promos())  # drives on-offer row emphasis + tags
             asyncio.ensure_future(_load_images())
             if prefs.cart_group_by_category:
                 asyncio.ensure_future(_load_categories())
@@ -154,12 +370,12 @@ def create_cart_panel(session) -> None:
                 )
                 total_label = ui.label("€ 0,00").classes("sp-cart-total")
 
-            with ui.element("div").style(
-                "display:flex;align-items:center;gap:.375rem;margin-bottom:.375rem"
-            ) as savings_row:
-                ui.icon("savings", size="14px").style("color:var(--c-brand-dark)")
-                savings_label = ui.label("")
-                savings_label.classes("sp-cart-savings")
+            # Promotional discount banner — styled like the Aanbiedingen lane (green
+            # tag) so it reads clearly as money saved on offers, not just a number.
+            with ui.element("div").classes("sp-cart-savings-banner") as savings_row:
+                ui.icon("local_offer", size="15px")
+                savings_label = ui.label("").classes("sp-cart-savings")
+                ui.label(t("cart.savings_from")).classes("sp-cart-savings-from")
             savings_row.set_visibility(False)
 
             # ── Savings / optimise ─────────────────────────────────────
@@ -203,10 +419,30 @@ def create_cart_panel(session) -> None:
                 ).props("flat round dense size=sm color=grey-6").tooltip(t("exports.text"))
                 ui.button(
                     icon="content_copy",
-                    on_click=lambda: asyncio.ensure_future(_copy_shopping_list(session)),
+                    on_click=lambda: _copy_shopping_list(session),
                 ).props("flat round dense size=sm color=grey-6").tooltip(t("exports.copy"))
 
     # ── Reactive wiring ─────────────────────────────────────────────────
+
+    # Debounce the (DB-querying) savings recompute. The cart listener fires up to
+    # ~4× per tap (optimistic write, syncing-on, server reconcile, syncing-off);
+    # coalesce those into one computation shortly after the last change.
+    _savings_task: list = [None]
+
+    def _schedule_savings() -> None:
+        if not prefs.show_cart_savings:
+            return
+        if _savings_task[0] is not None and not _savings_task[0].done():
+            _savings_task[0].cancel()
+
+        async def _run() -> None:
+            try:
+                await asyncio.sleep(0.35)
+            except asyncio.CancelledError:
+                return
+            await _recompute_savings()
+
+        _savings_task[0] = asyncio.create_task(_run())
 
     def _on_cart() -> None:
         cart = session.cart
@@ -217,31 +453,18 @@ def create_cart_panel(session) -> None:
         total_label.set_text(total_str)
         if cart.savings > 0.01:
             savings_label.set_text(
-                f"−€ {cart.savings:.2f} {t('cart.savings').lower()}".replace(".", ",")
+                f"€ {cart.savings:.2f} {t('cart.savings').lower()}".replace(".", ",")
             )
             savings_row.set_visibility(True)
         else:
             savings_row.set_visibility(False)
 
-        # Only full-refresh when the set of cart SKUs changes (items added/removed).
-        # For qty-only changes update the labels in-place so images don't re-render.
-        current_skus = frozenset(it.sku for it in cart.items)
-        if current_skus != frozenset(_rendered_skus):
-            _items.refresh()
-        else:
-            for item in cart.items:
-                if item.sku in _qty_labels:
-                    _qty_labels[item.sku].set_text(str(item.quantity))
-                if item.sku in _price_labels:
-                    _price_labels[item.sku].set_text(
-                        f"€ {item.price_total:.2f}".replace(".", ",")
-                    )
+        # Reconcile the keyed rows: qty/sync changes update in place (images keep
+        # their DOM element), only added/removed/reordered rows touch the structure.
+        _sync()
 
-        asyncio.ensure_future(_load_images())
-        if prefs.cart_group_by_category:
-            asyncio.ensure_future(_load_categories())
-        if prefs.show_cart_savings:
-            asyncio.ensure_future(_recompute_savings())
+        # Savings depend on quantities too, so recompute on any change — debounced.
+        _schedule_savings()
 
     async def _recompute_savings() -> None:
         """Recompute cheaper-pack swaps for the current cart (off the render path)."""
@@ -273,7 +496,11 @@ def create_cart_panel(session) -> None:
                 f"{t('cart.optimise')} · "
                 + t("cart.save_amount", amount=f"{total:.2f}".replace(".", ","))
             )
-        _items.refresh()
+        # Update the per-row saving hints in place — no list refresh, no image churn.
+        for sku, refs in list(_rows.items()):
+            item = _cart_item(sku)
+            if item:
+                _fill_saving(refs, item)
 
     def _on_error(msg: str) -> None:
         ui.notify(msg, type="warning", position="top-right", timeout=3000, close_button=True)
@@ -304,148 +531,10 @@ def _group_items(items: list, cat_by_sku: dict) -> list[tuple[str, list]]:
     return [(cat, buckets[cat]) for cat in group_order(list(buckets))]
 
 
-def _render_cart_item(
-    item, session, cart_service, saving=None, promo=None, image=None
-) -> tuple:
-    """Render one cart item row: thumbnail | name+unit | price + stepper.
-
-    Returns (qty_label, price_label, img_element) for targeted in-place updates.
-    """
-    is_syncing = item.sku in session.syncing_skus
-    sku = item.sku
-    img_url = item.image_url or image or ""
-
-    img_el = None
-    with ui.element("div").classes("sp-cart-item"):
-        # Thumbnail
-        if img_url:
-            img_el = ui.image(thumbnail_url(img_url, 44)).classes("sp-cart-item-img")
-        else:
-            ui.element("div").classes("sp-cart-item-img")
-
-        # Name + unit (middle flex)
-        with ui.element("div").style("flex:1;min-width:0;overflow:hidden"):
-            from pyplus.ui.format import plus_product_url
-
-            product_url = plus_product_url(sku=sku)
-            if product_url:
-                ui.link(item.product, product_url, new_tab=True).classes("sp-cart-item-name").style(
-                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-                    "text-decoration:none;color:inherit;display:block"
-                ).tooltip("Bekijken op plus.nl")
-            else:
-                ui.label(item.product).classes("sp-cart-item-name").style(
-                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                )
-            if item.unit:
-                ui.label(item.unit).classes("sp-cart-item-unit")
-
-            # On-offer tag (type of promotion, e.g. "1+1 GRATIS")
-            if promo is not None:
-                from pyplus.services.promos import promo_tag_label
-
-                ui.label(promo_tag_label(promo)).classes("sp-promo-tag").style(
-                    "margin-top:2px"
-                ).tooltip("In de aanbieding")
-
-            # Cheaper-pack hint
-            if saving is not None and not is_syncing:
-                with (
-                    ui.element("div")
-                    .classes("sp-cart-saving-hint")
-                    .style(
-                        "display:flex;align-items:center;gap:.25rem;margin-top:2px;cursor:pointer"
-                    )
-                    .on(
-                        "click",
-                        lambda _, s=saving: asyncio.ensure_future(
-                            _apply_saving(session, cart_service, s)
-                        ),
-                    )
-                    .tooltip(
-                        t(
-                            "cart.swap_desc",
-                            cur_qty=saving.cur_qty,
-                            cur_pack=saving.cur_pack,
-                            new_qty=saving.new_qty,
-                            new_pack=saving.new_pack,
-                        )
-                    )
-                ):
-                    ui.icon("savings", size="12px").style("color:var(--c-brand-dark)")
-                    amt = f"{saving.saving:.2f}".replace(".", ",")
-                    ui.label(f"{t('cart.save_amount', amount=amt)} →").style(
-                        "font-size:10px;font-weight:600;color:var(--c-brand-dark);"
-                        "text-decoration:underline"
-                    )
-
-        # Price + stepper (right column)
-        with ui.element("div").style(
-            "display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0"
-        ):
-            price_lbl = ui.label(
-                f"€ {item.price_total:.2f}".replace(".", ",")
-            ).classes("sp-cart-item-price")
-            if item.quantity > 1:
-                ui.label(
-                    f"€ {item.price:.2f}/st".replace(".", ",")
-                ).style("font-size:10px;color:var(--c-text-4);text-align:right")
-
-            qty_lbl = _render_stepper(sku, item.quantity, is_syncing, session, cart_service)
-
-    return qty_lbl, price_lbl, img_el
-
-
-def _render_stepper(sku: str, qty: int, syncing: bool, session, cart_service) -> "ui.label":
-    """Inline qty stepper: [−] n [+] with optional spinner when syncing. Returns qty label."""
-    qty_lbl = None
-    with ui.element("div").classes("sp-qty"):
-        if syncing:
-            # Show spinner in place of buttons during API call
-            with ui.element("div").style(
-                "width:28px;height:28px;display:flex;align-items:center;justify-content:center"
-            ):
-                ui.spinner(size="14px", color="primary")
-            qty_lbl = ui.label(str(qty)).classes("sp-qty-count")
-            ui.element("div").style("width:28px;height:28px")
-        else:
-            # Decrement / remove
-            with (
-                ui.element("div")
-                .classes("sp-qty-btn")
-                .on(
-                    "click",
-                    lambda _, s=sku: asyncio.ensure_future(
-                        cart_service.remove(s) if cart_service else asyncio.sleep(0)
-                    ),
-                )
-            ):
-                ui.label("−").style(
-                    "font-size:15px;font-weight:700;line-height:1;pointer-events:none"
-                )
-
-            qty_lbl = ui.label(str(qty)).classes("sp-qty-count")
-
-            # Increment
-            with (
-                ui.element("div")
-                .classes("sp-qty-btn")
-                .on(
-                    "click",
-                    lambda _, s=sku: asyncio.ensure_future(
-                        cart_service.add(s) if cart_service else asyncio.sleep(0)
-                    ),
-                )
-            ):
-                ui.label("+").style(
-                    "font-size:15px;font-weight:700;line-height:1;pointer-events:none"
-                )
-    return qty_lbl
-
-
 def _confirm_clear_cart(cart_service) -> None:
-    with ui.dialog(value=True) as dlg, ui.card().style(
-        "max-width:320px;width:100%;padding:1.25rem"
+    with (
+        ui.dialog(value=True) as dlg,
+        ui.card().style("max-width:320px;width:100%;padding:1.25rem"),
     ):
         ui.label(t("cart.clear_confirm_title")).style(
             "font-size:16px;font-weight:700;color:var(--c-text)"
@@ -454,14 +543,17 @@ def _confirm_clear_cart(cart_service) -> None:
             "font-size:13px;color:var(--c-text-3);margin:.375rem 0 .875rem"
         )
         with ui.row().style("justify-content:flex-end;gap:.5rem;width:100%"):
-            ui.button(t("action.cancel"), on_click=dlg.close).props("flat rounded no-caps")
+            # Autofocus the safe (non-destructive) action on a confirm-delete dialog.
+            ui.button(t("action.cancel"), on_click=dlg.close).props(
+                "flat rounded no-caps autofocus"
+            )
 
             async def _yes() -> None:
                 dlg.close()
                 if cart_service:
                     await cart_service.clear_all()
 
-            ui.button(t("cart.clear"), on_click=lambda: asyncio.ensure_future(_yes())).props(
+            ui.button(t("cart.clear"), on_click=lambda: _yes()).props(
                 "unelevated rounded no-caps color=negative"
             )
 
@@ -536,7 +628,7 @@ def _show_optimise_dialog(session, cart_service, savings_by_sku: dict) -> None:
                             await _apply_saving(session, cart_service, snap)
 
                         ui.button(
-                            t("cart.apply"), on_click=lambda _, f=_one: asyncio.ensure_future(f())
+                            t("cart.apply"), on_click=lambda _, f=_one: f()
                         ).props("flat dense no-caps size=sm color=primary").style("flex-shrink:0")
 
             if savings:
@@ -557,7 +649,7 @@ def _show_optimise_dialog(session, cart_service, savings_by_sku: dict) -> None:
                     ui.button(
                         t("cart.apply_all"),
                         icon="done_all",
-                        on_click=lambda: asyncio.ensure_future(_all()),
+                        on_click=lambda: _all(),
                     ).props("unelevated rounded no-caps color=primary size=sm")
 
 
@@ -576,9 +668,8 @@ def create_mobile_cart_bar(session) -> None:
         bar_count = ui.label("0 stuks").style("font-size:13px;font-weight:700;color:var(--c-text)")
         ui.element("div").style("width:1px;height:16px;background:var(--c-border);margin:0 .5rem")
         bar_total = ui.label("€ –").style("font-size:15px;font-weight:700;color:var(--c-text)")
-        bar_savings = ui.label("").style(
-            "font-size:12px;font-weight:600;color:var(--c-brand-dark);margin-left:auto"
-        )
+        bar_savings = ui.label("").classes("sp-bar-savings")
+        bar_savings.set_visibility(False)
 
     async def _open_sheet() -> None:
         with (
@@ -588,7 +679,11 @@ def create_mobile_cart_bar(session) -> None:
         ):
             with ui.card().style(
                 "width:100%;border-radius:var(--r-xl) var(--r-xl) 0 0;"
-                "padding:0;max-height:85vh;overflow:hidden;display:flex;flex-direction:column"
+                "padding:0;max-height:85vh;overflow:hidden;display:flex;flex-direction:column;"
+                # nicegui-card defaults to align-items:flex-start, which lets the
+                # handle + cart panel collapse to their content width and bleed off
+                # the right on narrow phones — stretch children to the full width.
+                "align-items:stretch"
             ):
                 # Grab handle + explicit close — tapping either dismisses the sheet
                 # (a maximized dialog has no backdrop to tap, so it needs its own).
@@ -617,16 +712,25 @@ def create_mobile_cart_bar(session) -> None:
     def _on_cart() -> None:
         cart = session.cart
         n = cart.total_items
-        if n > _prev_count[0]:
-            # New item added — brief "pop" animation on the cart icon
-            cart_icon_wrap.classes(add="sp-cart-bump")
-            ui.timer(0.25, lambda: cart_icon_wrap.classes(remove="sp-cart-bump"), once=True)
-        _prev_count[0] = n
+        # Update the bar text FIRST. These run even when the listener fires from a
+        # detached task (cart adds go through asyncio.ensure_future, so there is no
+        # active slot/client context) — set_text targets each element's own client.
         bar_count.set_text(f"{n} {'stuk' if n == 1 else 'stuks'}")
         bar_total.set_text(f"€ {cart.final_total:.2f}".replace(".", ","))
         bar_savings.set_text(
-            f"−€ {cart.savings:.2f}".replace(".", ",") if cart.savings > 0.01 else ""
+            f"€ {cart.savings:.2f}".replace(".", ",") if cart.savings > 0.01 else ""
         )
+        bar_savings.set_visibility(cart.savings > 0.01)
+        # Best-effort "pop" on add. Creating a ui.timer needs a slot/client context,
+        # which is absent in the detached add task — so guard it and never let it
+        # block the text updates above (that blocked bar updates entirely before).
+        if n > _prev_count[0]:
+            try:
+                cart_icon_wrap.classes(add="sp-cart-bump")
+                ui.timer(0.25, lambda: cart_icon_wrap.classes(remove="sp-cart-bump"), once=True)
+            except Exception:
+                pass
+        _prev_count[0] = n
 
     session.add_cart_listener(_on_cart)
     _on_cart()

@@ -23,6 +23,7 @@ from nicegui import ui
 
 from plus.models import Promotion, PromotionProduct
 from pyplus.i18n import t
+from pyplus.ui.format import alt_text as _alt
 from pyplus.ui.format import thumbnail_url
 
 log = logging.getLogger(__name__)
@@ -36,6 +37,9 @@ class _DealsState:
     error: str = ""  # non-empty = load failed
     expanded: set[str] = field(default_factory=set)
     promo_products: dict[str, list[PromotionProduct]] = field(default_factory=dict)
+    # slug → cached children (job-warmed); drives the "Bekijken (N)" count and lets
+    # expand open instantly without a live call. Enrichment happens lazily on expand.
+    cached_children: dict[str, list[PromotionProduct]] = field(default_factory=dict)
     loading_slug: str = ""
     card_refreshers: dict = field(default_factory=dict)  # slug → per-card @ui.refreshable
 
@@ -132,11 +136,7 @@ def create_deals_lane(session) -> None:
                     return
                 cart_qty_map = {it.sku: it.quantity for it in session.cart.items}
                 syncing = session.syncing_skus
-                single_skus = {
-                    p.sku
-                    for p in state.promotions
-                    if p.is_single_product and p.sku
-                }
+                single_skus = {p.sku for p in state.promotions if p.is_single_product and p.sku}
                 in_cart_now = frozenset(s for s in single_skus if cart_qty_map.get(s, 0) > 0)
                 syncing_now = frozenset(single_skus & syncing)
 
@@ -160,6 +160,12 @@ def create_deals_lane(session) -> None:
     async def _load() -> None:
         today = datetime.date.today()
         week_start = today - datetime.timedelta(days=today.weekday())
+
+        # Job-warmed group-deal children (cache-only): gives us the child count for
+        # the "Bekijken (N)" label and an instant expand. Empty when the cache is cold.
+        from pyplus.services.promos import get_promo_children
+
+        state.cached_children = await get_promo_children(session.store_number, week_start)
 
         # ── 1. Try DB cache ────────────────────────────────────────────────
         cached = await _read_cache(session.store_number, week_start)
@@ -245,7 +251,9 @@ def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, r
         with ui.element("div").style("display:flex;align-items:center;gap:.625rem"):
             # Thumbnail
             if promo.image_url:
-                ui.image(thumbnail_url(promo.image_url, 52)).classes("sp-promo-img")
+                ui.image(thumbnail_url(promo.image_url, 52)).classes("sp-promo-img").props(
+                    f'alt="{_alt(promo.name or promo.brand)}"'
+                )
             else:
                 ui.element("div").classes("sp-promo-img").style("background:var(--c-border)")
 
@@ -284,11 +292,13 @@ def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, r
                 if promo.is_single_product and promo.sku:
                     _render_promo_stepper(promo, cart_qty, is_syncing, cart_service)
                 else:
-                    # Group deal: expand/collapse button
-                    n_products = len(state.promo_products.get(promo.slug, []))
-                    label = (
-                        f"{n_products}" if n_products else ("Minder" if is_expanded else "Bekijken")
-                    )
+                    # Group deal: expand/collapse button. Show the child count up front
+                    # ("Bekijken (N)") from the warmed cache; fall back to the fetched
+                    # list once expanded, or a bare "Bekijken" when the count is unknown.
+                    n_products = len(state.promo_products.get(promo.slug)) if (
+                        promo.slug in state.promo_products
+                    ) else len(state.cached_children.get(promo.slug, []))
+                    label = f"Bekijken ({n_products})" if n_products else "Bekijken"
                     icon = "expand_less" if is_expanded else "expand_more"
                     with ui.element("div").style(
                         "display:flex;flex-direction:column;align-items:center;gap:1px"
@@ -325,9 +335,11 @@ def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, r
 
 
 def _render_promo_stepper(promo: Promotion, cart_qty: int, syncing: bool, cart_service) -> None:
+    from pyplus.ui.components.controls import add_button, stepper_button
+
     if syncing:
         with ui.element("div").style(
-            "width:32px;height:32px;display:flex;align-items:center;justify-content:center"
+            "width:36px;height:36px;display:flex;align-items:center;justify-content:center"
         ):
             ui.spinner(size="14px", color="primary")
         return
@@ -335,65 +347,31 @@ def _render_promo_stepper(promo: Promotion, cart_qty: int, syncing: bool, cart_s
     name = promo.name or promo.brand
     price = promo.price_new or promo.price_was
 
+    def _add(_=None) -> None:
+        if cart_service:
+            asyncio.ensure_future(
+                cart_service.add(
+                    promo.sku,
+                    product_name=name,
+                    product_unit="",
+                    product_price=price,
+                    product_image=promo.image_url,
+                )
+            )
+
     if cart_qty == 0:
-        with (
-            ui.element("div")
-            .classes("sp-search-add-btn")
-            .on(
-                "click",
-                lambda _, p=promo, n=name, pr=price: asyncio.ensure_future(
-                    cart_service.add(
-                        p.sku,
-                        product_name=n,
-                        product_unit="",
-                        product_price=pr,
-                        product_image=p.image_url,
-                    )
-                    if cart_service
-                    else asyncio.sleep(0)
-                ),
-            )
-        ):
-            ui.label("+").style(
-                "font-size:18px;font-weight:700;color:var(--c-brand-dark);line-height:1;pointer-events:none"
-            )
+        add_button(aria_label=t("a11y.add_to_cart"), on_click=_add)
     else:
         with ui.element("div").classes("sp-qty"):
-            with (
-                ui.element("div")
-                .classes("sp-qty-btn")
-                .on(
-                    "click",
-                    lambda _, p=promo: asyncio.ensure_future(
-                        cart_service.remove(p.sku) if cart_service else asyncio.sleep(0)
-                    ),
-                )
-            ):
-                ui.label("−").style(
-                    "font-size:15px;font-weight:700;line-height:1;pointer-events:none"
-                )
+            stepper_button(
+                "−",
+                aria_label=t("a11y.qty_decrease"),
+                on_click=lambda _: asyncio.ensure_future(
+                    cart_service.remove(promo.sku) if cart_service else asyncio.sleep(0)
+                ),
+            )
             ui.label(str(cart_qty)).classes("sp-qty-count")
-            with (
-                ui.element("div")
-                .classes("sp-qty-btn")
-                .on(
-                    "click",
-                    lambda _, p=promo, n=name, pr=price: asyncio.ensure_future(
-                        cart_service.add(
-                            p.sku,
-                            product_name=n,
-                            product_unit="",
-                            product_price=pr,
-                            product_image=p.image_url,
-                        )
-                        if cart_service
-                        else asyncio.sleep(0)
-                    ),
-                )
-            ):
-                ui.label("+").style(
-                    "font-size:15px;font-weight:700;line-height:1;pointer-events:none"
-                )
+            stepper_button("+", aria_label=t("a11y.qty_increase"), on_click=_add)
 
 
 def _render_promo_product(prod: PromotionProduct, session, cart_service) -> None:
@@ -403,7 +381,9 @@ def _render_promo_product(prod: PromotionProduct, session, cart_service) -> None
 
     with ui.element("div").classes("sp-search-result").style("padding:.375rem .5rem"):
         if prod.image_url:
-            ui.image(thumbnail_url(prod.image_url, 36)).classes("sp-search-img").style("width:36px;height:36px")
+            ui.image(thumbnail_url(prod.image_url, 36)).classes("sp-search-img").style(
+                "width:36px;height:36px"
+            ).props(f'alt="{_alt(prod.name)}"')
         else:
             ui.element("div").classes("sp-search-img").style(
                 "width:36px;height:36px;background:var(--c-border)"
@@ -434,16 +414,15 @@ def _render_promo_product(prod: PromotionProduct, session, cart_service) -> None
                 )
             elif is_syncing:
                 with ui.element("div").style(
-                    "width:32px;height:32px;display:flex;align-items:center;justify-content:center"
+                    "width:36px;height:36px;display:flex;align-items:center;justify-content:center"
                 ):
                     ui.spinner(size="14px", color="primary")
-            elif cart_qty == 0:
-                with (
-                    ui.element("div")
-                    .classes("sp-search-add-btn")
-                    .on(
-                        "click",
-                        lambda _, p=prod: asyncio.ensure_future(
+            else:
+                from pyplus.ui.components.controls import add_button, stepper_button
+
+                def _add(_=None, p=prod) -> None:
+                    if cart_service:
+                        asyncio.ensure_future(
                             cart_service.add(
                                 p.sku,
                                 product_name=p.name,
@@ -451,51 +430,21 @@ def _render_promo_product(prod: PromotionProduct, session, cart_service) -> None
                                 product_price=p.price_new or p.price_original,
                                 product_image=p.image_url,
                             )
-                            if cart_service
-                            else asyncio.sleep(0)
-                        ),
-                    )
-                ):
-                    ui.label("+").style(
-                        "font-size:18px;font-weight:700;color:var(--c-brand-dark);line-height:1;pointer-events:none"
-                    )
-            else:
-                with ui.element("div").classes("sp-qty"):
-                    with (
-                        ui.element("div")
-                        .classes("sp-qty-btn")
-                        .on(
-                            "click",
-                            lambda _, p=prod: asyncio.ensure_future(
+                        )
+
+                if cart_qty == 0:
+                    add_button(aria_label=t("a11y.add_to_cart"), on_click=_add)
+                else:
+                    with ui.element("div").classes("sp-qty"):
+                        stepper_button(
+                            "−",
+                            aria_label=t("a11y.qty_decrease"),
+                            on_click=lambda _, p=prod: asyncio.ensure_future(
                                 cart_service.remove(p.sku) if cart_service else asyncio.sleep(0)
                             ),
                         )
-                    ):
-                        ui.label("−").style(
-                            "font-size:15px;font-weight:700;line-height:1;pointer-events:none"
-                        )
-                    ui.label(str(cart_qty)).classes("sp-qty-count")
-                    with (
-                        ui.element("div")
-                        .classes("sp-qty-btn")
-                        .on(
-                            "click",
-                            lambda _, p=prod: asyncio.ensure_future(
-                                cart_service.add(
-                                    p.sku,
-                                    product_name=p.name,
-                                    product_unit=p.subtitle,
-                                    product_price=p.price_new or p.price_original,
-                                    product_image=p.image_url,
-                                )
-                                if cart_service
-                                else asyncio.sleep(0)
-                            ),
-                        )
-                    ):
-                        ui.label("+").style(
-                            "font-size:15px;font-weight:700;line-height:1;pointer-events:none"
-                        )
+                        ui.label(str(cart_qty)).classes("sp-qty-count")
+                        stepper_button("+", aria_label=t("a11y.qty_increase"), on_click=_add)
 
 
 # ── Cache helpers ──────────────────────────────────────────────────────────────
@@ -536,8 +485,24 @@ async def _save_cache(
     from pyplus.db import repo
     from pyplus.db.engine import AsyncSessionLocal
 
-    payload = json.dumps({"promotions": [dataclasses.asdict(p) for p in promotions]})
     async with AsyncSessionLocal() as db:
+        # Preserve the job-warmed group-deal children — this lane's refresh only
+        # updates the promotions list (prices/sort); the children (slug → products)
+        # stay valid for the week. Dropping them would silently break the cart's
+        # on-offer hint for child SKUs until the next refresh_promotions run.
+        existing = await repo.get_promotions_cache(db, store_number, week_start, False)
+        children: dict = {}
+        if existing is not None:
+            try:
+                children = json.loads(existing.payload_json).get("children", {}) or {}
+            except Exception:
+                children = {}
+        payload = json.dumps(
+            {
+                "promotions": [dataclasses.asdict(p) for p in promotions],
+                "children": children,
+            }
+        )
         await repo.upsert_promotions_cache(db, store_number, week_start, False, payload)
 
 
@@ -626,8 +591,13 @@ async def _toggle_expand(slug: str, state: _DealsState, session, refresh_fn) -> 
         state.loading_slug = slug
         refresh_fn.refresh()
         try:
-            products = await session.client.get_promotion_products_api(slug)
-            products = [p for p in products if p.sku and not p.sku.startswith("0")]
+            # Prefer the cache the promotions job warmed (loaded into state at lane
+            # load — instant, no PLUS call); fall back to a live fetch when the cache
+            # is cold or predates children.
+            products = state.cached_children.get(slug)
+            if products is None:
+                products = await session.client.get_promotion_products_api(slug)
+                products = [p for p in products if p.sku and not p.sku.startswith("0")]
             # The promo-detail API returns IsAvailable=False / NewPrice=0 for every
             # child — useless. Trust the store catalogue for availability + price.
             await _enrich_from_catalogue(session, products)

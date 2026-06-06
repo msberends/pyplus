@@ -11,6 +11,19 @@ from pyplus.i18n import t
 
 log = logging.getLogger(__name__)
 
+# Each login spawns a headless Chromium (~20s). Cap concurrent logins so repeated
+# submits can't exhaust memory; further attempts queue rather than pile up browsers.
+_MAX_CONCURRENT_LOGINS = 2
+_login_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_LOGINS)
+
+
+def _mask_email(email: str) -> str:
+    """Mask an email for logs: 'm***@umcg.nl'. Never log the full local part."""
+    local, _, domain = (email or "").partition("@")
+    if not domain:
+        return "***"
+    return f"{local[:1]}***@{domain}"
+
 
 # ── Public entry point ─────────────────────────────────────────────────────────
 
@@ -212,27 +225,29 @@ async def _do_login_core(
     log.info("Login S0 — browser starten")
     client = PlusClient(headless=True)
     try:
-        await client.__aenter__()
-        log.info("Login S1 — OAuth login starten (%s)", email)
-        on_progress(t("login.progress_logging_in"))
-        success = await client.login(email, password)
-        if not success:
-            await client.__aexit__(None, None, None)
-            on_error(t("login.error_failed"))
-            return
+        # Throttle concurrent logins — each holds a headless browser for ~20s.
+        async with _login_semaphore:
+            await client.__aenter__()
+            log.info("Login S1 — OAuth login starten (%s)", _mask_email(email))
+            on_progress(t("login.progress_logging_in"))
+            success = await client.login(email, password)
+            if not success:
+                await client.__aexit__(None, None, None)
+                on_error(t("login.error_failed"))
+                return
 
-        log.info("Login S2 — session state ophalen (cart-navigatie)")
-        on_progress(t("login.progress_cart"))
-        session_state = await client.get_session_state()
-        log.info(
-            "Login S2 done — checkout_id=%s store=%s",
-            session_state.checkout_id[:8] if session_state.checkout_id else "?",
-            session_state.store_number,
-        )
+            log.info("Login S2 — session state ophalen (cart-navigatie)")
+            on_progress(t("login.progress_cart"))
+            session_state = await client.get_session_state()
+            log.info(
+                "Login S2 done — checkout_id=%s store=%s",
+                session_state.checkout_id[:8] if session_state.checkout_id else "?",
+                session_state.store_number,
+            )
 
-        log.info("Login S3 — live cart ophalen")
-        cart = await client.get_cart_api()
-        log.info("Login S3 done — %d item(s) in cart", len(cart.items) if cart else 0)
+            log.info("Login S3 — live cart ophalen")
+            cart = await client.get_cart_api()
+            log.info("Login S3 done — %d item(s) in cart", len(cart.items) if cart else 0)
 
         log.info("Login S4 — gebruiker opzoeken/aanmaken in DB")
         onewelcome_id = session_state.onewelcome_user_id
@@ -247,6 +262,7 @@ async def _do_login_core(
                     plus_email_enc=email_enc,
                     onewelcome_user_id=onewelcome_id,
                     store_number=session_state.store_number or None,
+                    store_name=session_state.store_name,
                     user_store_id=session_state.user_store_id,
                 )
             else:
@@ -254,6 +270,7 @@ async def _do_login_core(
                     db,
                     user.id,
                     store_number=session_state.store_number or None,
+                    store_name=session_state.store_name,
                     user_store_id=session_state.user_store_id,
                 )
                 await db.refresh(user)
@@ -333,5 +350,5 @@ def _show_store_confirmation(store_number: int) -> None:
             )
             with ui.row().style("gap:.5rem;justify-content:flex-end;margin-top:.25rem"):
                 ui.button(t("login.store_confirm"), on_click=dlg.close).props(
-                    "unelevated rounded color=primary no-caps"
+                    "unelevated rounded color=primary no-caps autofocus"
                 )

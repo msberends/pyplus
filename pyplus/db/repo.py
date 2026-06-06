@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 import logging
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -51,6 +51,7 @@ async def create_user(
     onewelcome_user_id: str,
     display_name: str = "",
     store_number: int | None = None,
+    store_name: str = "",
     user_store_id: str = "",
 ) -> User:
     user = User(
@@ -58,6 +59,7 @@ async def create_user(
         one_welcome_user_id=onewelcome_user_id,
         display_name=display_name,
         store_number=store_number,
+        store_name=store_name,
         user_store_id=user_store_id,
         created_at=datetime.datetime.utcnow(),
         last_login_at=datetime.datetime.utcnow(),
@@ -74,6 +76,7 @@ async def update_user_login(
     user_id: int,
     *,
     store_number: int | None = None,
+    store_name: str = "",
     user_store_id: str = "",
     display_name: str = "",
 ) -> None:
@@ -83,6 +86,8 @@ async def update_user_login(
     user.last_login_at = datetime.datetime.utcnow()
     if store_number is not None:
         user.store_number = store_number
+    if store_name:
+        user.store_name = store_name
     if user_store_id:
         user.user_store_id = user_store_id
     if display_name:
@@ -588,6 +593,20 @@ async def get_pack_alternatives(
     return {sku: groups.get((r.brand, r.name), [r]) for sku, r in base.items()}
 
 
+async def _fts_available(db: AsyncSession) -> bool:
+    """True when the product_cache FTS5 index exists (cheap sqlite_master lookup)."""
+    from pyplus.db.fts import FTS_TABLE
+
+    row = (
+        await db.execute(
+            text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:n").bindparams(
+                n=FTS_TABLE
+            )
+        )
+    ).first()
+    return row is not None
+
+
 async def search_product_cache(
     db: AsyncSession, store_number: int, query: str, limit: int = 24
 ) -> list[ProductCache]:
@@ -596,10 +615,35 @@ async def search_product_cache(
     Every whitespace-separated token must appear as a substring anywhere in
     the name or brand (case-insensitive AND across tokens). Available products
     sort first, then by name.
+
+    Uses the FTS5 trigram index when present (indexed substring search); falls
+    back to a LIKE scan for short tokens or when the index is absent (older DBs,
+    or the create_all-bootstrapped test DB without it).
     """
+    from pyplus.db.fts import TRIGRAM_MIN
+
     tokens = [tok for tok in query.lower().split() if tok]
     if not tokens:
         return []
+
+    # Fast path: every token long enough for the trigram tokenizer and the index exists.
+    if all(len(tok) >= TRIGRAM_MIN for tok in tokens) and await _fts_available(db):
+        # Quote each token so trigram treats it as a literal substring; "" escapes ".
+        match = " AND ".join('"' + tok.replace('"', '""') + '"' for tok in tokens)
+        # The FTS table must be named (not aliased) on the left of MATCH.
+        fts_stmt = select(ProductCache).from_statement(
+            text(
+                "SELECT pc.* FROM product_cache pc "
+                "JOIN product_cache_fts ON product_cache_fts.rowid = pc.rowid "
+                "WHERE pc.store_number = :store AND product_cache_fts MATCH :match "
+                "ORDER BY pc.is_available DESC, pc.name "
+                "LIMIT :limit"
+            )
+        )
+        result = await db.execute(fts_stmt, {"store": store_number, "match": match, "limit": limit})
+        return list(result.scalars().all())
+
+    # Fallback: LIKE scan (short tokens, or no FTS index).
     stmt = select(ProductCache).where(ProductCache.store_number == store_number)
     for tok in tokens:
         anywhere = f"%{tok}%"
@@ -727,44 +771,47 @@ async def upsert_purchased_products(
     user_id: int,
     products: list,  # list[plus.models.PurchasedProduct]
 ) -> None:
+    """Bulk upsert purchase-history rows via ON CONFLICT (one statement per chunk)."""
     import json as _json
 
     now = datetime.datetime.utcnow()
-    for p in products:
-        result = await db.execute(
-            select(PurchasedProductCache).where(
-                PurchasedProductCache.user_id == user_id,
-                PurchasedProductCache.sku == p.sku,
-            )
+    rows = [
+        {
+            "user_id": user_id,
+            "sku": p.sku,
+            "name": p.name,
+            "brand": getattr(p, "brand", "") or "",
+            "subtitle": getattr(p, "subtitle", "") or "",
+            "slug": getattr(p, "slug", "") or "",
+            "image_url": getattr(p, "image_url", "") or "",
+            "price": getattr(p, "price", 0.0) or 0.0,
+            "is_available": getattr(p, "is_available", False),
+            "categories_json": _json.dumps(getattr(p, "categories", None) or []),
+            "fetched_at": now,
+        }
+        for p in products
+        if p.sku
+    ]
+    if not rows:
+        return
+    for chunk_start in range(0, len(rows), 500):
+        chunk = rows[chunk_start : chunk_start + 500]
+        stmt = sqlite_insert(PurchasedProductCache).values(chunk)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["user_id", "sku"],
+            set_={
+                "name": stmt.excluded.name,
+                "brand": stmt.excluded.brand,
+                "subtitle": stmt.excluded.subtitle,
+                "slug": stmt.excluded.slug,
+                "image_url": stmt.excluded.image_url,
+                "price": stmt.excluded.price,
+                "is_available": stmt.excluded.is_available,
+                "categories_json": stmt.excluded.categories_json,
+                "fetched_at": stmt.excluded.fetched_at,
+            },
         )
-        row = result.scalar_one_or_none()
-        cats = _json.dumps(p.categories if hasattr(p, "categories") else [])
-        if row:
-            row.name = p.name
-            row.brand = getattr(p, "brand", "")
-            row.subtitle = getattr(p, "subtitle", "")
-            row.slug = getattr(p, "slug", "")
-            row.image_url = getattr(p, "image_url", "")
-            row.price = getattr(p, "price", 0.0)
-            row.is_available = getattr(p, "is_available", False)
-            row.categories_json = cats
-            row.fetched_at = now
-        else:
-            db.add(
-                PurchasedProductCache(
-                    user_id=user_id,
-                    sku=p.sku,
-                    name=p.name,
-                    brand=getattr(p, "brand", ""),
-                    subtitle=getattr(p, "subtitle", ""),
-                    slug=getattr(p, "slug", ""),
-                    image_url=getattr(p, "image_url", ""),
-                    price=getattr(p, "price", 0.0),
-                    is_available=getattr(p, "is_available", False),
-                    categories_json=cats,
-                    fetched_at=now,
-                )
-            )
+        await db.execute(stmt)
     await db.commit()
 
 
@@ -795,53 +842,57 @@ async def get_cached_order_ids(db: AsyncSession, user_id: int) -> set[str]:
 
 
 async def upsert_order_summaries(db: AsyncSession, user_id: int, orders: list) -> None:
-    """Store/update OrderSummary rows (no line items)."""
+    """Store/update OrderSummary rows (no line items) — bulk ON CONFLICT upsert."""
     now = datetime.datetime.utcnow()
-    for o in orders:
-        result = await db.execute(
-            select(OrderCache).where(
-                OrderCache.user_id == user_id,
-                OrderCache.order_id == o.order_id,
-            )
-        )
-        row = result.scalar_one_or_none()
-        delivery = None
+
+    def _delivery(o) -> datetime.date | None:
         if o.delivery_date and o.delivery_date != "1900-01-01":
             try:
-                delivery = datetime.date.fromisoformat(o.delivery_date)
+                return datetime.date.fromisoformat(o.delivery_date)
             except ValueError:
-                pass
-        if row:
-            row.order_number = o.order_number
-            row.delivery_date = delivery
-            row.total_price = o.total_price
-            row.status = o.status
-            row.channel = o.channel
-            row.is_active = o.is_active
-            row.fetched_at = now
-        else:
-            db.add(
-                OrderCache(
-                    user_id=user_id,
-                    order_id=o.order_id,
-                    order_number=o.order_number,
-                    delivery_date=delivery,
-                    total_price=o.total_price,
-                    status=o.status,
-                    channel=o.channel,
-                    is_active=o.is_active,
-                    fetched_at=now,
-                )
-            )
+                return None
+        return None
+
+    rows = [
+        {
+            "user_id": user_id,
+            "order_id": o.order_id,
+            "order_number": o.order_number,
+            "delivery_date": _delivery(o),
+            "total_price": o.total_price,
+            "status": o.status,
+            "channel": o.channel,
+            "is_active": o.is_active,
+            "fetched_at": now,
+        }
+        for o in orders
+        if o.order_id
+    ]
+    if not rows:
+        return
+    for chunk_start in range(0, len(rows), 500):
+        chunk = rows[chunk_start : chunk_start + 500]
+        stmt = sqlite_insert(OrderCache).values(chunk)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["user_id", "order_id"],
+            set_={
+                "order_number": stmt.excluded.order_number,
+                "delivery_date": stmt.excluded.delivery_date,
+                "total_price": stmt.excluded.total_price,
+                "status": stmt.excluded.status,
+                "channel": stmt.excluded.channel,
+                "is_active": stmt.excluded.is_active,
+                "fetched_at": stmt.excluded.fetched_at,
+            },
+        )
+        await db.execute(stmt)
     await db.commit()
 
 
 async def upsert_order_items(db: AsyncSession, user_id: int, order_id: str, items: list) -> None:
     """Store line items for one order (idempotent — deletes existing items first)."""
     await db.execute(
-        __import__("sqlalchemy")
-        .delete(OrderItemCache)
-        .where(
+        delete(OrderItemCache).where(
             OrderItemCache.user_id == user_id,
             OrderItemCache.order_id == order_id,
         )
@@ -966,15 +1017,17 @@ async def get_dish_availability(
     db: AsyncSession, user_id: int, dish_id: int
 ) -> tuple[int, int, int]:
     """Return (available, unavailable, unknown) counts across all non-optional ingredients."""
-    ingredients = await get_ingredients(db, dish_id)
+    ingredients = [ing for ing in await get_ingredients(db, dish_id) if not ing.optional]
+    # Single batched lookup instead of one query per ingredient.
+    cached = await get_ingredient_skus_by_skus(
+        db, user_id, [ing.sku for ing in ingredients if ing.sku]
+    )
     available = unavailable = unknown = 0
     for ing in ingredients:
-        if ing.optional:
-            continue
-        cached = await get_ingredient_sku(db, user_id, ing.sku)
-        if cached is None or cached.last_seen_available is None:
+        row = cached.get(ing.sku)
+        if row is None or row.last_seen_available is None:
             unknown += 1
-        elif cached.last_seen_available:
+        elif row.last_seen_available:
             available += 1
         else:
             unavailable += 1

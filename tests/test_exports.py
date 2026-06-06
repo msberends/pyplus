@@ -89,14 +89,14 @@ def test_text_list_total_formatted():
 def test_text_list_savings_shown():
     cart = _cart([("Yoghurt", 1.49, 2)], total=1.49, savings=1.49)
     text = build_text_list(cart)
-    assert "Bespaard" in text
+    assert "Korting" in text
     assert "1,49" in text
 
 
 def test_text_list_no_savings_when_zero():
     cart = _cart([("Yoghurt", 1.49, 2)], total=2.98, savings=0.0)
     text = build_text_list(cart)
-    assert "Bespaard" not in text
+    assert "Korting" not in text
 
 
 def test_text_list_empty_cart():
@@ -204,7 +204,7 @@ async def test_ical_lunch_prefix():
     cal = Calendar.from_ical(ical_bytes)
     events = [c for c in cal.walk() if c.name == "VEVENT"]
     assert len(events) == 1
-    assert str(events[0]["summary"]) == "Lunch: Soep"
+    assert str(events[0]["summary"]) == "Extra: Soep"
     # lunch2 → Tuesday
     assert events[0]["dtstart"].dt == datetime.date(2026, 6, 2)
 

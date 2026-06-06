@@ -13,6 +13,14 @@ _SEARCH_BASE = "https://www.plus.nl/zoekresultaten?SearchTerm="
 _CTFASSETS_HOST = "images.ctfassets.net"
 
 
+def alt_text(name: str) -> str:
+    """Sanitize a product name for use as an HTML alt / aria-label attribute value.
+
+    Strips characters that would break the quoted NiceGUI props string.
+    """
+    return (name or "").replace('"', "").replace("\\", "").strip()
+
+
 def thumbnail_url(url: str, size: int = 44) -> str:
     """Return a resized Contentful image URL (w=size×3, WebP, square crop).
 
@@ -26,6 +34,7 @@ def thumbnail_url(url: str, size: int = 44) -> str:
     px = size * 3
     sep = "&" if "?" in url else "?"
     return f"{url}{sep}w={px}&h={px}&fit=thumb&fm=webp"
+
 
 _MEAT_EMOJI = {
     "vega": "🌱",

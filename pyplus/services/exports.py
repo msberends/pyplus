@@ -85,7 +85,7 @@ async def _build_events(user_id: int, week_start: datetime.date) -> list[Event]:
         event.add("dtend", event_date + datetime.timedelta(days=1))
         event.add(
             "summary",
-            f"Lunch: {dish.name}" if row.slot.startswith("lunch") else dish.name,
+            f"Extra: {dish.name}" if row.slot.startswith("lunch") else dish.name,
         )
         event.add("status", "CONFIRMED")
         event.add("transp", "TRANSPARENT")
@@ -186,8 +186,8 @@ def build_text_list(cart, week_label: str = "") -> str:
     lines.append(f"  {'Totaal':<{name_w + 6}}  {total:>8}")
 
     if cart.savings > 0.01:
-        savings = f"−€ {cart.savings:.2f}".replace(".", ",")
-        lines.append(f"  {'Bespaard':<{name_w + 6}}  {savings:>8}")
+        savings = f"€ {cart.savings:.2f}".replace(".", ",")
+        lines.append(f"  {'Korting':<{name_w + 6}}  {savings:>8}")
 
     lines += [
         "",

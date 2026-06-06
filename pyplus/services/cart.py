@@ -90,14 +90,12 @@ class CartService:
         from plus.models import Cart
 
         snapshot = self.session.cart
-        self.session.set_cart(Cart(items=[], savings=0.0))
+        self.session.set_cart(Cart(items=[], final_total=0.0, savings=0.0))
 
         try:
             checkout = None
             for item in items:
-                checkout = await self.session.client.remove_from_cart_api(
-                    item.sku, item.quantity
-                )
+                checkout = await self.session.client.remove_from_cart_api(item.sku, item.quantity)
             if checkout:
                 from plus.client import _parse_cart_from_checkout
 
@@ -173,6 +171,10 @@ class CartService:
                     for it in new_cart.items
                 ]
                 new_cart = new_cart.model_copy(update={"items": patched})
+            # Re-apply any taps that arrived while this call was in flight, so the
+            # authoritative response doesn't clobber newer optimistic state (which
+            # would make quantities/total briefly jump backwards).
+            new_cart = self._overlay_pending(new_cart, self.session.cart)
             self.session.set_cart(new_cart)
 
         except Exception as exc:
@@ -186,6 +188,42 @@ class CartService:
         finally:
             self.session.syncing_skus.discard(sku)
             self.session.touch()  # re-render to clear sync indicator
+
+    def _overlay_pending(self, server_cart, optimistic_cart):
+        """Overlay still-unflushed optimistic deltas onto the authoritative cart.
+
+        When this flush started, its delta was popped from ``_pending``; anything
+        left there (or re-added by taps during the network call, for this or other
+        SKUs) must survive the reconcile. New items not yet known to the server are
+        carried over from the optimistic cart. The total is adjusted from the
+        server's *discounted* total by each pending line's value — never recomputed
+        as the gross sum — so applied promotions are kept and the total doesn't flash.
+        """
+        if not self._pending:
+            return server_cart
+
+        opt_by_sku = {it.sku: it for it in optimistic_cart.items}
+        items = []
+        seen = set()
+        delta_value = 0.0
+        for it in server_cart.items:
+            seen.add(it.sku)
+            pend = self._pending.get(it.sku, 0)
+            new_qty = it.quantity + pend
+            if new_qty > 0:
+                items.append(it.model_copy(update={"quantity": new_qty}) if pend else it)
+                delta_value += it.price * pend
+            else:
+                delta_value -= it.price * it.quantity  # whole line removed in-flight
+        # Pending adds for SKUs the server hasn't seen yet — keep the optimistic line.
+        for sku, delta in self._pending.items():
+            if delta > 0 and sku not in seen and sku in opt_by_sku:
+                opt = opt_by_sku[sku]
+                items.append(opt)
+                delta_value += opt.price * opt.quantity
+
+        new_total = max(0.0, round(server_cart.final_total + delta_value, 2))
+        return server_cart.model_copy(update={"items": items, "final_total": new_total})
 
     def _apply_optimistic(
         self,
@@ -202,10 +240,12 @@ class CartService:
         cart = self.session.cart
         new_items = list(cart.items)
         found = False
+        unit_price = price  # for a brand-new line, the caller supplies the price
 
         for i, item in enumerate(new_items):
             if item.sku == sku:
                 found = True
+                unit_price = item.price  # known per-unit price of the existing line
                 new_qty = item.quantity + delta
                 if new_qty > 0:
                     new_items[i] = item.model_copy(update={"quantity": new_qty})
@@ -226,7 +266,13 @@ class CartService:
                 )
             )
 
-        new_total = sum(it.price_total for it in new_items)
+        # Adjust the existing (already-discounted) total by just this line's value
+        # rather than recomputing the gross sum of every line. Recomputing gross
+        # discarded the cart's applied promotions, so the total flashed *up* to the
+        # undiscounted amount and then dropped back when the server reconciled —
+        # that's the unprofessional "bump". Keeping the discounted base avoids it;
+        # any promo on the changed line itself is corrected on reconcile (small).
+        new_total = max(0.0, round(cart.final_total + unit_price * delta, 2))
         self.session.set_cart(
             cart.model_copy(update={"items": new_items, "final_total": new_total})
         )
