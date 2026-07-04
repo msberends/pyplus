@@ -52,7 +52,9 @@ class RecommenderArtifact:
     """Precomputed dish scores — {dish_id: {slot: score}}."""
 
     scores: dict[int, dict[str, float]] = field(default_factory=dict)
-    computed_at: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
+    computed_at: datetime.datetime = field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+    )
     dish_meta: dict[int, DishMeta] = field(default_factory=dict)
     never_cooked_ids: set[int] = field(default_factory=set)
 

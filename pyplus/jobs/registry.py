@@ -34,7 +34,9 @@ async def _is_locked(user_id: int, resource: str) -> bool:
     async with AsyncSessionLocal() as db:
         row = await repo.get_sync_state(db, user_id, resource)
     if row and row.last_status == "in_progress" and row.last_synced_at:
-        age = (datetime.datetime.utcnow() - row.last_synced_at).total_seconds()
+        age = (
+            datetime.datetime.now(datetime.UTC).replace(tzinfo=None) - row.last_synced_at
+        ).total_seconds()
         if age < _LOCK_TTL_SECONDS:
             log.info("[%s] user=%d already in progress, skipping", resource, user_id)
             return True
@@ -50,16 +52,24 @@ async def _catalogue_is_stale(user_id: int, max_age_days: int = 7) -> bool:
         row = await repo.get_sync_state(db, user_id, "catalogue")
     if not row or row.last_status != "ok" or not row.last_synced_at:
         return True
-    age_days = (datetime.datetime.utcnow() - row.last_synced_at).total_seconds() / 86400
+    age_days = (
+        datetime.datetime.now(datetime.UTC).replace(tzinfo=None) - row.last_synced_at
+    ).total_seconds() / 86400
     return age_days >= max_age_days
 
 
-async def _set_status(user_id: int, resource: str, status: str, detail: str | None = None) -> None:
+async def _set_status(
+    user_id: int,
+    resource: str,
+    status: str,
+    detail: str | None = None,
+    duration_seconds: float | None = None,
+) -> None:
     from pyplus.db import repo
     from pyplus.db.engine import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
-        await repo.upsert_sync_state(db, user_id, resource, status, detail)
+        await repo.upsert_sync_state(db, user_id, resource, status, detail, duration_seconds)
 
 
 # ── Promotions ─────────────────────────────────────────────────────────────────
@@ -75,6 +85,7 @@ async def refresh_promotions(*, user_id: int, client, store_number: int) -> None
     if await _is_locked(user_id, resource):
         return
 
+    t0 = datetime.datetime.now(datetime.UTC)
     await _set_status(user_id, resource, "in_progress")
     try:
         result = await client.get_promotions_api(next_week=False)
@@ -86,14 +97,12 @@ async def refresh_promotions(*, user_id: int, client, store_number: int) -> None
         # — a missing child list just means no hint / a live fetch on expand.
         children: dict[str, list] = {}
         for promo in result.promotions:
-            if promo.is_single_product or promo.is_free_delivery or not promo.slug:
+            if promo.is_single_product or not promo.slug:
                 continue
             try:
                 prods = await client.get_promotion_products_api(promo.slug)
                 children[promo.slug] = [
-                    dataclasses.asdict(p)
-                    for p in prods
-                    if p.sku and not p.sku.startswith("0")
+                    dataclasses.asdict(p) for p in prods if p.sku and not p.sku.startswith("0")
                 ]
             except Exception as exc:
                 log.warning("[promotions] children fetch failed for %s: %s", promo.slug, exc)
@@ -110,7 +119,8 @@ async def refresh_promotions(*, user_id: int, client, store_number: int) -> None
         async with AsyncSessionLocal() as db:
             await repo.upsert_promotions_cache(db, store_number, week_start, False, payload_json)
 
-        await _set_status(user_id, resource, "ok")
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(user_id, resource, "ok", duration_seconds=elapsed)
         log.info(
             "[promotions] user=%d store=%d — %d promotions cached (%d group deals w/ children)",
             user_id,
@@ -119,7 +129,8 @@ async def refresh_promotions(*, user_id: int, client, store_number: int) -> None
             len(children),
         )
     except Exception as exc:
-        await _set_status(user_id, resource, "error", str(exc)[:500])
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(user_id, resource, "error", str(exc)[:500], duration_seconds=elapsed)
         log.error("[promotions] user=%d FAILED: %s", user_id, exc)
         raise
 
@@ -133,6 +144,7 @@ async def refresh_purchase_catalogue(*, user_id: int, client) -> None:
     if await _is_locked(user_id, resource):
         return
 
+    t0 = datetime.datetime.now(datetime.UTC)
     await _set_status(user_id, resource, "in_progress")
     try:
         products = await client.get_purchase_history_api(all_pages=True)
@@ -143,10 +155,12 @@ async def refresh_purchase_catalogue(*, user_id: int, client) -> None:
         async with AsyncSessionLocal() as db:
             await repo.upsert_purchased_products(db, user_id, products)
 
-        await _set_status(user_id, resource, "ok")
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(user_id, resource, "ok", duration_seconds=elapsed)
         log.info("[purchase_catalogue] user=%d — %d products cached", user_id, len(products))
     except Exception as exc:
-        await _set_status(user_id, resource, "error", str(exc)[:500])
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(user_id, resource, "error", str(exc)[:500], duration_seconds=elapsed)
         log.error("[purchase_catalogue] user=%d FAILED: %s", user_id, exc)
         raise
 
@@ -166,6 +180,7 @@ async def refresh_orders(*, user_id: int, client) -> None:
     if await _is_locked(user_id, resource):
         return
 
+    t0 = datetime.datetime.now(datetime.UTC)
     await _set_status(user_id, resource, "in_progress")
     try:
         orders = await client.get_order_list_api(offset=0)
@@ -188,7 +203,8 @@ async def refresh_orders(*, user_id: int, client) -> None:
                     "[orders] user=%d detail fetch failed for %s: %s", user_id, o.order_id[:8], exc
                 )
 
-        await _set_status(user_id, resource, "ok")
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(user_id, resource, "ok", duration_seconds=elapsed)
         log.info(
             "[orders] user=%d — %d summaries, %d new detail fetches",
             user_id,
@@ -196,7 +212,8 @@ async def refresh_orders(*, user_id: int, client) -> None:
             len(new_orders),
         )
     except Exception as exc:
-        await _set_status(user_id, resource, "error", str(exc)[:500])
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(user_id, resource, "error", str(exc)[:500], duration_seconds=elapsed)
         log.error("[orders] user=%d FAILED: %s", user_id, exc)
         raise
 
@@ -215,6 +232,7 @@ async def refresh_products(*, user_id: int, client, store_number: int) -> None:
     if await _is_locked(user_id, resource):
         return
 
+    t0 = datetime.datetime.now(datetime.UTC)
     await _set_status(user_id, resource, "in_progress")
     try:
         from pyplus.db import repo
@@ -303,7 +321,8 @@ async def refresh_products(*, user_id: int, client, store_number: int) -> None:
             except Exception as exc:
                 log.warning("[products] user=%d sku=%s: %s", user_id, sku, exc)
 
-        await _set_status(user_id, resource, "ok")
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(user_id, resource, "ok", duration_seconds=elapsed)
         log.info(
             "[products] user=%d — %d updated, %d not found / %d total",
             user_id,
@@ -312,7 +331,8 @@ async def refresh_products(*, user_id: int, client, store_number: int) -> None:
             len(ordered),
         )
     except Exception as exc:
-        await _set_status(user_id, resource, "error", str(exc)[:500])
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(user_id, resource, "error", str(exc)[:500], duration_seconds=elapsed)
         log.error("[products] user=%d FAILED: %s", user_id, exc)
         raise
 
@@ -333,6 +353,7 @@ async def refresh_product_catalogue(*, user_id: int, client, store_number: int) 
     if await _is_locked(user_id, resource):
         return
 
+    t0 = datetime.datetime.now(datetime.UTC)
     await _set_status(user_id, resource, "in_progress")
     try:
         products = await client.get_all_products_api(store_number=store_number)
@@ -343,12 +364,14 @@ async def refresh_product_catalogue(*, user_id: int, client, store_number: int) 
         async with AsyncSessionLocal() as db:
             written = await repo.upsert_product_cache(db, store_number, products)
 
-        await _set_status(user_id, resource, "ok", f"{written} products")
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(user_id, resource, "ok", f"{written} products", duration_seconds=elapsed)
         log.info(
             "[catalogue] user=%d store=%d — %d products cached", user_id, store_number, written
         )
     except Exception as exc:
-        await _set_status(user_id, resource, "error", str(exc)[:500])
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(user_id, resource, "error", str(exc)[:500], duration_seconds=elapsed)
         log.error("[catalogue] user=%d FAILED: %s", user_id, exc)
         raise
 
@@ -368,6 +391,7 @@ async def recompute_ml(*, user_id: int) -> None:
     if await _is_locked(user_id, resource):
         return
 
+    t0 = datetime.datetime.now(datetime.UTC)
     await _set_status(user_id, resource, "in_progress")
     try:
         from pyplus.db import repo
@@ -471,7 +495,8 @@ async def recompute_ml(*, user_id: int) -> None:
         )
         await save_artifact(user_id, "recommender", artifact)
 
-        await _set_status(user_id, resource, "ok")
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(user_id, resource, "ok", duration_seconds=elapsed)
         log.info(
             "[ml] user=%d — replenish:%d, promo_match:%s, recommender:%d dishes",
             user_id,
@@ -481,7 +506,8 @@ async def recompute_ml(*, user_id: int) -> None:
         )
 
     except Exception as exc:
-        await _set_status(user_id, resource, "error", str(exc)[:500])
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(user_id, resource, "error", str(exc)[:500], duration_seconds=elapsed)
         log.error("[ml] user=%d FAILED: %s", user_id, exc)
         raise
 
@@ -715,6 +741,7 @@ async def refresh_weather(*, user_id: int) -> None:
         log.debug("[weather] user=%d weather not configured — skipping", user_id)
         return
 
+    t0 = datetime.datetime.now(datetime.UTC)
     await _set_status(user_id, resource, "in_progress")
     try:
         import httpx
@@ -744,12 +771,14 @@ async def refresh_weather(*, user_id: int) -> None:
                 day = datetime.date.fromisoformat(d_str)
                 await repo.upsert_weather(db, day, lat, lon, float(temp))
 
-        await _set_status(user_id, resource, "ok")
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(user_id, resource, "ok", duration_seconds=elapsed)
         log.info(
             "[weather] user=%d — %d days cached for (%.2f, %.2f)", user_id, len(dates), lat, lon
         )
     except Exception as exc:
-        await _set_status(user_id, resource, "error", str(exc)[:500])
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(user_id, resource, "error", str(exc)[:500], duration_seconds=elapsed)
         log.error("[weather] user=%d FAILED: %s", user_id, exc)
         raise
 

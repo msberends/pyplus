@@ -365,6 +365,20 @@ body {
   text-transform: uppercase;
   white-space: nowrap;
 }
+.sp-promo-tag-fd {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--c-accent);
+  color: white;
+  font-size: 9px;
+  font-weight: var(--w-bold);
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
 
 /* ─── Lane error state ───────────────────────────────────────────────────── */
 .sp-lane-error {
@@ -498,6 +512,22 @@ body {
   color: var(--c-text-3) !important;
   opacity: .7;
 }
+/* Free delivery status in the cart footer — PLUS purple, same shape as the
+   korting/statiegeld banners. */
+.sp-cart-fd-line {
+  display: flex;
+  align-items: center;
+  gap: .375rem;
+  margin-bottom: .5rem;
+  padding: .4rem .625rem;
+  background: #eee8f5;
+  border-radius: var(--r-md);
+  font-size: var(--t-sm);
+  color: var(--c-accent);
+}
+.sp-cart-fd-line.sp-fd-met { font-weight: var(--w-bold); }
+.sp-cart-fd-line.sp-fd-unmet { color: var(--c-text-3); }
+
 /* Mobile bottom-bar discount pill — same green language, compact. */
 .sp-bar-savings {
   margin-left: auto;
@@ -602,18 +632,38 @@ body {
 .sp-nav-btn.active { background: var(--c-brand-tint-2); color: var(--c-brand-dark); }
 .sp-nav-spacer { flex: 1; }
 
-/* Main stage — 2 columns, sized so each column = cart width (3 equal visual lanes) */
+/* Main stage — 2 flex columns (left + middle); cart is a sibling outside */
 .sp-cockpit-stage {
   flex: 2 1 0;
   min-width: 0;
   overflow-y: auto;
   padding: 1.25rem;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: auto auto;
+  display: flex;
   gap: 1rem;
-  align-content: start;
 }
+/* Left column: meals (50%) + deals (50%) */
+.sp-cockpit-left-col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.sp-cockpit-left-col > :first-child { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.sp-cockpit-left-col > :last-child  { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.sp-cockpit-left-col .sp-meals-body,
+.sp-cockpit-left-col .sp-deals-body { flex: 1; min-height: 0; max-height: none; }
+/* Middle column: staples (75%) + search (25%) */
+.sp-cockpit-mid-col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.sp-cockpit-mid-col > :first-child { flex: 3; min-height: 0; display: flex; flex-direction: column; }
+.sp-cockpit-mid-col > :last-child  { flex: 2; min-height: 0; }
+.sp-cockpit-mid-col .sp-staples-body { flex: 1; min-height: 0; max-height: none; }
 
 /* Cart column — 1 part of the 3-part layout (stage takes 2 parts).
    Mirrors the stage's padding so the cart panel lines up as a third lane;
@@ -653,6 +703,14 @@ body {
   padding-left: .5rem;
   padding-right: .5rem;
 }
+.sp-cart-item.sp-cart-item-fd {
+  background: #eee8f5;
+  border-radius: var(--r-sm);
+  border-bottom-color: transparent;
+  box-shadow: inset 3px 0 0 0 var(--c-accent);
+  padding-left: .5rem;
+  padding-right: .5rem;
+}
 .sp-cart-item-img {
   width: 44px; height: 44px;
   border-radius: var(--r-sm);
@@ -676,6 +734,15 @@ body {
   font-weight: var(--w-semibold) !important;
   color: var(--c-text) !important;
 }
+.sp-cart-item-price.sp-cart-item-price-deal {
+  color: var(--c-brand-dark) !important;
+  font-weight: var(--w-bold) !important;
+}
+.sp-cart-item-was {
+  font-size: 11px !important;
+  color: var(--c-text-4) !important;
+  text-decoration: line-through;
+}
 .sp-cart-item-qty { font-size: var(--t-xs) !important; color: var(--c-text-3) !important; }
 
 /* Cart footer */
@@ -683,6 +750,10 @@ body {
   display: flex; align-items: center; justify-content: space-between;
   padding: .625rem 0 .375rem;
 }
+.sp-cart-footer-toggle { margin-left: .25rem; opacity: .6; transition: opacity .15s; }
+.sp-cart-footer-toggle:hover { opacity: 1; }
+.sp-cart-footer-toggle .q-icon { font-size: 20px; }
+.sp-cart-footer-details { transition: max-height .2s ease; }
 .sp-checkout-btn { width: 100%; margin-top: .5rem; }
 
 /* Lane placeholder */
@@ -789,6 +860,36 @@ body {
   background: var(--c-brand-tint);
   border-radius: var(--r-sm);
   margin: .25rem 0;
+}
+
+/* Free delivery section in the deals lane. */
+.sp-fd-header {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  color: var(--c-accent);
+  padding: .375rem 0 .25rem;
+  font-size: 14px;
+  font-weight: 700;
+}
+.sp-promo-card-fd {
+  border-left: 3px solid var(--c-accent);
+  padding-left: .375rem;
+}
+.sp-promo-ribbon-fd {
+  background: var(--c-accent);
+  color: white;
+  font-size: var(--t-xs);
+  font-weight: var(--w-bold);
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+.sp-fd-divider {
+  border: none;
+  border-top: 1px solid var(--c-border);
+  margin: .5rem 0 .25rem;
 }
 
 /* ─── Meals lane ─────────────────────────────────────────────────────────── */
@@ -939,12 +1040,19 @@ body {
   }
   .sp-nav-logo { display: none; }
   .sp-nav-spacer { display: none; }
+  .sp-cockpit-left-col, .sp-cockpit-mid-col { display: contents; }
   .sp-cockpit-stage {
     flex: 1 1 auto;
-    grid-template-columns: 1fr; order: 1;
+    flex-direction: column; order: 1;
     padding-bottom: calc(58px + 58px + 1.25rem);  /* nav + cart bar */
     overflow-y: auto;
   }
+  /* Mobile lane order: meals, deals, staples, search */
+  .sp-cockpit-stage .sp-lane { order: 10; }
+  .sp-cockpit-left-col > :first-child { order: 1; }
+  .sp-cockpit-left-col > :last-child  { order: 2; }
+  .sp-cockpit-mid-col > :first-child  { order: 3; }
+  .sp-cockpit-mid-col > :last-child   { order: 4; }
   .sp-cockpit-cart-col { display: none; }  /* replaced by bottom bar */
   /* In the mobile cart sheet the dialog card is the frame, so the panel fills
      it edge-to-edge with no second border/radius and no sticky/height cap. */
@@ -960,13 +1068,54 @@ body {
   .sp-page-content { width: 100%; padding-bottom: calc(58px + 1.25rem); }  /* nav bar */
   .sp-deals-body, .sp-meals-body, .sp-staples-body { max-height: none; overflow-y: visible; }
   .sp-mobile-cart-bar { display: flex; bottom: 58px; }
+
+  /* Collapsible lanes on mobile */
+  .sp-lane-header {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: .25rem;
+  }
+  .sp-lane-header > * { flex: 1; min-width: 0; }
+  .sp-lane-header::after {
+    content: '\\e5cf';  /* expand_more */
+    font-family: 'Material Icons';
+    font-size: 20px;
+    color: var(--c-text-4);
+    flex: 0 0 auto;
+    transition: transform var(--dur-fast) var(--ease);
+  }
+  .sp-lane--collapsed .sp-lane-header::after {
+    transform: rotate(-90deg);
+  }
+  .sp-lane--collapsed .sp-lane-body,
+  .sp-lane--collapsed .sp-staples-body,
+  .sp-lane--collapsed .sp-deals-body,
+  .sp-lane--collapsed .sp-meals-body {
+    display: none;
+  }
 }
+"""
+
+
+_COLLAPSE_JS = """
+<script>
+document.addEventListener('click', function(e) {
+  if (window.innerWidth > 768) return;
+  var header = e.target.closest('.sp-lane-header');
+  if (!header) return;
+  if (e.target.closest('button, a, input')) return;
+  var lane = header.closest('.sp-lane');
+  if (lane) lane.classList.toggle('sp-lane--collapsed');
+});
+</script>
 """
 
 
 def apply_theme() -> None:
     """Inject Inter font, design tokens, and all component CSS into the current page."""
     ui.add_head_html(_GOOGLE_FONTS, shared=True)
+    ui.add_head_html(_COLLAPSE_JS, shared=True)
     ui.add_css(_CSS, shared=True)  # shared=True → injected once for all pages
     ui.colors(
         primary="#227647",  # PLUS green-dark — main interactive colour

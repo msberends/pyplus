@@ -402,9 +402,8 @@ def _render_row(
                 ui.element("div").style(
                     "width:34px;height:34px;border-radius:var(--r-sm);background:var(--c-border)"
                 )
-            if not discontinued and available is not None:
-                dot_cls = "sp-avail-dot-ok" if available else "sp-avail-dot-no"
-                ui.element("div").classes(f"sp-avail-dot {dot_cls}").style(
+            if not discontinued and available is not None and not available:
+                ui.element("div").classes("sp-avail-dot sp-avail-dot-no").style(
                     "position:absolute;top:-2px;right:-2px"
                 )
 
@@ -438,9 +437,10 @@ def _render_row(
         if promo is not None and not discontinued:
             from pyplus.services.promos import promo_tag_label
 
-            ui.label(promo_tag_label(promo)).classes("sp-promo-tag").style(
+            tag_cls = "sp-promo-tag-fd" if promo.is_free_delivery else "sp-promo-tag"
+            ui.label(promo_tag_label(promo)).classes(tag_cls).style(
                 "flex-shrink:0;margin-right:.25rem"
-            ).tooltip("In de aanbieding")
+            ).tooltip(t("deals.free_delivery") if promo.is_free_delivery else "In de aanbieding")
 
         # Price
         if price > 0 and not discontinued:
@@ -462,9 +462,7 @@ def _render_row(
                 cq = next((it.quantity for it in session.cart.items if it.sku == fp.sku), 0)
                 sync = fp.sku in session.syncing_skus
                 with slot:
-                    lbl = _render_stepper(
-                        fp, cq, sync, name, subtitle, price, image, cart_service
-                    )
+                    lbl = _render_stepper(fp, cq, sync, name, subtitle, price, image, cart_service)
                 if qty_labels is not None and fp.sku:
                     if lbl is not None:
                         qty_labels[fp.sku] = lbl

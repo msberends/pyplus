@@ -61,7 +61,9 @@ def _payload(promos_list, children):
 @pytest.mark.asyncio
 async def test_index_maps_group_children_to_parent(monkeypatch):
     group = _promo("4431-96", single=False)  # "Bapao" group deal
-    payload = _payload([group], {"4431-96": [_child("111", "Bapao kip"), _child("222", "Bapao groente")]})
+    payload = _payload(
+        [group], {"4431-96": [_child("111", "Bapao kip"), _child("222", "Bapao groente")]}
+    )
 
     async def _fake_load(store, week):
         return payload
@@ -95,7 +97,7 @@ async def test_single_product_deal_overrides_child(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_free_delivery_group_excluded(monkeypatch):
+async def test_free_delivery_children_included(monkeypatch):
     free = _promo("free", single=False, free=True)
     payload = _payload([free], {"free": [_child("111", "Iets")]})
 
@@ -103,7 +105,31 @@ async def test_free_delivery_group_excluded(monkeypatch):
         return payload
 
     monkeypatch.setattr(promos, "_load_payload", _fake_load)
-    assert await promos.get_promo_index(720) == {}
+    index = await promos.get_promo_index(720)
+    assert set(index) == {"111"}
+    assert index["111"].is_free_delivery
+    assert promos.promo_tag_label(index["111"]) == "Gratis bezorging"
+
+
+@pytest.mark.asyncio
+async def test_regular_promo_overrides_free_delivery(monkeypatch):
+    free = _promo("free-grp", single=False, free=True)
+    regular = _promo("regular-grp", single=False, label="2+1 GRATIS")
+    payload = _payload(
+        [free, regular],
+        {
+            "free-grp": [_child("111", "Chips A")],
+            "regular-grp": [_child("111", "Chips A")],
+        },
+    )
+
+    async def _fake_load(store, week):
+        return payload
+
+    monkeypatch.setattr(promos, "_load_payload", _fake_load)
+    index = await promos.get_promo_index(720)
+    assert not index["111"].is_free_delivery
+    assert promos.promo_tag_label(index["111"]) == "2+1 GRATIS"
 
 
 @pytest.mark.asyncio

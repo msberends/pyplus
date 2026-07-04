@@ -151,7 +151,7 @@ def humanize_since(dt: datetime.datetime | None) -> str:
     """
     if dt is None:
         return "nooit"
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
     delta = now - dt
     secs = int(delta.total_seconds())
     if secs < 0:

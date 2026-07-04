@@ -53,7 +53,7 @@ def test_dish_meta_chips_empty():
 
 
 def test_humanize_since():
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
     assert fmt.humanize_since(None) == "nooit"
     assert fmt.humanize_since(now) == "zojuist"
     assert fmt.humanize_since(now - datetime.timedelta(hours=3)) == "3 uur geleden"

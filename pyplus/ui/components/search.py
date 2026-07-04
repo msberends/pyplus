@@ -84,23 +84,23 @@ def create_search_lane(session) -> None:
                 _results_list()
 
     # ── Debounced search handler ─────────────────────────────────────────
+    _generation: list[int] = [0]  # incremented each keypress; stale results are discarded
 
-    async def _search(query: str) -> None:
+    async def _search(query: str, gen: int) -> None:
         query = query.strip()
-        if len(query) < 2:
+        if len(query) < 3:
             _results.clear()
             status_label.set_text("")
             _results_list.refresh()
             return
-
-        search_spinner.set_visibility(True)
-        status_label.set_text(t("status.loading"))
 
         try:
             from pyplus.services.search import search_products
 
             prefs = session.settings
             found = await search_products(session, query, limit=prefs.search_result_limit)
+            if gen != _generation[0]:
+                return  # a newer keypress is already in flight — discard
             if prefs.hide_unavailable_search:
                 found = [p for p in found if p.is_available]
             _results.clear()
@@ -110,21 +110,40 @@ def create_search_lane(session) -> None:
             else:
                 status_label.set_text(t("lane.search.no_results"))
         except Exception as exc:
+            if gen != _generation[0]:
+                return
             log.warning("Search error: %s", exc)
             _results.clear()
             status_label.set_text(t("status.error"))
         finally:
-            search_spinner.set_visibility(False)
-            _results_list.refresh()
+            if gen == _generation[0]:
+                search_spinner.set_visibility(False)
+                _results_list.refresh()
 
     async def _on_input(e) -> None:
         query = e.value if hasattr(e, "value") else search_input.value
         if _debounce_task[0] and not _debounce_task[0].done():
             _debounce_task[0].cancel()
 
+        # Immediately clear stale results so the previous query's output never
+        # lingers while the debounce is waiting for the next search to fire.
+        _generation[0] += 1
+        gen = _generation[0]
+        stripped = (query or "").strip()
+        if len(stripped) >= 3:
+            _results.clear()
+            _results_list.refresh()
+            search_spinner.set_visibility(True)
+            status_label.set_text(t("status.loading"))
+        else:
+            _results.clear()
+            _results_list.refresh()
+            search_spinner.set_visibility(False)
+            status_label.set_text("")
+
         async def _debounced():
             await asyncio.sleep(_DEBOUNCE)
-            await _search(query)
+            await _search(query, gen)
 
         _debounce_task[0] = asyncio.create_task(_debounced())
 

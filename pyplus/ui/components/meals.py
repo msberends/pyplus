@@ -440,7 +440,7 @@ class _EffIng:
 
 
 async def _add_weekmenu_to_cart(session, state: _MealsState) -> None:
-    """Resolve flexible/optional ingredients, then show the aggregation dialog."""
+    """Resolve unavailable/flexible/optional ingredients, then show the aggregation dialog."""
     filled = [(slot, dish) for slot, dish in state.slots.items() if dish is not None]
     if not filled:
         ui.notify("Geen gerechten geselecteerd", type="info", position="top")
@@ -451,6 +451,38 @@ async def _add_weekmenu_to_cart(session, state: _MealsState) -> None:
         for _, dish in filled:
             ings = await repo.get_ingredients(db, dish.id)
             dishes_with_ings.append((dish, ings))
+
+    # ── Availability check ────────────────────────────────────────────
+    all_skus = {
+        ing.sku
+        for _, ings in dishes_with_ings
+        for ing in ings
+        if ing.sku and not ing.optional and not ing.flexible
+    }
+    unavail_skus: set[str] = set()
+    product_info: dict[str, object] = {}
+    if all_skus:
+        async with AsyncSessionLocal() as db:
+            pc = await repo.get_product_cache_by_skus(db, session.store_number or 0, list(all_skus))
+            for sku in all_skus:
+                row = pc.get(sku)
+                if row is None or not row.is_available:
+                    unavail_skus.add(sku)
+                if row:
+                    product_info[sku] = row
+
+    if unavail_skus:
+        _show_unavail_resolve_dialog(session, dishes_with_ings, unavail_skus, product_info)
+        return
+
+    _continue_to_flex_optional(session, dishes_with_ings)
+
+
+def _continue_to_flex_optional(
+    session, dishes_with_ings: list[tuple[Dish, list]], replacements: dict | None = None
+) -> None:
+    """After availability is resolved, proceed to flex/optional resolution."""
+    replacements = replacements or {}
 
     # Collect the ingredients that need a decision, deduped by row id (a dish in
     # two slots shares the same DishIngredient rows).
@@ -465,10 +497,16 @@ async def _add_weekmenu_to_cart(session, state: _MealsState) -> None:
 
     if flex_unique or opt_unique:
         _show_resolve_dialog(
-            session, dishes_with_ings, list(flex_unique.values()), list(opt_unique.values())
+            session,
+            dishes_with_ings,
+            list(flex_unique.values()),
+            list(opt_unique.values()),
+            replacements=replacements,
         )
     else:
-        await _finalize_aggregation(session, dishes_with_ings, {}, set())
+        asyncio.ensure_future(
+            _finalize_aggregation(session, dishes_with_ings, {}, set(), replacements=replacements)
+        )
 
 
 async def _finalize_aggregation(
@@ -476,8 +514,10 @@ async def _finalize_aggregation(
     dishes_with_ings: list[tuple[Dish, list]],
     flex_choice: dict[int, object],
     opt_excluded: set[int],
+    replacements: dict | None = None,
 ) -> None:
     """Apply flexible/optional decisions, aggregate, and show the confirm dialog."""
+    replacements = replacements or {}
     resolved: list[tuple[Dish, list]] = []
     for dish, ings in dishes_with_ings:
         eff: list = []
@@ -496,6 +536,16 @@ async def _finalize_aggregation(
             elif ing.optional:
                 if ing.id not in opt_excluded:
                     eff.append(ing)
+            elif ing.sku in replacements:
+                sub = replacements[ing.sku]
+                eff.append(
+                    _EffIng(
+                        sku=sub.sku,
+                        display_name=sub.name,
+                        amount=ing.amount,
+                        amount_unit=ing.amount_unit,
+                    )
+                )
             else:
                 eff.append(ing)
         resolved.append((dish, eff))
@@ -529,9 +579,184 @@ async def _finalize_aggregation(
     _show_agg_dialog(session, agg)
 
 
-def _show_resolve_dialog(session, dishes_with_ings, flexibles: list, optionals: list) -> None:
+def _show_unavail_resolve_dialog(
+    session,
+    dishes_with_ings: list[tuple[Dish, list]],
+    unavail_skus: set[str],
+    product_info: dict,
+) -> None:
+    """Show a dialog listing unavailable ingredients with Vervangen/Overslaan options."""
+    from pyplus.services.categories import parse_categories
+
+    unavail_ings: dict[str, dict] = {}
+    for dish, ings in dishes_with_ings:
+        for ing in ings:
+            if ing.sku in unavail_skus and ing.sku not in unavail_ings:
+                pc = product_info.get(ing.sku)
+                unavail_ings[ing.sku] = {
+                    "name": ing.display_name,
+                    "sku": ing.sku,
+                    "image": (pc.image_url if pc else "") or "",
+                    "price": (pc.price if pc else 0.0) or 0.0,
+                    "brand": (pc.brand if pc else "") or "",
+                    "categories": parse_categories(pc.categories_json) if pc else [],
+                }
+
+    replacements: dict[str, object] = {}
+    skipped: set[str] = set()
+
+    with ui.dialog(value=True).props("persistent") as dlg:
+        with ui.card().style(
+            "min-width:340px;max-width:480px;width:100%;padding:0;overflow:hidden"
+        ):
+            with ui.element("div").style(
+                "display:flex;align-items:center;justify-content:space-between;"
+                "padding:.875rem 1rem;border-bottom:1px solid var(--c-border)"
+            ):
+                ui.label(t("substitute.unavail_title")).style(
+                    "font-size:16px;font-weight:700;color:var(--c-text)"
+                )
+                ui.button(icon="close", on_click=dlg.close).props(
+                    "flat round dense size=sm color=grey"
+                )
+
+            with ui.element("div").style("padding:.5rem 1rem"):
+                ui.label(t("substitute.unavail_body", n=len(unavail_ings))).style(
+                    "font-size:13px;color:var(--c-text-3)"
+                )
+
+            with ui.element("div").style("padding:.5rem 1rem;max-height:50vh;overflow-y:auto"):
+
+                @ui.refreshable
+                def _unavail_list() -> None:
+                    for sku, info in unavail_ings.items():
+                        _render_unavail_row(
+                            sku, info, replacements, skipped, session, _unavail_list
+                        )
+
+                _unavail_list()
+
+            with ui.element("div").style(
+                "display:flex;justify-content:flex-end;gap:.5rem;"
+                "padding:.75rem 1rem;border-top:1px solid var(--c-border)"
+            ):
+                ui.button(t("action.cancel"), on_click=dlg.close).props("flat rounded no-caps")
+
+                def _proceed() -> None:
+                    dlg.close()
+                    final_skipped = unavail_skus - set(replacements.keys()) - skipped
+                    all_skipped = skipped | final_skipped
+                    filtered = []
+                    for dish, ings in dishes_with_ings:
+                        kept = [i for i in ings if i.sku not in all_skipped]
+                        filtered.append((dish, kept))
+                    _continue_to_flex_optional(session, filtered, replacements)
+
+                ui.button(
+                    t("substitute.continue"),
+                    icon="arrow_forward",
+                    on_click=_proceed,
+                ).props("unelevated rounded color=primary no-caps").style("font-weight:600")
+
+
+def _render_unavail_row(
+    sku: str, info: dict, replacements: dict, skipped: set, session, refresh_fn
+) -> None:
+    replaced = sku in replacements
+    is_skipped = sku in skipped
+
+    with ui.element("div").style(
+        "display:flex;align-items:center;gap:.5rem;padding:.5rem 0;"
+        "border-bottom:1px solid var(--c-border)"
+    ):
+        if info["image"]:
+            ui.image(thumbnail_url(info["image"], 36)).style(
+                "width:36px;height:36px;border-radius:var(--r-sm);flex-shrink:0;"
+                + ("opacity:.4;" if is_skipped else "")
+            ).props(f'alt="{_alt(info["name"])}"')
+        else:
+            ui.element("div").style(
+                "width:36px;height:36px;border-radius:var(--r-sm);"
+                "background:var(--c-border);flex-shrink:0"
+            )
+
+        with ui.element("div").style("min-width:0;flex:1"):
+            name_style = (
+                "font-size:13px;color:var(--c-text-3);text-decoration:line-through"
+                if is_skipped
+                else "font-size:13px;font-weight:500;color:var(--c-text)"
+            )
+            ui.label(info["name"]).style(name_style)
+            if replaced:
+                sub = replacements[sku]
+                ui.label(f"→ {sub.name}").style(
+                    "font-size:11px;color:var(--c-brand-dark);font-weight:600"
+                )
+            elif not is_skipped:
+                ui.label(t("status.unavailable")).style("font-size:11px;color:var(--c-danger)")
+
+        with ui.element("div").style("display:flex;gap:.25rem;flex-shrink:0"):
+            if not replaced and not is_skipped:
+                from pyplus.ui.components.substitutes import show_substitute_dialog
+
+                def _sub(s=sku, i=info):
+                    def _on_pick(product):
+                        replacements[s] = product
+                        refresh_fn.refresh()
+
+                    show_substitute_dialog(
+                        session,
+                        sku=s,
+                        product_name=i["name"],
+                        product_image=i["image"],
+                        categories=i["categories"],
+                        price=i["price"],
+                        brand=i["brand"],
+                        mode="cart",
+                        on_select=_on_pick,
+                    )
+
+                ui.button(t("substitute.replace_btn"), on_click=_sub).props(
+                    "flat dense no-caps size=sm color=primary"
+                )
+
+                def _skip(s=sku):
+                    skipped.add(s)
+                    refresh_fn.refresh()
+
+                ui.button(t("substitute.skip"), on_click=_skip).props("flat dense no-caps size=sm")
+
+            elif replaced:
+
+                def _undo(s=sku):
+                    replacements.pop(s, None)
+                    refresh_fn.refresh()
+
+                ui.button(icon="undo", on_click=_undo).props(
+                    "flat dense size=sm color=grey"
+                ).tooltip("Ongedaan maken")
+
+            elif is_skipped:
+
+                def _unskip(s=sku):
+                    skipped.discard(s)
+                    refresh_fn.refresh()
+
+                ui.button(icon="undo", on_click=_unskip).props(
+                    "flat dense size=sm color=grey"
+                ).tooltip("Terugzetten")
+
+
+def _show_resolve_dialog(
+    session,
+    dishes_with_ings,
+    flexibles: list,
+    optionals: list,
+    replacements: dict | None = None,
+) -> None:
     """Ask the user to pick a product for each flexible ingredient and to
     include/skip each optional one, before aggregating."""
+    replacements = replacements or {}
     flex_choice: dict[int, object] = {}  # ing.id → chosen Product
     fstate: dict[int, dict] = {
         f.id: {"query": "", "results": [], "searching": False} for f in flexibles
@@ -604,7 +829,11 @@ def _show_resolve_dialog(session, dishes_with_ings, flexibles: list, optionals: 
                 async def _continue() -> None:
                     dlg.close()
                     await _finalize_aggregation(
-                        session, dishes_with_ings, flex_choice, opt_excluded
+                        session,
+                        dishes_with_ings,
+                        flex_choice,
+                        opt_excluded,
+                        replacements=replacements,
                     )
 
                 ui.button(

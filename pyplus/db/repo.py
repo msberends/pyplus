@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 import logging
 
-from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -29,6 +29,10 @@ from pyplus.db.models import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _utcnow() -> datetime.datetime:
+    return datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
 
 
 # ── Users ──────────────────────────────────────────────────────────────────────
@@ -61,8 +65,8 @@ async def create_user(
         store_number=store_number,
         store_name=store_name,
         user_store_id=user_store_id,
-        created_at=datetime.datetime.utcnow(),
-        last_login_at=datetime.datetime.utcnow(),
+        created_at=_utcnow(),
+        last_login_at=_utcnow(),
     )
     db.add(user)
     await db.commit()
@@ -83,7 +87,7 @@ async def update_user_login(
     user = await get_user_by_id(db, user_id)
     if not user:
         return
-    user.last_login_at = datetime.datetime.utcnow()
+    user.last_login_at = _utcnow()
     if store_number is not None:
         user.store_number = store_number
     if store_name:
@@ -174,7 +178,7 @@ async def create_dish(
         cooking_methods=cooking_methods,
         is_cold=is_cold,
         veg_count=veg_count,
-        created_at=datetime.datetime.utcnow(),
+        created_at=_utcnow(),
     )
     db.add(dish)
     await db.commit()
@@ -315,6 +319,30 @@ async def reorder_ingredients(db: AsyncSession, dish_id: int, ordered_ids: list[
     await db.commit()
 
 
+async def relink_ingredient_sku(db: AsyncSession, user_id: int, old_sku: str, new_sku: str) -> int:
+    """Replace old_sku with new_sku in all of a user's DishIngredient rows.
+
+    Returns the number of ingredients updated.
+    """
+    dishes = await db.execute(select(Dish.id).where(Dish.user_id == user_id))
+    dish_ids = [r[0] for r in dishes.all()]
+    if not dish_ids:
+        return 0
+    result = await db.execute(
+        select(DishIngredient).where(
+            DishIngredient.dish_id.in_(dish_ids),
+            DishIngredient.sku == old_sku,
+        )
+    )
+    count = 0
+    for ing in result.scalars().all():
+        ing.sku = new_sku
+        count += 1
+    if count:
+        await db.commit()
+    return count
+
+
 # ── IngredientSku cache ────────────────────────────────────────────────────────
 
 
@@ -340,7 +368,7 @@ async def upsert_ingredient_sku(
     last_seen_available: bool | None = None,
 ) -> IngredientSku:
     row = await get_ingredient_sku(db, user_id, sku)
-    now = datetime.datetime.utcnow()
+    now = _utcnow()
     if row:
         row.name = name
         row.subtitle = subtitle
@@ -518,14 +546,17 @@ async def upsert_sync_state(
     resource: str,
     status: str,
     detail: str | None = None,
+    duration_seconds: float | None = None,
 ) -> None:
     row = await get_sync_state(db, user_id, resource)
-    now = datetime.datetime.utcnow()
+    now = _utcnow()
     if row:
         row.last_status = status
         row.last_synced_at = now
         if detail is not None:
             row.detail_json = detail
+        if duration_seconds is not None:
+            row.last_duration_seconds = duration_seconds
     else:
         db.add(
             SyncState(
@@ -534,6 +565,7 @@ async def upsert_sync_state(
                 last_status=status,
                 last_synced_at=now,
                 detail_json=detail,
+                last_duration_seconds=duration_seconds,
             )
         )
     await db.commit()
@@ -595,70 +627,31 @@ async def get_pack_alternatives(
     return {sku: groups.get((r.brand, r.name), [r]) for sku, r in base.items()}
 
 
-async def _fts_available(db: AsyncSession) -> bool:
-    """True when the product_cache FTS5 index exists (cheap sqlite_master lookup)."""
-    from pyplus.db.fts import FTS_TABLE
-
-    row = (
-        await db.execute(
-            text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:n").bindparams(
-                n=FTS_TABLE
-            )
-        )
-    ).first()
-    return row is not None
-
-
 async def search_product_cache(
     db: AsyncSession, store_number: int, query: str, limit: int = 24
 ) -> list[ProductCache]:
     """Per-word substring search over the cached catalogue for one store.
 
-    Every whitespace-separated token must appear as a substring anywhere in
-    the name or brand (case-insensitive AND across tokens). Available products
+    Each whitespace-separated token must appear as a substring anywhere in the
+    combined name+brand string (case-insensitive, any order). Available products
     sort first, then by name.
-
-    Uses the FTS5 trigram index when present (indexed substring search); falls
-    back to a LIKE scan for short tokens or when the index is absent (older DBs,
-    or the create_all-bootstrapped test DB without it).
     """
-    from pyplus.db.fts import TRIGRAM_MIN
+    import re as _re
 
-    tokens = [tok for tok in query.lower().split() if tok]
+    tokens = [tok for tok in query.split() if tok]
     if not tokens:
         return []
-
-    # Fast path: every token long enough for the trigram tokenizer and the index exists.
-    if all(len(tok) >= TRIGRAM_MIN for tok in tokens) and await _fts_available(db):
-        # Quote each token so trigram treats it as a literal substring; "" escapes ".
-        match = " AND ".join('"' + tok.replace('"', '""') + '"' for tok in tokens)
-        # The FTS table must be named (not aliased) on the left of MATCH.
-        fts_stmt = select(ProductCache).from_statement(
-            text(
-                "SELECT pc.* FROM product_cache pc "
-                "JOIN product_cache_fts ON product_cache_fts.rowid = pc.rowid "
-                "WHERE pc.store_number = :store AND product_cache_fts MATCH :match "
-                "ORDER BY pc.is_available DESC, pc.name "
-                "LIMIT :limit"
-            )
+    pattern = "(?i)" + "".join(f"(?=.*{_re.escape(tok)})" for tok in tokens)
+    stmt = select(ProductCache).from_statement(
+        text(
+            "SELECT pc.* FROM product_cache pc "
+            "WHERE pc.store_number = :store "
+            "AND (pc.name || ' ' || COALESCE(pc.brand, '')) REGEXP :pat "
+            "ORDER BY pc.is_available DESC, pc.name "
+            "LIMIT :limit"
         )
-        result = await db.execute(fts_stmt, {"store": store_number, "match": match, "limit": limit})
-        return list(result.scalars().all())
-
-    # Fallback: LIKE scan (short tokens, or no FTS index).
-    stmt = select(ProductCache).where(ProductCache.store_number == store_number)
-    for tok in tokens:
-        anywhere = f"%{tok}%"
-        name_lower = func.lower(ProductCache.name)
-        brand_lower = func.lower(ProductCache.brand)
-        stmt = stmt.where(
-            or_(
-                name_lower.like(anywhere),
-                brand_lower.like(anywhere),
-            )
-        )
-    stmt = stmt.order_by(ProductCache.is_available.desc(), ProductCache.name).limit(limit)
-    result = await db.execute(stmt)
+    )
+    result = await db.execute(stmt, {"store": store_number, "pat": pattern, "limit": limit})
     return list(result.scalars().all())
 
 
@@ -670,7 +663,7 @@ async def upsert_product_cache(db: AsyncSession, store_number: int, products: li
     """
     import json as _json
 
-    now = datetime.datetime.utcnow()
+    now = _utcnow()
     rows = [
         {
             "sku": p.sku,
@@ -739,7 +732,7 @@ async def upsert_promotions_cache(
     payload_json: str,
 ) -> None:
     row = await get_promotions_cache(db, store_number, week_start, is_next_week)
-    now = datetime.datetime.utcnow()
+    now = _utcnow()
     if row:
         row.payload_json = payload_json
         row.fetched_at = now
@@ -776,7 +769,7 @@ async def upsert_purchased_products(
     """Bulk upsert purchase-history rows via ON CONFLICT (one statement per chunk)."""
     import json as _json
 
-    now = datetime.datetime.utcnow()
+    now = _utcnow()
     rows = [
         {
             "user_id": user_id,
@@ -845,7 +838,7 @@ async def get_cached_order_ids(db: AsyncSession, user_id: int) -> set[str]:
 
 async def upsert_order_summaries(db: AsyncSession, user_id: int, orders: list) -> None:
     """Store/update OrderSummary rows (no line items) — bulk ON CONFLICT upsert."""
-    now = datetime.datetime.utcnow()
+    now = _utcnow()
 
     def _delivery(o) -> datetime.date | None:
         if o.delivery_date and o.delivery_date != "1900-01-01":
@@ -931,7 +924,7 @@ async def upsert_ml_artifact(
     db: AsyncSession, user_id: int, kind: str, blob: bytes, input_hash: str = ""
 ) -> None:
     row = await get_ml_artifact(db, user_id, kind)
-    now = datetime.datetime.utcnow()
+    now = _utcnow()
     if row:
         row.blob = blob
         row.input_hash = input_hash
@@ -1000,7 +993,7 @@ async def get_all_dish_ingredients_for_user(
 async def get_dish_discontinued_skus(
     db: AsyncSession, store_number: int, dish_id: int
 ) -> list[str]:
-    """Non-optional ingredient SKUs that the store's catalogue no longer carries.
+    """Non-optional ingredient SKUs missing or unavailable in the store catalogue.
 
     Returns [] when the catalogue hasn't been synced yet for this store (so we
     never flag dishes as broken just because the cache is cold).
@@ -1012,7 +1005,7 @@ async def get_dish_discontinued_skus(
     ingredients = await get_ingredients(db, dish_id)
     skus = [ing.sku for ing in ingredients if ing.sku and not ing.optional]
     present = await get_product_cache_by_skus(db, store_number, skus)
-    return [s for s in skus if s not in present]
+    return [s for s in skus if s not in present or not present[s].is_available]
 
 
 async def get_dish_availability(
@@ -1036,6 +1029,49 @@ async def get_dish_availability(
     return available, unavailable, unknown
 
 
+# ── Substitute product search ─────────────────────────────────────────────────
+
+
+async def find_category_matches(
+    db: AsyncSession,
+    store_number: int,
+    categories: list[str],
+    exclude_skus: set[str] | None = None,
+    limit: int = 40,
+) -> list[ProductCache]:
+    """Find available products sharing a category with the target product.
+
+    Tries the deepest (most specific) category first, broadening to parent
+    categories until at least ``limit`` candidates are collected or categories
+    are exhausted.
+    """
+    if not store_number or not categories:
+        return []
+    exclude_skus = exclude_skus or set()
+    seen: set[str] = set()
+    results: list[ProductCache] = []
+    for cat in reversed(categories):
+        pat = f'%"{cat}"%'
+        stmt = (
+            select(ProductCache)
+            .where(
+                ProductCache.store_number == store_number,
+                ProductCache.is_available == True,  # noqa: E712
+                ProductCache.categories_json.like(pat),
+            )
+            .order_by(ProductCache.name)
+            .limit(limit * 2)
+        )
+        rows = (await db.execute(stmt)).scalars().all()
+        for row in rows:
+            if row.sku not in seen and row.sku not in exclude_skus:
+                seen.add(row.sku)
+                results.append(row)
+        if len(results) >= limit:
+            break
+    return results[:limit]
+
+
 # ── Weather cache ─────────────────────────────────────────────────────────────
 
 
@@ -1051,11 +1087,11 @@ async def upsert_weather(
         latitude=round(latitude, 2),
         longitude=round(longitude, 2),
         temperature_max=temperature_max,
-        fetched_at=datetime.datetime.utcnow(),
+        fetched_at=_utcnow(),
     )
     stmt = stmt.on_conflict_do_update(
         index_elements=[WeatherCache.date, WeatherCache.latitude, WeatherCache.longitude],
-        set_={"temperature_max": temperature_max, "fetched_at": datetime.datetime.utcnow()},
+        set_={"temperature_max": temperature_max, "fetched_at": _utcnow()},
     )
     await db.execute(stmt)
     await db.commit()

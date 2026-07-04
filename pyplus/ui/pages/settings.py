@@ -82,6 +82,10 @@ async def create_settings_page() -> None:
                         "Indeling & sortering",
                         lambda: _render_organisation(settings, _save),
                     )
+                    _section_card(
+                        t("settings.substitute.title"),
+                        lambda: _render_substitutes(settings, _save),
+                    )
                     _section_card(t("settings.ntfy.title"), lambda: _render_ntfy(settings, _save))
                     _section_card(
                         "Agenda-abonnement",
@@ -376,6 +380,66 @@ def _render_behaviour(settings: UserSettings, save_fn) -> None:
         sld.on("change", lambda e: asyncio.ensure_future(_save_limit()))
 
 
+# ── Substitute Settings ──────────────────────────────────────────────────────
+
+
+_PRICE_RANGE_OPTS = {
+    "any": t("settings.substitute.price_any"),
+    "similar": t("settings.substitute.price_similar"),
+    "cheaper": t("settings.substitute.price_cheaper"),
+}
+
+
+def _render_substitutes(settings: UserSettings, save_fn) -> None:
+    """Settings for the substitute product finder."""
+    _infobox(t("settings.substitute.how_it_works"))
+    _toggle_setting(
+        settings,
+        "sub_prefer_same_brand",
+        t("settings.substitute.prefer_brand"),
+        t("settings.substitute.prefer_brand_hint"),
+        save_fn,
+    )
+    _toggle_setting(
+        settings,
+        "sub_prefer_bought",
+        t("settings.substitute.prefer_bought"),
+        t("settings.substitute.prefer_bought_hint"),
+        save_fn,
+    )
+    _select_setting(
+        settings,
+        "sub_price_range",
+        t("settings.substitute.price_range"),
+        "",
+        _PRICE_RANGE_OPTS,
+        save_fn,
+    )
+
+    with ui.element("div").style("padding:.625rem 0 0;border-top:1px solid var(--c-border)"):
+        ui.label(t("settings.substitute.max_results")).style(
+            "font-size:13px;font-weight:600;color:var(--c-text)"
+        )
+        ui.label(t("settings.substitute.max_results_hint")).style(
+            "font-size:11px;color:var(--c-text-3);line-height:1.5;margin-bottom:.5rem;display:block"
+        )
+        count_label = ui.label(str(settings.sub_max_results)).style(
+            "font-size:12px;color:var(--c-text-2);font-weight:600"
+        )
+        sld = (
+            ui.slider(min=4, max=24, step=4, value=settings.sub_max_results)
+            .props("color=primary")
+            .style("max-width:320px")
+        )
+        sld.on("update:model-value", lambda e: count_label.set_text(str(int(sld.value))))
+
+        async def _save_limit() -> None:
+            settings.sub_max_results = int(sld.value)
+            await save_fn()
+
+        sld.on("change", lambda e: asyncio.ensure_future(_save_limit()))
+
+
 # ── ML Settings ───────────────────────────────────────────────────────────────
 
 
@@ -546,7 +610,7 @@ def _render_ml_weights(settings: UserSettings, save_fn) -> None:
         _weight(
             "Categorie-spreiding",
             "ml_variatie",
-            "Bevordert diversiteit in eiwit- en zetmeelcategorieën over de week.",
+            "Bevordert diversiteit in eiwit- en koolhydraatcategorieën over de week.",
         )
         _weight(
             t("settings.ml.ingredient_overlap"),
@@ -582,7 +646,7 @@ def _render_ml_day_preferences(settings: UserSettings, save_fn) -> None:
     ):
         _infobox(
             "Stel per dag in welke gerechten het model mag voorstellen. Blokkeer "
-            "bepaalde eiwittypes (bijv. vleesvrije maandag) of zetmeelsoorten, of stel een "
+            "bepaalde eiwittypes (bijv. vleesvrije maandag) of koolhydraten, of stel een"
             "maximum bereidingstijd in voor doordeweekse dagen. Dagen op 'uit' worden "
             "overgeslagen bij het automatisch invullen.",
         )
@@ -834,7 +898,7 @@ def _render_ml_week_constraints(settings: UserSettings, save_fn) -> None:
             "min_unique_starch_types",
             0,
             7,
-            "Minimaal aantal verschillende zetmeelbases (aardappels, pasta, rijst…).",
+            "Minimaal aantal verschillende koolhydraten (aardappels, pasta, rijst…).",
         )
         _int_setting(
             t("settings.ml.max_consec_meat"),
@@ -848,7 +912,7 @@ def _render_ml_week_constraints(settings: UserSettings, save_fn) -> None:
             "max_consecutive_same_starch",
             1,
             7,
-            "Max. opeenvolgende dagen met dezelfde zetmeelbasis.",
+            "Max. opeenvolgende dagen met dezelfde koolhydraten.",
         )
         _int_setting(
             t("settings.ml.max_red_meat"),
@@ -1306,7 +1370,11 @@ def _render_weather(settings: UserSettings, save_fn) -> None:
             ui.notify(f"{len(dates)} dagen weerdata opgehaald", type="positive", timeout=2000)
         except Exception:
             log.warning("Weather download failed", exc_info=True)
-            ui.notify("Weerdata ophalen mislukt — probeer het later opnieuw", type="negative", timeout=3000)
+            ui.notify(
+                "Weerdata ophalen mislukt — probeer het later opnieuw",
+                type="negative",
+                timeout=3000,
+            )
 
     ui.button("Weerdata ophalen (44 dagen)", on_click=lambda: _download_weather()).props(
         "flat rounded no-caps color=secondary size=sm"
@@ -1533,6 +1601,16 @@ def _format_until(dt) -> str:
     return f"over {mins}m"
 
 
+def _format_duration(seconds: float | None) -> str:
+    """Format a duration in seconds as 'Xm Ys' or 'Xs'."""
+    if seconds is None:
+        return ""
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    return f"{s // 60}m {s % 60}s"
+
+
 def _status_dot_colour(status: str | None) -> str:
     """Colour-code the status dot: green ok, amber in-progress, red error, grey never."""
     if status == "ok":
@@ -1607,6 +1685,11 @@ def _render_sync_status(
                 "display:flex;flex-direction:column;align-items:flex-end;line-height:1.3"
             ):
                 when_lbl = ui.label(when0).style("font-size:12px;color:var(--c-text-3)")
+                dur0 = _format_duration(row.last_duration_seconds if row else None)
+                dur_lbl = ui.label(dur0).style(
+                    "font-size:11px;color:var(--c-text-4)"
+                    + (";display:none" if not dur0 else "")
+                ).tooltip("Duur van de laatste uitvoering")
                 if next_dt is not None:
                     ui.label(_format_until(next_dt)).style(
                         "font-size:11px;color:var(--c-text-4)"
@@ -1618,7 +1701,14 @@ def _render_sync_status(
                 .tooltip("Nu uitvoeren")
             )
 
-            async def _run(_=None, res=resource, btn=run_btn, dot_el=dot, lbl=when_lbl) -> None:
+            async def _run(
+                _=None,
+                res=resource,
+                btn=run_btn,
+                dot_el=dot,
+                lbl=when_lbl,
+                dlbl=dur_lbl,
+            ) -> None:
                 btn.props("loading")
                 dot_el.style(f"background:{_status_dot_colour('in_progress')}")
                 try:
@@ -1648,6 +1738,9 @@ def _render_sync_status(
                 if fresh is not None:
                     status = fresh.last_status or status
                     lbl.set_text(humanize_since(fresh.last_synced_at))
+                    dur_str = _format_duration(fresh.last_duration_seconds)
+                    dlbl.set_text(dur_str)
+                    dlbl.style("font-size:11px;color:var(--c-text-4)" + (";display:none" if not dur_str else ""))
                 dot_el.style(f"background:{_status_dot_colour(status)}")
 
             run_btn.on_click(_run)

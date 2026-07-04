@@ -322,9 +322,7 @@ def test_savings_uses_discounted_price_field():
     """Newer responses report the korting under Receipt.DiscountedPrice."""
     from plus.client import _parse_cart_from_checkout
 
-    cart = _parse_cart_from_checkout(
-        _checkout([("a", 1.50, 2)], price=2.0, discounted_price=1.0)
-    )
+    cart = _parse_cart_from_checkout(_checkout([("a", 1.50, 2)], price=2.0, discounted_price=1.0))
     assert cart.savings == 1.0
 
 

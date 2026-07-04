@@ -8,6 +8,7 @@ resolution (substitutions) happens at add-to-cart time in M7.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 
@@ -547,14 +548,16 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
                         subtitle=cached.subtitle if cached else "",
                     )
                 )
-            # Flag ingredients the store catalogue no longer carries.
+            # Flag ingredients missing or unavailable in the store catalogue.
             store = session.store_number or 0
             if store and await repo.count_product_cache(db, store) > 0:
                 present = await repo.get_product_cache_by_skus(
                     db, store, [r.sku for r in rows if r.sku]
                 )
                 for r in rows:
-                    if r.sku and r.sku not in present:
+                    if r.sku and (
+                        r.sku not in present or not present[r.sku].is_available
+                    ):
                         r.discontinued = True
 
     # ── Dialog ────────────────────────────────────────────────────────
@@ -899,6 +902,61 @@ def _fmt_amount(amount: float) -> str:
     return str(int(amount) if amount == int(amount) else amount)
 
 
+async def _open_substitute_for_row(row: _IngRow, session, user_id: int, refresh_fn) -> None:
+    """Open the substitute dialog for a discontinued ingredient row."""
+    from pyplus.services.categories import parse_categories
+    from pyplus.ui.components.substitutes import show_substitute_dialog
+
+    cats: list[str] = []
+    price = 0.0
+    brand = ""
+
+    async with AsyncSessionLocal() as db:
+        pc = await repo.get_product_cache_by_skus(db, session.store_number or 0, [row.sku])
+        cached_sku = await repo.get_ingredient_sku(db, user_id, row.sku)
+    if row.sku in pc:
+        cats = parse_categories(pc[row.sku].categories_json)
+        price = pc[row.sku].price or 0.0
+        brand = pc[row.sku].brand or ""
+    elif cached_sku:
+        price = cached_sku.last_price or 0.0
+
+    def _on_pick(product):
+        from pyplus.services.dishes import _parse_pack_from_subtitle
+
+        row.sku = product.sku
+        row.display_name = product.name
+        row.image_url = product.image_url
+        row.subtitle = product.subtitle or ""
+        row.discontinued = False
+        pack_size, pack_unit = _parse_pack_from_subtitle(product.subtitle)
+        if pack_unit and row.amount_unit == "stuks":
+            row.amount_unit = pack_unit
+        row.pack_size = pack_size
+        row.pack_unit = pack_unit
+
+        async def _cache():
+            from pyplus.services.dishes import cache_ingredient_sku_from_product
+
+            async with AsyncSessionLocal() as db:
+                await cache_ingredient_sku_from_product(db, user_id, product)
+
+        asyncio.ensure_future(_cache())
+        refresh_fn.refresh()
+
+    show_substitute_dialog(
+        session,
+        sku=row.sku,
+        product_name=row.display_name,
+        product_image=row.image_url,
+        categories=cats,
+        price=price,
+        brand=brand,
+        mode="cart",
+        on_select=_on_pick,
+    )
+
+
 def _render_ingredient_row(
     row: _IngRow, idx: int, rows: list, session, user_id: int, refresh_fn
 ) -> None:
@@ -1003,12 +1061,23 @@ def _render_ingredient_row(
                             "text-overflow:ellipsis;white-space:nowrap"
                         )
                     if row.discontinued:
-                        # Temporary — the store may carry it again next week.
-                        ui.label(t("status.discontinued")).classes(
-                            "sp-badge sp-badge-unavailable"
-                        ).style("font-size:10px;display:inline-block;margin-top:1px").tooltip(
-                            "Nu niet verkrijgbaar — kan later terugkomen"
-                        )
+                        with ui.element("div").style(
+                            "display:flex;align-items:center;gap:.375rem;margin-top:1px"
+                        ):
+                            ui.label(t("status.discontinued")).classes(
+                                "sp-badge sp-badge-unavailable"
+                            ).style("font-size:10px;display:inline-block").tooltip(
+                                "Nu niet verkrijgbaar — kan later terugkomen"
+                            )
+
+                            async def _open_sub(r=row):
+                                await _open_substitute_for_row(r, session, user_id, refresh_fn)
+
+                            ui.button(
+                                t("substitute.replace_btn"),
+                                icon="find_replace",
+                                on_click=_open_sub,
+                            ).props("flat dense no-caps size=sm color=primary")
 
             # Amount input
             amount_str = [str(int(row.amount) if row.amount == int(row.amount) else row.amount)]

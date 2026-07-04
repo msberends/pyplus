@@ -51,31 +51,33 @@ async def create_cockpit_page() -> None:
         # ── Left nav rail ──────────────────────────────────────────────
         create_nav_rail(active="cockpit", user_display_name=session.display_name)
 
-        # ── Main stage (2×2 lane grid) ─────────────────────────────────
+        # ── Main stage: left col (meals+deals) + middle col (staples+search) ──
         with ui.element("div").classes("sp-cockpit-stage"):
-            try:
-                await create_meals_lane(session)
-            except Exception as exc:
-                log.error("Meals lane crashed: %s", exc)
-                _lane_error_fallback(t("lane.meals.title"))
+            with ui.element("div").classes("sp-cockpit-left-col"):
+                try:
+                    await create_meals_lane(session)
+                except Exception as exc:
+                    log.error("Meals lane crashed: %s", exc)
+                    _lane_error_fallback(t("lane.meals.title"))
 
-            try:
-                await create_staples_lane(session)
-            except Exception as exc:
-                log.error("Staples lane crashed: %s", exc)
-                _lane_error_fallback(t("lane.staples.title"))
+                try:
+                    create_deals_lane(session)
+                except Exception as exc:
+                    log.error("Deals lane crashed: %s", exc)
+                    _lane_error_fallback(t("lane.deals.title"))
 
-            try:
-                create_deals_lane(session)
-            except Exception as exc:
-                log.error("Deals lane crashed: %s", exc)
-                _lane_error_fallback(t("lane.deals.title"))
+            with ui.element("div").classes("sp-cockpit-mid-col"):
+                try:
+                    await create_staples_lane(session)
+                except Exception as exc:
+                    log.error("Staples lane crashed: %s", exc)
+                    _lane_error_fallback(t("lane.staples.title"))
 
-            try:
-                create_search_lane(session)
-            except Exception as exc:
-                log.error("Search lane crashed: %s", exc)
-                _lane_error_fallback(t("lane.search.title"))
+                try:
+                    create_search_lane(session)
+                except Exception as exc:
+                    log.error("Search lane crashed: %s", exc)
+                    _lane_error_fallback(t("lane.search.title"))
 
         # ── Right cart column (desktop) ────────────────────────────────
         with ui.element("div").classes("sp-cockpit-cart-col"):

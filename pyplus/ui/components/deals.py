@@ -85,9 +85,10 @@ def create_deals_lane(session) -> None:
                             "font-size:13px;color:var(--c-text-3);margin-top:.25rem"
                         )
                 else:
-                    # Free-delivery offers have no products to act on — skip them.
-                    visible = [p for p in state.promotions if not p.is_free_delivery]
-                    if not visible:
+                    fd_promos = [p for p in state.promotions if p.is_free_delivery]
+                    regular = [p for p in state.promotions if not p.is_free_delivery]
+
+                    if not fd_promos and not regular:
                         with ui.element("div").classes("sp-lane-placeholder"):
                             ui.label("🏷️").classes("sp-lane-placeholder-icon")
                             ui.label(t("lane.deals.empty")).style(
@@ -95,8 +96,6 @@ def create_deals_lane(session) -> None:
                             )
 
                     def _card_for(promo) -> None:
-                        # Each card is its own refreshable so expanding one doesn't
-                        # re-render (and re-flash the images of) the whole lane.
                         @ui.refreshable
                         def _card(p=promo) -> None:
                             _render_promo(p, state, session, cart_service, _card)
@@ -104,12 +103,19 @@ def create_deals_lane(session) -> None:
                         state.card_refreshers[promo.slug] = _card
                         _card()
 
+                    if fd_promos:
+                        with ui.element("div").classes("sp-fd-header"):
+                            ui.icon("local_shipping", size="18px")
+                            ui.label(t("deals.free_delivery"))
+                        for promo in fd_promos:
+                            _card_for(promo)
+                        if regular:
+                            ui.element("hr").classes("sp-fd-divider")
+
                     if session.settings.deals_group_by_category:
-                        # Promotions already arrive grouped into category sections;
-                        # surface those as headers, first-appearance order preserved.
                         seen: list[str] = []
                         groups: dict[str, list] = {}
-                        for promo in visible:
+                        for promo in regular:
                             label = promo.category_label or "Overig"
                             if label not in groups:
                                 groups[label] = []
@@ -120,7 +126,7 @@ def create_deals_lane(session) -> None:
                             for promo in groups[label]:
                                 _card_for(promo)
                     else:
-                        for promo in visible:
+                        for promo in regular:
                             _card_for(promo)
 
             _render()
@@ -227,17 +233,6 @@ def _render_skeleton() -> None:
 
 def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, refresh_fn) -> None:
     """Render one promotion entry."""
-
-    # Free delivery → narrow banner
-    if promo.is_free_delivery:
-        with ui.element("div").classes("sp-promo-banner"):
-            ui.icon("local_shipping", size="14px").style("color:var(--c-brand-dark);flex-shrink:0")
-            txt = "Gratis bezorging"
-            if promo.subtitle:
-                txt += f" · {promo.subtitle}"
-            ui.label(txt).style("font-size:12px;color:var(--c-brand-dark);font-weight:500")
-        return
-
     is_expanded = promo.slug in state.expanded
     cart_qty = 0
     if promo.is_single_product and promo.sku:
@@ -246,7 +241,12 @@ def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, r
     else:
         is_syncing = False
 
-    with ui.element("div").classes("sp-promo-card"):
+    is_fd = promo.is_free_delivery
+    card_cls = "sp-promo-card sp-promo-card-fd" if is_fd else "sp-promo-card"
+    ribbon_cls = "sp-promo-ribbon-fd" if is_fd else "sp-promo-ribbon"
+    accent = "var(--c-accent)" if is_fd else "var(--c-brand-dark)"
+
+    with ui.element("div").classes(card_cls):
         # Card header row: image | deal info | action
         with ui.element("div").style("display:flex;align-items:center;gap:.625rem"):
             # Thumbnail
@@ -261,18 +261,26 @@ def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, r
             with ui.element("div").style("flex:1;min-width:0;overflow:hidden"):
                 # Deal label ribbon
                 if promo.label:
-                    ui.label(promo.label).classes("sp-promo-ribbon").style(
+                    ui.label(promo.label).classes(ribbon_cls).style(
                         "display:inline-block;margin-bottom:.2rem"
                     )
 
                 name = promo.name or promo.brand
-                ui.label(name).style(
-                    "font-size:13px;font-weight:600;color:var(--c-text);"
-                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3"
-                )
+                if promo.url:
+                    ui.link(name, promo.url, new_tab=True).style(
+                        "font-size:13px;font-weight:600;color:var(--c-text);text-decoration:none;"
+                        "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;"
+                        "display:block"
+                    ).tooltip("Bekijken op plus.nl")
+                else:
+                    ui.label(name).style(
+                        "font-size:13px;font-weight:600;color:var(--c-text);"
+                        "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3"
+                    )
                 if promo.subtitle:
                     ui.label(promo.subtitle).style(
-                        "font-size:11px;color:var(--c-text-3);line-height:1.2"
+                        f"font-size:11px;color:{'var(--c-accent)' if is_fd else 'var(--c-text-3)'};"
+                        "line-height:1.2"
                     )
                 # Prices
                 with ui.element("div").style(
@@ -280,7 +288,7 @@ def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, r
                 ):
                     if promo.price_new > 0:
                         ui.label(f"€ {promo.price_new:.2f}".replace(".", ",")).style(
-                            "font-size:13px;font-weight:700;color:var(--c-brand-dark)"
+                            f"font-size:13px;font-weight:700;color:{accent}"
                         )
                     if promo.price_was > 0 and promo.price_new > 0:
                         ui.label(f"€ {promo.price_was:.2f}".replace(".", ",")).style(
@@ -295,9 +303,11 @@ def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, r
                     # Group deal: expand/collapse button. Show the child count up front
                     # ("Bekijken (N)") from the warmed cache; fall back to the fetched
                     # list once expanded, or a bare "Bekijken" when the count is unknown.
-                    n_products = len(state.promo_products.get(promo.slug)) if (
-                        promo.slug in state.promo_products
-                    ) else len(state.cached_children.get(promo.slug, []))
+                    n_products = (
+                        len(state.promo_products.get(promo.slug))
+                        if (promo.slug in state.promo_products)
+                        else len(state.cached_children.get(promo.slug, []))
+                    )
                     label = f"Bekijken ({n_products})" if n_products else "Bekijken"
                     icon = "expand_less" if is_expanded else "expand_more"
                     with ui.element("div").style(
@@ -321,7 +331,9 @@ def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, r
                 with ui.element("div").classes("sp-promo-products"):
                     for prod in products:
                         if prod.sku:
-                            _render_promo_product(prod, session, cart_service)
+                            _render_promo_product(
+                                prod, session, cart_service, show_ribbon=not is_fd
+                            )
             else:
                 ui.label("Geen producten gevonden").style(
                     "font-size:12px;color:var(--c-text-3);padding:.375rem .5rem"
@@ -374,7 +386,9 @@ def _render_promo_stepper(promo: Promotion, cart_qty: int, syncing: bool, cart_s
             stepper_button("+", aria_label=t("a11y.qty_increase"), on_click=_add)
 
 
-def _render_promo_product(prod: PromotionProduct, session, cart_service) -> None:
+def _render_promo_product(
+    prod: PromotionProduct, session, cart_service, *, show_ribbon: bool = True
+) -> None:
     """One product inside an expanded group deal."""
     cart_qty = next((it.quantity for it in session.cart.items if it.sku == prod.sku), 0)
     is_syncing = prod.sku in session.syncing_skus
@@ -390,9 +404,15 @@ def _render_promo_product(prod: PromotionProduct, session, cart_service) -> None
             )
 
         with ui.element("div").classes("sp-search-info"):
-            ui.label(prod.name).classes("sp-search-name").style(
-                "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-            )
+            if prod.url:
+                ui.link(prod.name, prod.url, new_tab=True).classes("sp-search-name").style(
+                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                    "text-decoration:none;color:inherit;display:block"
+                ).tooltip("Bekijken op plus.nl")
+            else:
+                ui.label(prod.name).classes("sp-search-name").style(
+                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                )
             with ui.element("div").style("display:flex;align-items:center;gap:.375rem"):
                 if prod.subtitle:
                     ui.label(prod.subtitle).classes("sp-search-unit")
@@ -400,7 +420,7 @@ def _render_promo_product(prod: PromotionProduct, session, cart_service) -> None
                     ui.label(f"€ {prod.price_new:.2f}".replace(".", ",")).classes(
                         "sp-search-price"
                     ).style("color:var(--c-brand-dark)")
-                if prod.label:
+                if prod.label and show_ribbon:
                     ui.label(prod.label).classes("sp-promo-ribbon").style(
                         "font-size:9px;padding:1px 5px"
                     )
@@ -475,7 +495,9 @@ async def _cache_is_stale(store_number: int, week_start: datetime.date) -> bool:
         row = await repo.get_promotions_cache(db, store_number, week_start, False)
     if row is None:
         return True
-    age = (datetime.datetime.utcnow() - row.fetched_at).total_seconds()
+    age = (
+        datetime.datetime.now(datetime.UTC).replace(tzinfo=None) - row.fetched_at
+    ).total_seconds()
     return age > _CACHE_TTL_HOURS * 3600
 
 

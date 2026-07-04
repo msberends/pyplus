@@ -27,6 +27,11 @@ ml_artifacts/
 trace.zip
 playwright-report/
 
+# Screenshot tool (tools/screenshot.py)
+.screenshot.env
+.screenshot_session.json
+screenshots/
+
 # Legacy test captures (not part of the app)
 *_capture.json
 *_result.json

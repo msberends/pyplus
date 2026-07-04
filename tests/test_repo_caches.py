@@ -174,7 +174,7 @@ async def test_order_items_idempotent_and_cached_ids(sf):
 
 @pytest.mark.asyncio
 async def test_dish_availability_counts(sf):
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
     async with sf() as db:
         dish = Dish(user_id=USER, name="Test", created_at=now)
         db.add(dish)

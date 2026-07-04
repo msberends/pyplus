@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json as _json
+import re
 
 from nicegui import ui
 
@@ -14,13 +15,82 @@ from pyplus.ui.format import alt_text as _alt
 from pyplus.ui.format import thumbnail_url
 
 
+def _parse_fd_threshold(promo) -> dict:
+    """Parse a free-delivery threshold from subtitle/label as provided by PLUS."""
+    for text in [promo.subtitle, promo.label]:
+        if not text:
+            continue
+        m = re.search(r"€\s*(\d+(?:[.,]\d+)?)", text)
+        if m:
+            return {"eur": float(m.group(1).replace(",", ".")), "qty": None}
+        m = re.search(r"(\d+(?:[.,]\d+)?)\s*euro", text, re.IGNORECASE)
+        if m:
+            return {"eur": float(m.group(1).replace(",", ".")), "qty": None}
+        m = re.search(r"(\d+)\s*stuks?", text, re.IGNORECASE)
+        if m:
+            return {"eur": None, "qty": int(m.group(1))}
+    return {"eur": None, "qty": None}
+
+
+_VOOR_RE = re.compile(r"(\d+)\s+VOOR\s+(\d+[.,]\d+)", re.IGNORECASE)
+_GRATIS_RE = re.compile(r"(\d+)\+(\d+)\s+GRATIS", re.IGNORECASE)
+_KORTING_RE = re.compile(r"(\d+)\s*%\s*KORTING", re.IGNORECASE)
+
+
+def _compute_deal_total(promo, item) -> float | None:
+    """Compute the actual deal total for a cart line, or None if undetermined.
+
+    PLUS keeps per-item cart prices at the original — discounts are applied at the
+    receipt level.  This function reverse-engineers the deal total from the promo
+    label so we can show strikethrough original + green deal price per row.
+    """
+    if promo is None or promo.is_free_delivery:
+        return None
+    was = round(item.price * item.quantity, 2)
+    label = promo.label or ""
+
+    m = _VOOR_RE.match(label)
+    if m:
+        deal_qty = int(m.group(1))
+        deal_price = float(m.group(2).replace(",", "."))
+        full = item.quantity // deal_qty
+        rest = item.quantity % deal_qty
+        total = round(full * deal_price + rest * item.price, 2)
+        return total if total < was - 0.005 else None
+
+    m = _GRATIS_RE.match(label)
+    if m:
+        buy = int(m.group(1))
+        free = int(m.group(2))
+        deal_qty = buy + free
+        full = item.quantity // deal_qty
+        rest = item.quantity % deal_qty
+        paid = full * buy + min(rest, buy)
+        total = round(paid * item.price, 2)
+        return total if total < was - 0.005 else None
+
+    m = _KORTING_RE.match(label)
+    if m:
+        pct = int(m.group(1))
+        total = round(was * (100 - pct) / 100, 2)
+        return total if total < was - 0.005 else None
+
+    if promo.price_new > 0 and promo.is_single_product:
+        total = round(promo.price_new * item.quantity, 2)
+        return total if total < was - 0.005 else None
+
+    return None
+
+
 def create_cart_panel(session) -> None:
     """Render the cart panel and wire it to the session's live cart."""
     cart_service = getattr(session, "cart_service", None)
     savings_by_sku: dict = {}  # sku → savings.Saving for the current cart
     promo_by_sku: dict = {}  # sku → Promotion for items currently on offer
     image_by_sku: dict = {}  # sku → catalogue image (fallback when cart line has none)
+    slug_by_sku: dict = {}  # sku → product slug (for canonical plus.nl URLs)
     cat_by_sku: dict = {}  # sku → category breadcrumb (for grouping/sorting)
+    _fd_thresholds: dict = {}  # slug → {"promo": Promotion, "eur": float|None, "qty": int|None}
     prefs = session.settings
 
     # Keyed rows: sku → refs dict. Rows are reused across cart changes (created /
@@ -75,18 +145,39 @@ def create_cart_panel(session) -> None:
                 # Emphasise the row itself when its product is on offer — these are the
                 # "responsible" products behind the korting banner. The class is toggled
                 # regardless of the tag preference; the textual tag still respects it.
-                if promo is not None:
+                if promo is not None and promo.is_free_delivery:
+                    refs["row"].classes(remove="sp-cart-item-promo")
+                    refs["row"].classes(add="sp-cart-item-fd")
+                elif promo is not None:
+                    refs["row"].classes(remove="sp-cart-item-fd")
                     refs["row"].classes(add="sp-cart-item-promo")
                 else:
-                    refs["row"].classes(remove="sp-cart-item-promo")
+                    refs["row"].classes(remove="sp-cart-item-promo sp-cart-item-fd")
+                # Was-price strikethrough for promo items
+                was = refs.get("was_price")
+                if was:
+                    deal_total = _compute_deal_total(promo, item)
+                    if deal_total is not None:
+                        original = round(item.price * item.quantity, 2)
+                        was.set_text(f"€ {original:.2f}".replace(".", ","))
+                        was.set_visibility(True)
+                        refs["price"].set_text(f"€ {deal_total:.2f}".replace(".", ","))
+                        refs["price"].classes(add="sp-cart-item-price-deal")
+                    else:
+                        was.set_visibility(False)
+                        refs["price"].classes(remove="sp-cart-item-price-deal")
+
                 if promo is None or not prefs.show_promo_tags:
                     return
                 from pyplus.services.promos import promo_tag_label
 
                 with slot:
-                    ui.label(promo_tag_label(promo)).classes("sp-promo-tag").style(
+                    tag_cls = "sp-promo-tag-fd" if promo.is_free_delivery else "sp-promo-tag"
+                    ui.label(promo_tag_label(promo)).classes(tag_cls).style(
                         "margin-top:2px"
-                    ).tooltip("In de aanbieding")
+                    ).tooltip(
+                        t("deals.free_delivery") if promo.is_free_delivery else "In de aanbieding"
+                    )
 
             def _fill_saving(refs, item) -> None:
                 slot = refs["saving_slot"]
@@ -172,7 +263,7 @@ def create_cart_panel(session) -> None:
                         ui.element("div").classes("sp-cart-item-img").style("overflow:hidden")
                     )
                     with ui.element("div").style("flex:1;min-width:0;overflow:hidden"):
-                        product_url = plus_product_url(sku=item.sku)
+                        product_url = plus_product_url(slug_by_sku.get(item.sku, ""), item.sku)
                         if product_url:
                             ui.link(item.product, product_url, new_tab=True).classes(
                                 "sp-cart-item-name"
@@ -191,6 +282,8 @@ def create_cart_panel(session) -> None:
                     with ui.element("div").style(
                         "display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0"
                     ):
+                        refs["was_price"] = ui.label("").classes("sp-cart-item-was")
+                        refs["was_price"].set_visibility(False)
                         refs["price"] = ui.label(
                             f"€ {item.price_total:.2f}".replace(".", ",")
                         ).classes("sp-cart-item-price")
@@ -211,7 +304,20 @@ def create_cart_panel(session) -> None:
                 state flips (it hides while syncing). So a plain qty tick touches
                 just the qty/price/per-unit labels — no slot churn, no image work.
                 """
-                refs["price"].set_text(f"€ {item.price_total:.2f}".replace(".", ","))
+                promo = promo_by_sku.get(item.sku)
+                deal_total = _compute_deal_total(promo, item) if promo else None
+                was = refs.get("was_price")
+                if deal_total is not None and was:
+                    original = round(item.price * item.quantity, 2)
+                    refs["price"].set_text(f"€ {deal_total:.2f}".replace(".", ","))
+                    refs["price"].classes(add="sp-cart-item-price-deal")
+                    was.set_text(f"€ {original:.2f}".replace(".", ","))
+                    was.set_visibility(True)
+                else:
+                    refs["price"].set_text(f"€ {item.price_total:.2f}".replace(".", ","))
+                    refs["price"].classes(remove="sp-cart-item-price-deal")
+                    if was:
+                        was.set_visibility(False)
                 _fill_perunit(refs, item)
                 now_sync = item.sku in session.syncing_skus
                 if now_sync != refs.get("syncing"):
@@ -336,6 +442,17 @@ def create_cart_panel(session) -> None:
                     if item:
                         _fill_promo(refs, item)
 
+                _fd_thresholds.clear()
+                seen: set[str] = set()
+                for promo in idx.values():
+                    if promo.is_free_delivery and promo.slug not in seen:
+                        seen.add(promo.slug)
+                        _fd_thresholds[promo.slug] = {
+                            "promo": promo,
+                            **_parse_fd_threshold(promo),
+                        }
+                _on_cart()
+
             async def _load_images() -> None:
                 """Backfill catalogue images for cart lines lacking one — one row at a time."""
                 store = getattr(session, "store_number", 0) or 0
@@ -365,92 +482,78 @@ def create_cart_panel(session) -> None:
                         item = _cart_item(sku)
                         if refs and item:
                             _fill_image(refs, item)  # updates only this row's thumbnail
-
-            async def _load_free_delivery() -> None:
-                """Load free delivery promo info (cache-only) and update the banner."""
-                store = getattr(session, "store_number", 0) or 0
-                if not store:
-                    return
-                from pyplus.services.promos import get_free_delivery_info
-
-                info = await get_free_delivery_info(store)
-                if info:
-                    _fd["sku"] = info[0]
-                    _fd["threshold"] = info[1]
-                    _on_cart()  # re-evaluate the banner with the loaded data
+                    slug = (cat.get(sku).slug if cat.get(sku) else "") or (
+                        cached.get(sku).slug if cached.get(sku) else ""
+                    )
+                    if slug:
+                        slug_by_sku[sku] = slug
 
             _sync()
             asyncio.ensure_future(_load_promos())  # drives on-offer row emphasis + tags
             asyncio.ensure_future(_load_images())
-            asyncio.ensure_future(_load_free_delivery())
             if prefs.cart_group_by_category:
                 asyncio.ensure_future(_load_categories())
 
         # ── Footer ──────────────────────────────────────────────────────
         with ui.element("div").classes("sp-cart-footer"):
+            # Total row + collapse toggle (always visible)
             with ui.element("div").classes("sp-cart-total-row"):
                 ui.label(t("cart.total")).style(
                     "font-size:13px;font-weight:600;color:var(--c-text-3)"
                 )
                 total_label = ui.label("€ 0,00").classes("sp-cart-total")
+                footer_toggle = (
+                    ui.button(icon="expand_more", on_click=lambda: _toggle_footer_details())
+                    .props("flat round dense size=sm color=grey-7")
+                    .classes("sp-cart-footer-toggle")
+                )
 
-            # Promotional discount banner — styled like the Aanbiedingen lane (green
-            # tag) so it reads clearly as money saved on offers, not just a number.
-            with ui.element("div").classes("sp-cart-savings-banner") as savings_row:
-                ui.icon("local_offer", size="15px")
-                savings_label = ui.label("").classes("sp-cart-savings")
-                ui.label(t("cart.savings_from")).classes("sp-cart-savings-from")
-            savings_row.set_visibility(False)
+            # Collapsible details (korting, statiegeld, free delivery, optimise)
+            footer_details = ui.element("div").classes("sp-cart-footer-details")
+            with footer_details:
+                # Promotional discount banner
+                with ui.element("div").classes("sp-cart-savings-banner") as savings_row:
+                    ui.icon("local_offer", size="15px")
+                    savings_label = ui.label("").classes("sp-cart-savings")
+                    ui.label(t("cart.savings_from")).classes("sp-cart-savings-from")
+                savings_row.set_visibility(False)
 
-            # Statiegeld line — a cost already counted in the total, not a discount.
-            # Neutral styling keeps it visually distinct from the green korting banner.
-            with ui.element("div").classes("sp-cart-deposit-line") as deposit_row:
-                ui.icon("recycling", size="15px")
-                deposit_label = ui.label("").classes("sp-cart-deposit-amount")
-                ui.label(t("cart.deposit_note")).classes("sp-cart-deposit-note")
-            deposit_row.set_visibility(False)
+                # Statiegeld line
+                with ui.element("div").classes("sp-cart-deposit-line") as deposit_row:
+                    ui.icon("recycling", size="15px")
+                    deposit_label = ui.label("").classes("sp-cart-deposit-amount")
+                    ui.label(t("cart.deposit_note")).classes("sp-cart-deposit-note")
+                deposit_row.set_visibility(False)
 
-            # ── Free delivery ──────────────────────────────────────────
-            _fd: dict = {}  # populated async: {"sku": str, "threshold": float}
-            with ui.element("div").style(
-                "display:flex;align-items:center;gap:.375rem;padding:.25rem 0;"
-                "font-size:12px;color:var(--c-text-3)"
-            ) as free_delivery_row:
-                ui.icon("local_shipping", size="15px")
-                free_delivery_label = ui.label("").style("flex:1")
-                free_delivery_btn = (
+                # Free delivery status
+                with ui.element("div").classes("sp-cart-fd-line") as fd_row:
+                    ui.icon("local_shipping", size="15px")
+                    ui.label(t("deals.free_delivery")).style("font-weight:700")
+                    fd_suffix = ui.label("")
+                fd_row.set_visibility(False)
+
+                # Savings / optimise
+                optimise_btn = (
                     ui.button(
-                        t("cart.free_delivery_add"),
-                        on_click=lambda: (
-                            asyncio.ensure_future(
-                                cart_service.add(
-                                    _fd["sku"],
-                                    product_name=t("cart.free_delivery"),
-                                    check_stock=False,
-                                )
-                            )
-                            if cart_service and _fd.get("sku")
-                            else None
+                        t("cart.optimise"),
+                        icon="savings",
+                        on_click=lambda: _show_optimise_dialog(
+                            session, cart_service, savings_by_sku, image_by_sku
                         ),
                     )
-                    .props("flat dense no-caps size=sm color=primary")
-                    .style("flex-shrink:0")
+                    .props("flat rounded no-caps color=primary")
+                    .classes("sp-optimise-btn")
                 )
-            free_delivery_row.set_visibility(False)
+                optimise_btn.set_visibility(False)
 
-            # ── Savings / optimise ─────────────────────────────────────
-            optimise_btn = (
-                ui.button(
-                    t("cart.optimise"),
-                    icon="savings",
-                    on_click=lambda: _show_optimise_dialog(
-                        session, cart_service, savings_by_sku, image_by_sku
-                    ),
+            _footer_expanded = [True]
+
+            def _toggle_footer_details() -> None:
+                _footer_expanded[0] = not _footer_expanded[0]
+                footer_details.set_visibility(_footer_expanded[0])
+                footer_toggle.props(
+                    f'icon={"expand_more" if _footer_expanded[0] else "expand_less"}'
                 )
-                .props("flat rounded no-caps color=primary")
-                .classes("sp-optimise-btn")
-            )
-            optimise_btn.set_visibility(False)
 
             with ui.element("div").style(
                 "display:flex;gap:.375rem;align-items:center;margin-top:.5rem"
@@ -529,34 +632,38 @@ def create_cart_panel(session) -> None:
         else:
             deposit_row.set_visibility(False)
 
-        # Free delivery banner (only when promo data has been loaded)
-        fd_sku = _fd.get("sku")
-        fd_threshold = _fd.get("threshold", 0.0)
-        if fd_sku and fd_threshold > 0:
-            has_fd = any(it.sku == fd_sku for it in cart.items)
-            if cart.final_total >= fd_threshold:
-                if has_fd:
-                    free_delivery_label.set_text(t("cart.free_delivery_active"))
-                    free_delivery_label.style("color:var(--c-brand-dark);font-weight:600")
-                    free_delivery_btn.set_visibility(False)
+        # Free delivery status
+        if _fd_thresholds:
+            fd_cart: dict[str, list] = {}
+            for it in cart.items:
+                promo = promo_by_sku.get(it.sku)
+                if promo and promo.is_free_delivery:
+                    fd_cart.setdefault(promo.slug, []).append(it)
+            if fd_cart:
+                any_met = False
+                for slug, items in fd_cart.items():
+                    info = _fd_thresholds.get(slug, {})
+                    if info.get("eur") is not None:
+                        if sum(it.price_total for it in items) >= info["eur"]:
+                            any_met = True
+                            break
+                    elif info.get("qty") is not None:
+                        if sum(it.quantity for it in items) >= info["qty"]:
+                            any_met = True
+                            break
+                if any_met:
+                    fd_suffix.set_text(t("cart.fd_met"))
+                    fd_row.classes(remove="sp-fd-unmet")
+                    fd_row.classes(add="sp-fd-met")
                 else:
-                    free_delivery_label.set_text(t("cart.free_delivery"))
-                    free_delivery_label.style("color:var(--c-text-3);font-weight:400")
-                    free_delivery_btn.set_visibility(True)
-                free_delivery_row.set_visibility(True)
-            elif cart.final_total > 0:
-                remaining = fd_threshold - cart.final_total
-                free_delivery_label.set_text(
-                    t(
-                        "cart.free_delivery_remaining",
-                        amount=f"{remaining:.2f}".replace(".", ","),
-                    )
-                )
-                free_delivery_label.style("color:var(--c-text-3);font-weight:400")
-                free_delivery_btn.set_visibility(False)
-                free_delivery_row.set_visibility(True)
+                    fd_suffix.set_text(t("cart.fd_unmet"))
+                    fd_row.classes(remove="sp-fd-met")
+                    fd_row.classes(add="sp-fd-unmet")
+                fd_row.set_visibility(True)
             else:
-                free_delivery_row.set_visibility(False)
+                fd_row.set_visibility(False)
+        else:
+            fd_row.set_visibility(False)
 
         # Reconcile the keyed rows: qty/sync changes update in place (images keep
         # their DOM element), only added/removed/reordered rows touch the structure.
@@ -683,7 +790,7 @@ def _confirm_clear_cart(cart_service) -> None:
 
 
 async def _apply_saving(session, cart_service, s) -> None:
-    """Swap to the cheaper pack: add the alternative first, then drop the current sku."""
+    """Swap to the cheaper pack: add the alternative, then reduce/remove the current sku."""
     if not cart_service:
         return
     per_unit = round(s.new_cost / s.new_qty, 2) if s.new_qty else 0.0
@@ -700,7 +807,7 @@ async def _apply_saving(session, cart_service, s) -> None:
         )
         if not added:
             return
-        await cart_service.set_quantity(s.sku, 0)
+        await cart_service.set_quantity(s.sku, s.keep_qty)
     amt = f"{s.saving:.2f}".replace(".", ",")
     ui.notify(t("cart.save_amount", amount=amt).capitalize(), type="positive", position="top")
 

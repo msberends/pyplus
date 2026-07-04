@@ -780,7 +780,7 @@ class PlusClient:
         navigation; the first call navigates to /aanbiedingen to prime them.
 
         Returns a PromotionResult with one Promotion per offer across all categories,
-        excluding free-delivery deals.
+        including free-delivery offers (is_free_delivery=True).
         """
         import time as _time
 
@@ -851,7 +851,6 @@ class PlusClient:
         Fetch individual products for a group promotion by its slug (e.g. '4431-96').
 
         Only meaningful for promotions where is_single_product is False.
-        Returns an empty list for free-delivery offers (no products to show).
         ~400ms per call.
         """
         import time as _time

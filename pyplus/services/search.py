@@ -57,7 +57,7 @@ async def search_products(session, query: str, limit: int = 24) -> list[Product]
     """Search the local product catalogue. No live API calls — the catalogue is
     kept fresh by the nightly sync job."""
     query = (query or "").strip()
-    if len(query) < 2:
+    if len(query) < 3:
         return []
 
     store_number = getattr(session, "store_number", 0) or 0

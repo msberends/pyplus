@@ -2,16 +2,19 @@
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from plus.models import Product
 from pyplus.db import repo
+from pyplus.db.engine import register_sqlite_functions
 from pyplus.db.models import Base
 
 
 @pytest_asyncio.fixture
 async def session_factory():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    event.listen(engine.sync_engine, "connect", register_sqlite_functions)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield async_sessionmaker(engine, expire_on_commit=False)
@@ -103,16 +106,8 @@ async def test_available_sorts_first(session_factory):
 
 
 @pytest.mark.asyncio
-async def test_fts_index_present_on_create_all(session_factory):
-    # The after_create hook must build the FTS index even under create_all (tests).
-    async with session_factory() as db:
-        assert await repo._fts_available(db) is True
-
-
-@pytest.mark.asyncio
 async def test_search_matches_substring_in_compound_word(session_factory):
-    # Dutch compound words: "kaas" must match inside "Pindakaas" — the trigram
-    # tokenizer preserves substring semantics (a default tokenizer would not).
+    # Dutch compound words: "kaas" must match inside "Pindakaas".
     async with session_factory() as db:
         await repo.upsert_product_cache(db, 720, [_p("1", "Pindakaas naturel")])
         hits = await repo.search_product_cache(db, 720, "kaas")
@@ -120,8 +115,8 @@ async def test_search_matches_substring_in_compound_word(session_factory):
 
 
 @pytest.mark.asyncio
-async def test_search_short_token_falls_back_to_like(session_factory):
-    # Tokens shorter than the trigram minimum (3) take the LIKE path and still match.
+async def test_search_short_token(session_factory):
+    # Short tokens (< 3 chars) work the same as longer ones — no length gate.
     async with session_factory() as db:
         await repo.upsert_product_cache(db, 720, [_p("1", "Eieren")])
         hits = await repo.search_product_cache(db, 720, "ei")
@@ -129,9 +124,8 @@ async def test_search_short_token_falls_back_to_like(session_factory):
 
 
 @pytest.mark.asyncio
-async def test_search_reflects_name_update_via_trigger(session_factory):
-    # The AFTER UPDATE trigger must re-sync FTS: searching the new name finds it,
-    # the old name no longer does.
+async def test_search_reflects_name_update(session_factory):
+    # Upsert updates product_cache; search immediately reflects the new name.
     async with session_factory() as db:
         await repo.upsert_product_cache(db, 720, [_p("1", "Halfvolle melk")])
         await repo.upsert_product_cache(db, 720, [_p("1", "Volle yoghurt")])

@@ -64,9 +64,9 @@ _STRINGS: dict[str, str] = {
     "cart.clear_failed": "Winkelwagen leegmaken mislukt",
     "cart.total": "Totaal",
     "cart.savings": "Korting",
-    "cart.savings_from": "van aanbiedingen",
+    "cart.savings_from": "door aanbiedingen",
     "cart.deposit": "Statiegeld",
-    "cart.deposit_note": "incl. in totaal",
+    "cart.deposit_note": "inbegrepen",
     "cart.items": "{n} producten",
     "cart.sync_error": "Kan winkelwagen niet bijwerken",
     "cart.unavailable": "Niet beschikbaar",
@@ -82,10 +82,9 @@ _STRINGS: dict[str, str] = {
     "cart.optimise_none": "Geen besparingen gevonden in je mandje.",
     "cart.optimise_total": "Totaal te besparen: € {amount}",
     # ── Free delivery ─────────────────────────────────────────────────────
-    "cart.free_delivery": "Gratis bezorging",
-    "cart.free_delivery_add": "Toevoegen",
-    "cart.free_delivery_active": "Toegevoegd",
-    "cart.free_delivery_remaining": "Nog € {amount} tot gratis bezorging",
+    "deals.free_delivery": "Gratis bezorging",
+    "cart.fd_met": "inbegrepen",
+    "cart.fd_unmet": "nog niet inbegrepen",
     # ── Stock alert ───────────────────────────────────────────────────────
     "error.product_not_in_stock_title": "Niet beschikbaar",
     "error.product_not_in_stock_body": "{name} is momenteel niet beschikbaar in jouw winkel.",
@@ -102,7 +101,7 @@ _STRINGS: dict[str, str] = {
     "dishes.prep_notes_hint": "Wordt weergegeven in je agenda via iCal",
     "dishes.prep_time_label": "Bereidingstijd",
     "dishes.meat_label": "Vlees / vis / vega",
-    "dishes.starch_label": "Basis / zetmeel",
+    "dishes.starch_label": "Koolhydraten",
     "dishes.veg_label": "Hoeveelheid groenten",
     "dishes.meta_unset": "Onbekend",
     "dishes.ingredients": "Ingrediënten",
@@ -146,8 +145,8 @@ _STRINGS: dict[str, str] = {
     "settings.ml.day_enabled": "Automatisch invullen",
     "settings.ml.day_max_prep": "Max. bereidingstijd",
     "settings.ml.day_meat_blocked": "Vlees / vis / vega",
-    "settings.ml.day_starch_pref": "Voorkeur basis/zetmeel",
-    "settings.ml.day_starch_blocked": "Basis / zetmeel",
+    "settings.ml.day_starch_pref": "Voorkeur koolhydraten",
+    "settings.ml.day_starch_blocked": "Koolhydraten",
     "settings.ml.day_no_limit": "Geen limiet",
     "settings.ml.lunch_combined": "Extra (alle slots)",
     # ── Week constraints ──────────────────────────────────────────────────
@@ -160,9 +159,9 @@ _STRINGS: dict[str, str] = {
     "settings.ml.max_vega": "Max. vegetarische dagen",
     "settings.ml.min_fish": "Min. visdagen",
     "settings.ml.max_same_meat": "Max. zelfde eiwittype per week",
-    "settings.ml.min_unique_starch": "Min. unieke zetmeeltypes",
+    "settings.ml.min_unique_starch": "Min. unieke koolhydraten",
     "settings.ml.max_consec_meat": "Max. opeenvolgend zelfde vlees / vis / vega",
-    "settings.ml.max_consec_starch": "Max. opeenvolgend zelfde basis / zetmeel",
+    "settings.ml.max_consec_starch": "Max. opeenvolgend zelfde koolhydraten",
     "settings.ml.max_red_meat": "Max. dagen rund/varken",
     "settings.ml.target_veg": "Streefgemiddelde groenten",
     # ── Advanced ML knobs ─────────────────────────────────────────────────
@@ -279,6 +278,42 @@ _STRINGS: dict[str, str] = {
     "error.api_version_changed": "PLUS.nl heeft een update uitgerold — herstart de app",
     "error.product_unavailable": "{name} is niet beschikbaar in jouw winkel",
     "error.product_unavailable_cached": "Let op: dit product stond recent als niet beschikbaar geregistreerd.",
+    # ── Substitutes ─────────────────────────────────────────────────────────────
+    "substitute.dialog_title": "Vervangend product",
+    "substitute.suggestions_header": "Suggesties",
+    "substitute.search_placeholder": "Zoek alternatief…",
+    "substitute.no_results": "Geen alternatieven gevonden",
+    "substitute.loading": "Alternatieven zoeken…",
+    "substitute.select": "Kiezen",
+    "substitute.replace_btn": "Vervangen",
+    "substitute.reason_category": "Zelfde categorie",
+    "substitute.reason_name": "Vergelijkbaar product",
+    "substitute.reason_brand": "Zelfde merk",
+    "substitute.reason_bought": "Eerder gekocht",
+    "substitute.skip": "Overslaan",
+    "substitute.unavail_title": "Niet beschikbare ingrediënten",
+    "substitute.unavail_body": "{n} ingrediënten zijn niet beschikbaar",
+    "substitute.continue": "Doorgaan",
+    # ── Substitute settings ───────────────────────────────────────────────────
+    "settings.substitute.title": "Vervangende producten",
+    "settings.substitute.prefer_brand": "Voorkeur voor zelfde merk",
+    "settings.substitute.prefer_brand_hint": "Toon eerst alternatieven van hetzelfde merk.",
+    "settings.substitute.prefer_bought": "Eerder gekochte producten",
+    "settings.substitute.prefer_bought_hint": "Geef voorkeur aan producten die je eerder hebt gekocht.",
+    "settings.substitute.price_range": "Prijsvoorkeur",
+    "settings.substitute.price_cheaper": "Goedkoper",
+    "settings.substitute.price_similar": "Vergelijkbare prijs",
+    "settings.substitute.price_any": "Alle prijzen",
+    "settings.substitute.max_results": "Aantal suggesties",
+    "settings.substitute.max_results_hint": "Hoeveel alternatieven de vervangdialoog maximaal toont.",
+    "settings.substitute.how_it_works": (
+        "Alternatieven worden lokaal berekend op basis van vijf factoren: "
+        "categorie-overeenkomst (diepste niveau weegt het zwaarst), "
+        "naam-gelijkenis (woordoverlap), zelfde merk, prijsnabijheid, "
+        "en of je het product eerder hebt gekocht. "
+        "Elke factor krijgt een gewicht — de totaalscore bepaalt de volgorde. "
+        "Geen data verlaat je server."
+    ),
     # ── Accessibility (screen-reader labels for icon-only controls) ─────────────
     "a11y.add_to_cart": "Toevoegen aan winkelwagen",
     "a11y.qty_increase": "Aantal verhogen",

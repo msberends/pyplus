@@ -23,6 +23,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
+def _utcnow() -> datetime.datetime:
+    return datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -80,9 +84,7 @@ class User(Base):
     store_name: Mapped[str] = mapped_column(String(200), default="")
     user_store_id: Mapped[str] = mapped_column(String(50), default="")
     one_welcome_user_id: Mapped[str] = mapped_column(String(100), default="")
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow
-    )
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=_utcnow)
     last_login_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
     settings_json: Mapped[str] = mapped_column(Text, default="{}")
 
@@ -146,9 +148,7 @@ class Dish(Base):
     )  # JSON list from COOKING_METHODS
     is_cold: Mapped[bool] = mapped_column(Boolean, default=False)
     veg_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 0–3
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow
-    )
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=_utcnow)
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
 
     user: Mapped["User"] = relationship(back_populates="dishes")
@@ -261,9 +261,7 @@ class ProductCache(Base):
     # broad → specific, e.g. ["Verse kant-en-klaarmaaltijden", "Italiaanse
     # maaltijden", "Lasagne"]. May be 1+ layers. Captured during catalogue sync.
     categories_json: Mapped[str] = mapped_column(Text, default="[]")
-    fetched_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow
-    )
+    fetched_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=_utcnow)
 
 
 # ── Purchase & order history caches ───────────────────────────────────────────
@@ -286,9 +284,7 @@ class PurchasedProductCache(Base):
     price: Mapped[float] = mapped_column(Float, default=0.0)
     is_available: Mapped[bool] = mapped_column(Boolean, default=False)
     categories_json: Mapped[str] = mapped_column(Text, default="[]")
-    fetched_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow
-    )
+    fetched_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=_utcnow)
 
     user: Mapped["User"] = relationship(back_populates="purchased_products")
 
@@ -308,9 +304,7 @@ class OrderCache(Base):
     status: Mapped[str] = mapped_column(String(100), default="")
     channel: Mapped[str] = mapped_column(String(50), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
-    fetched_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow
-    )
+    fetched_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=_utcnow)
 
     user: Mapped["User"] = relationship(back_populates="orders")
     items: Mapped[list["OrderItemCache"]] = relationship(
@@ -355,6 +349,7 @@ class SyncState(Base):
     resource: Mapped[str] = mapped_column(String(30), primary_key=True)
     last_synced_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
     last_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    last_duration_seconds: Mapped[Optional[float]] = mapped_column(nullable=True)
     detail_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="sync_states")
@@ -373,9 +368,7 @@ class PromotionsCache(Base):
     week_start: Mapped[datetime.date] = mapped_column(Date, nullable=False)
     is_next_week: Mapped[bool] = mapped_column(Boolean, default=False)
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)
-    fetched_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow
-    )
+    fetched_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=_utcnow)
 
 
 class MlArtifact(Base):
@@ -388,9 +381,7 @@ class MlArtifact(Base):
     )
     kind: Mapped[str] = mapped_column(String(30), primary_key=True)
     blob: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
-    trained_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow
-    )
+    trained_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=_utcnow)
     input_hash: Mapped[str] = mapped_column(String(64), default="")
 
     user: Mapped["User"] = relationship(back_populates="ml_artifacts")
@@ -408,9 +399,7 @@ class WeatherCache(Base):
     latitude: Mapped[float] = mapped_column(Float, primary_key=True)
     longitude: Mapped[float] = mapped_column(Float, primary_key=True)
     temperature_max: Mapped[float] = mapped_column(Float, nullable=False)
-    fetched_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime, default=datetime.datetime.utcnow
-    )
+    fetched_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=_utcnow)
 
 
 # ── Product catalogue full-text index ──────────────────────────────────────────

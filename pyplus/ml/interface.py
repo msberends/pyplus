@@ -136,6 +136,17 @@ class UserSettings(BaseModel):
     hide_unavailable_search: bool = False  # drop unavailable products from search
     search_result_limit: int = 24  # max products shown per search
 
+    # ── Substitutes ─────────────────────────────────────────────────────────────
+    sub_prefer_same_brand: bool = False
+    sub_prefer_bought: bool = True
+    sub_price_range: str = "any"  # "cheaper" | "similar" | "any"
+    sub_weight_category: float = 4.0
+    sub_weight_name: float = 2.0
+    sub_weight_brand: float = 1.0
+    sub_weight_price: float = 1.0
+    sub_weight_bought: float = 2.0
+    sub_max_results: int = 12
+
     # ── Cart & staples organisation ────────────────────────────────────────────
     cart_group_by_category: bool = False  # group cart items under category headers
     cart_sort: str = "cart"  # cart | name | price

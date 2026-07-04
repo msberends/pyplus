@@ -69,8 +69,18 @@ async def get_promo_index(
         return {}
 
     index: dict[str, Promotion] = {}
-    # Group-deal children first; single-product entries override them (more specific).
     by_slug = {p.slug: p for p in promos if p.slug}
+    # Free-delivery children first (lowest priority — a regular deal tag is more
+    # informative than a generic "gratis bezorging" badge).
+    for slug, prods in (data.get("children") or {}).items():
+        parent = by_slug.get(slug)
+        if parent is None or not parent.is_free_delivery:
+            continue
+        for prod in prods:
+            sku = prod.get("sku") if isinstance(prod, dict) else None
+            if sku:
+                index[sku] = parent
+    # Regular group-deal children override free-delivery entries.
     for slug, prods in (data.get("children") or {}).items():
         parent = by_slug.get(slug)
         if parent is None or parent.is_free_delivery:
@@ -79,8 +89,9 @@ async def get_promo_index(
             sku = prod.get("sku") if isinstance(prod, dict) else None
             if sku:
                 index[sku] = parent
+    # Single-product deals are most specific — override group-level matches.
     for p in promos:
-        if p.is_single_product and p.sku and not p.is_free_delivery:
+        if p.is_single_product and p.sku:
             index[p.sku] = p
     return index
 
@@ -109,34 +120,8 @@ async def get_promo_children(
     return out
 
 
-async def get_free_delivery_info(
-    store_number: int, week_start: datetime.date | None = None
-) -> tuple[str, float] | None:
-    """Return ``(sku, threshold)`` for this week's free delivery offer, or None.
-
-    The threshold is parsed from the subtitle when it contains a '€' amount;
-    falls back to 9.0 (PLUS.nl default).
-    """
-    data = await _load_payload(store_number, week_start)
-    if data is None:
-        return None
-    try:
-        promos = [Promotion(**p) for p in data["promotions"]]
-    except Exception:
-        return None
-    for p in promos:
-        if p.is_free_delivery and p.sku:
-            threshold = 9.0
-            if p.subtitle:
-                import re
-
-                m = re.search(r"€\s*(\d+(?:[.,]\d+)?)", p.subtitle)
-                if m:
-                    threshold = float(m.group(1).replace(",", "."))
-            return p.sku, threshold
-    return None
-
-
 def promo_tag_label(promo: Promotion) -> str:
     """The short deal-type label to show on a tag, e.g. ``1+1 GRATIS``."""
+    if promo.is_free_delivery:
+        return "Gratis bezorging"
     return (promo.label or "Aanbieding").strip()

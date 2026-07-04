@@ -24,12 +24,24 @@ engine = create_async_engine(
 )
 
 
-@event.listens_for(engine.sync_engine, "connect")
-def _sqlite_pragmas(dbapi_connection, _record) -> None:
+def register_sqlite_functions(dbapi_connection, _record=None) -> None:
+    """Register pragmas and custom functions on every new SQLite connection."""
+    import re as _re
+
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.close()
+
+    def _regexp(pattern: str, value: str | None) -> bool:
+        if value is None:
+            return False
+        return bool(_re.search(pattern, value))
+
+    dbapi_connection.create_function("REGEXP", 2, _regexp)
+
+
+event.listen(engine.sync_engine, "connect", register_sqlite_functions)
 
 
 AsyncSessionLocal = async_sessionmaker(

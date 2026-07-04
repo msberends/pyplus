@@ -21,7 +21,9 @@ depends_on: Union[str, None] = None
 
 def upgrade() -> None:
     with op.batch_alter_table("users") as batch:
-        batch.add_column(sa.Column("store_name", sa.String(length=200), server_default="", nullable=False))
+        batch.add_column(
+            sa.Column("store_name", sa.String(length=200), server_default="", nullable=False)
+        )
 
 
 def downgrade() -> None:
