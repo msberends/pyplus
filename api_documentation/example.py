@@ -12,8 +12,6 @@ Usage:
 """
 
 import asyncio
-import json
-import re
 
 from playwright.async_api import async_playwright
 
@@ -55,6 +53,7 @@ session = {
 
 # ── Network interception — captures version hashes and session IDs ─────────────
 
+
 def on_request(request):
     """Intercept outgoing requests to harvest version hashes and session IDs."""
     url = request.url
@@ -74,7 +73,11 @@ def on_request(request):
             session["cart_add_api_version"] = av
         if "DataActionGetCartById" in url and av and not session["cart_get_api_version"]:
             session["cart_get_api_version"] = av
-        if "DataActionGetProductListAndCategoryInfo" in url and av and not session["search_api_version"]:
+        if (
+            "DataActionGetProductListAndCategoryInfo" in url
+            and av
+            and not session["search_api_version"]
+        ):
             session["search_api_version"] = av
         params = body.get("inputParameters", {})
         if params.get("CheckoutId") and not session["checkout_id"]:
@@ -151,6 +154,7 @@ async def _post(page, path: str, payload: dict) -> dict:
 
 # ── Login ──────────────────────────────────────────────────────────────────────
 
+
 async def login(page) -> None:
     """Log in to PLUS.nl via the OAuth2 browser flow (~20s)."""
     print("Navigating to login page…")
@@ -181,6 +185,7 @@ async def login(page) -> None:
 
 # ── Get cart ───────────────────────────────────────────────────────────────────
 
+
 async def get_cart(page) -> dict:
     """Fetch the current cart contents."""
     if not session["cart_get_api_version"]:
@@ -204,6 +209,7 @@ async def get_cart(page) -> dict:
 
 
 # ── Add to cart ────────────────────────────────────────────────────────────────
+
 
 async def add_to_cart(page, sku: str, quantity: int = 1) -> dict:
     """Add `quantity` units of `sku` to the cart."""
@@ -241,25 +247,53 @@ async def add_to_cart(page, sku: str, quantity: int = 1) -> dict:
 # ── Product search ─────────────────────────────────────────────────────────────
 
 _SEARCH_EMPTY_ITEM = {
-    "SKU": "", "Brand": "", "Name": "", "Product_Subtitle": "", "Slug": "",
-    "ImageURL": "", "ImageLabel": "", "MetaTitle": "", "MetaDescription": "",
-    "OriginalPrice": "0", "NewPrice": "0", "Quantity": 0, "LineItemId": "",
+    "SKU": "",
+    "Brand": "",
+    "Name": "",
+    "Product_Subtitle": "",
+    "Slug": "",
+    "ImageURL": "",
+    "ImageLabel": "",
+    "MetaTitle": "",
+    "MetaDescription": "",
+    "OriginalPrice": "0",
+    "NewPrice": "0",
+    "Quantity": 0,
+    "LineItemId": "",
     "IsProductOverMajorityAge": False,
     "Logos": {
-        "PLPInUpperLeft": {"List": [], "EmptyListItem": {"Name": "", "LongDescription": "", "URL": "", "Order": 0}},
-        "PLPAboveTitle":  {"List": [], "EmptyListItem": {"Name": "", "LongDescription": "", "URL": "", "Order": 0}},
-        "PLPBehindSizeUnit": {"List": [], "EmptyListItem": {"Name": "", "LongDescription": "", "URL": "", "Order": 0}},
+        "PLPInUpperLeft": {
+            "List": [],
+            "EmptyListItem": {"Name": "", "LongDescription": "", "URL": "", "Order": 0},
+        },
+        "PLPAboveTitle": {
+            "List": [],
+            "EmptyListItem": {"Name": "", "LongDescription": "", "URL": "", "Order": 0},
+        },
+        "PLPBehindSizeUnit": {
+            "List": [],
+            "EmptyListItem": {"Name": "", "LongDescription": "", "URL": "", "Order": 0},
+        },
     },
-    "EAN": "", "Packging": "", "Categories": {"List": [], "EmptyListItem": {"Name": ""}},
-    "IsAvailable": False, "PromotionLabel": "", "PromotionBasedLabel": "",
-    "PromotionStartDate": "1900-01-01", "PromotionEndDate": "1900-01-01",
-    "IsFreeDeliveryOffer": False, "IsOfflineSaleOnly": False,
-    "MaxOrderLimit": 0, "CitrusAdId": "", "IsLocalItem": False,
+    "EAN": "",
+    "Packging": "",
+    "Categories": {"List": [], "EmptyListItem": {"Name": ""}},
+    "IsAvailable": False,
+    "PromotionLabel": "",
+    "PromotionBasedLabel": "",
+    "PromotionStartDate": "1900-01-01",
+    "PromotionEndDate": "1900-01-01",
+    "IsFreeDeliveryOffer": False,
+    "IsOfflineSaleOnly": False,
+    "MaxOrderLimit": 0,
+    "CitrusAdId": "",
+    "IsLocalItem": False,
 }
 
 
 def _promo_week() -> dict:
     import datetime as dt
+
     today = dt.date.today()
     start = today - dt.timedelta(days=(today.weekday() - 2) % 7)
     return {"FromDate": start.isoformat(), "ToDate": (start + dt.timedelta(days=6)).isoformat()}
@@ -269,7 +303,10 @@ async def search_products(page, query: str) -> list[dict]:
     """Search for products by keyword. Returns a list of product dicts."""
     if not session["search_api_version"]:
         import urllib.parse
-        await page.goto(f"https://www.plus.nl/zoekresultaten?SearchTerm={urllib.parse.quote(query)}")
+
+        await page.goto(
+            f"https://www.plus.nl/zoekresultaten?SearchTerm={urllib.parse.quote(query)}"
+        )
         await page.wait_for_load_state("networkidle", timeout=25_000)
         await asyncio.sleep(1)
 
@@ -281,17 +318,29 @@ async def search_products(page, query: str) -> list[dict]:
         "viewName": "MainFlow.SearchPage",
         "screenData": {
             "variables": {
-                "AppliedFiltersList": {"List": [], "EmptyListItem": {"Name": "", "Quantity": "0", "IsSelected": False, "URL": ""}},
-                "LocalCategoryID": 0, "LocalCategoryName": "", "LocalCategoryParentId": 0,
-                "LocalCategoryTitle": "", "IsLoadingMore": False, "IsFirstDataFetched": False,
-                "ShowFilters": False, "IsShowData": False,
+                "AppliedFiltersList": {
+                    "List": [],
+                    "EmptyListItem": {"Name": "", "Quantity": "0", "IsSelected": False, "URL": ""},
+                },
+                "LocalCategoryID": 0,
+                "LocalCategoryName": "",
+                "LocalCategoryParentId": 0,
+                "LocalCategoryTitle": "",
+                "IsLoadingMore": False,
+                "IsFirstDataFetched": False,
+                "ShowFilters": False,
+                "IsShowData": False,
                 "StoreNumber": STORE_NUMBER,
                 "StoreChannel": CHANNEL_ID,
                 "CheckoutId": session["checkout_id"],
                 "IsOrderEditMode": False,
                 "ProductList_All": {"List": [], "EmptyListItem": _SEARCH_EMPTY_ITEM},
-                "PageNumber": 1, "SelectedSort": "", "OrderEditId": "",
-                "IsListRendered": False, "IsAlreadyFetch": False, "IsPromotionBannersFetched": False,
+                "PageNumber": 1,
+                "SelectedSort": "",
+                "OrderEditId": "",
+                "IsListRendered": False,
+                "IsAlreadyFetch": False,
+                "IsPromotionBannersFetched": False,
                 "Period": _promo_week(),
                 "UserStoreId": "",  # optional for search
                 "FilterExpandedList": {"List": [], "EmptyListItem": False},
@@ -299,16 +348,26 @@ async def search_products(page, query: str) -> list[dict]:
                 "HideDummy": False,
                 "OneWelcomeUserId": session["onewelcome_user_id"],
                 "_oneWelcomeUserIdInDataFetchStatus": 1,
-                "CategorySlug": "", "_categorySlugInDataFetchStatus": 1,
-                "SearchKeyword": query, "_searchKeywordInDataFetchStatus": 1,
-                "IsDesktop": True, "_isDesktopInDataFetchStatus": 1,
-                "IsSearch": True, "_isSearchInDataFetchStatus": 1,
-                "URLPageNumber": 1, "_uRLPageNumberInDataFetchStatus": 1,
-                "FilterQueryURL": "", "_filterQueryURLInDataFetchStatus": 1,
-                "IsMobile": False, "_isMobileInDataFetchStatus": 1,
-                "IsTablet": False, "_isTabletInDataFetchStatus": 1,
-                "Monitoring_FlowTypeId": 2, "_monitoring_FlowTypeIdInDataFetchStatus": 1,
-                "IsCustomerUnderAge": False, "_isCustomerUnderAgeInDataFetchStatus": 1,
+                "CategorySlug": "",
+                "_categorySlugInDataFetchStatus": 1,
+                "SearchKeyword": query,
+                "_searchKeywordInDataFetchStatus": 1,
+                "IsDesktop": True,
+                "_isDesktopInDataFetchStatus": 1,
+                "IsSearch": True,
+                "_isSearchInDataFetchStatus": 1,
+                "URLPageNumber": 1,
+                "_uRLPageNumberInDataFetchStatus": 1,
+                "FilterQueryURL": "",
+                "_filterQueryURLInDataFetchStatus": 1,
+                "IsMobile": False,
+                "_isMobileInDataFetchStatus": 1,
+                "IsTablet": False,
+                "_isTabletInDataFetchStatus": 1,
+                "Monitoring_FlowTypeId": 2,
+                "_monitoring_FlowTypeIdInDataFetchStatus": 1,
+                "IsCustomerUnderAge": False,
+                "_isCustomerUnderAgeInDataFetchStatus": 1,
             }
         },
     }
@@ -324,19 +383,22 @@ async def search_products(page, query: str) -> list[dict]:
         p = item.get("PLP_Str", item)
         if not p.get("SKU"):
             continue
-        products.append({
-            "sku": p.get("SKU", ""),
-            "name": p.get("Name", ""),
-            "subtitle": p.get("Product_Subtitle", ""),
-            "brand": p.get("Brand", ""),
-            "price": p.get("OriginalPrice", "0"),
-            "is_available": p.get("IsAvailable", False),
-            "url": f"https://www.plus.nl/product/{p['Slug']}" if p.get("Slug") else "",
-        })
+        products.append(
+            {
+                "sku": p.get("SKU", ""),
+                "name": p.get("Name", ""),
+                "subtitle": p.get("Product_Subtitle", ""),
+                "brand": p.get("Brand", ""),
+                "price": p.get("OriginalPrice", "0"),
+                "is_available": p.get("IsAvailable", False),
+                "url": f"https://www.plus.nl/product/{p['Slug']}" if p.get("Slug") else "",
+            }
+        )
     return products
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
+
 
 async def main():
     async with async_playwright() as pw:
@@ -373,8 +435,10 @@ async def main():
         sku_to_add = "957806"
         checkout = await add_to_cart(page, sku_to_add, quantity=1)
         new_count = len(checkout.get("LineItemList", {}).get("List", []))
-        print(f"Added SKU {sku_to_add} — cart now has {new_count} line item(s), "
-              f"version={checkout['Version']}")
+        print(
+            f"Added SKU {sku_to_add} — cart now has {new_count} line item(s), "
+            f"version={checkout['Version']}"
+        )
 
         # 4. Search for a product
         print("\n=== Search ===")

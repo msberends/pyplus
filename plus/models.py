@@ -14,6 +14,7 @@ class CartItem(BaseModel):
     sku: str = ""
     image_url: str = ""
     line_item_id: str = ""
+    source: str = ""  # "menu" | "staple" | "promotion" | "search"; comma-sep for multi-origin
 
     @computed_field
     @property

@@ -21,14 +21,33 @@ _STRINGS: dict[str, str] = {
     "login.store_confirm": "Bevestig winkel",
     # ── Navigation ─────────────────────────────────────────────────────────────
     "nav.cockpit": "Cockpit",
+    "nav.weekmenu": "Weekmenu",
+    "nav.promos": "Aanbiedingen",
+    "nav.staples": "Vaste boodschappen",
+    "nav.cart": "Winkelwagen",
     "nav.dishes": "Gerechten",
     "nav.settings": "Instellingen",
     "nav.logout": "Uitloggen",
+    # ── Cart origins ──────────────────────────────────────────────────────────
+    "cart.origin.menu": "Weekmenu",
+    "cart.origin.staple": "Vaste boodschap",
+    "cart.origin.promotion": "Aanbieding",
+    "cart.origin.search": "Gezocht",
+    "cart.origin.other": "Overig",
+    # ── Promos page ───────────────────────────────────────────────────────────
+    "promos.section.delivery": "Gratis bezorging",
+    "promos.section.other": "Overige aanbiedingen",
+    # ── Staples page ──────────────────────────────────────────────────────────
+    "staples.overdue": "dagen over",
+    "staples.add_all": "Alles toevoegen",
+    # ── Weekmenu page ─────────────────────────────────────────────────────────
+    "weekmenu.add_ingredients": "Ingrediënten toevoegen",
+    "weekmenu.edit_dish": "Gerecht bewerken",
+    "weekmenu.manage_dishes": "Gerechten beheren",
     # ── Cockpit ────────────────────────────────────────────────────────────────
     "cockpit.title": "Boodschappen doen",
     # Lane ① — meals
     "lane.meals.title": "Deze week",
-    "lane.meals.subtitle": "7 avondeten · 5 extra",
     "lane.meals.empty_slot": "kies gerecht",
     "lane.meals.add_all": "Weekmenu toevoegen aan mandje",
     "lane.meals.swap": "Wisselen",

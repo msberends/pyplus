@@ -328,7 +328,7 @@ def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, r
         if is_expanded and promo.slug in state.promo_products:
             products = state.promo_products[promo.slug]
             if products:
-                with ui.element("div").classes("sp-promo-products"):
+                with ui.element("div").classes("sp-promo-product-grid"):
                     for prod in products:
                         if prod.sku:
                             _render_promo_product(
@@ -368,6 +368,7 @@ def _render_promo_stepper(promo: Promotion, cart_qty: int, syncing: bool, cart_s
                     product_unit="",
                     product_price=price,
                     product_image=promo.image_url,
+                    source="promotion",
                 )
             )
 
@@ -389,82 +390,82 @@ def _render_promo_stepper(promo: Promotion, cart_qty: int, syncing: bool, cart_s
 def _render_promo_product(
     prod: PromotionProduct, session, cart_service, *, show_ribbon: bool = True
 ) -> None:
-    """One product inside an expanded group deal."""
+    """One product inside an expanded group deal — square card."""
     cart_qty = next((it.quantity for it in session.cart.items if it.sku == prod.sku), 0)
     is_syncing = prod.sku in session.syncing_skus
 
-    with ui.element("div").classes("sp-search-result").style("padding:.375rem .5rem"):
+    with ui.element("div").classes("sp-promo-product-card"):
+        # Product image
         if prod.image_url:
-            ui.image(thumbnail_url(prod.image_url, 36)).classes("sp-search-img").style(
-                "width:36px;height:36px"
+            ui.image(thumbnail_url(prod.image_url, 80, fit="pad")).classes(
+                "sp-promo-product-card__img"
             ).props(f'alt="{_alt(prod.name)}"')
         else:
-            ui.element("div").classes("sp-search-img").style(
-                "width:36px;height:36px;background:var(--c-border)"
+            ui.element("div").classes("sp-promo-product-card__img").style(
+                "background:var(--c-border)"
             )
 
-        with ui.element("div").classes("sp-search-info"):
-            if prod.url:
-                ui.link(prod.name, prod.url, new_tab=True).classes("sp-search-name").style(
-                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
-                    "text-decoration:none;color:inherit;display:block"
-                ).tooltip("Bekijken op plus.nl")
-            else:
-                ui.label(prod.name).classes("sp-search-name").style(
-                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                )
-            with ui.element("div").style("display:flex;align-items:center;gap:.375rem"):
-                if prod.subtitle:
-                    ui.label(prod.subtitle).classes("sp-search-unit")
-                if prod.price_new > 0:
-                    ui.label(f"€ {prod.price_new:.2f}".replace(".", ",")).classes(
-                        "sp-search-price"
-                    ).style("color:var(--c-brand-dark)")
-                if prod.label and show_ribbon:
-                    ui.label(prod.label).classes("sp-promo-ribbon").style(
-                        "font-size:9px;padding:1px 5px"
+        # Label ribbon
+        if prod.label and show_ribbon:
+            ui.label(prod.label).classes("sp-promo-ribbon").style("font-size:9px;padding:1px 5px")
+
+        # Name
+        if prod.url:
+            ui.link(prod.name, prod.url, new_tab=True).classes("sp-promo-product-card__name").style(
+                "text-decoration:none;color:var(--c-text)"
+            ).tooltip("Bekijken op plus.nl")
+        else:
+            ui.label(prod.name).classes("sp-promo-product-card__name")
+
+        # Subtitle / pack size
+        if prod.subtitle:
+            ui.label(prod.subtitle).classes("sp-promo-product-card__sub")
+
+        # Price
+        if prod.price_new > 0:
+            ui.label(f"€ {prod.price_new:.2f}".replace(".", ",")).classes(
+                "sp-promo-product-card__price"
+            )
+
+        # Add control
+        if not prod.is_available:
+            ui.label(t("status.discontinued")).classes("sp-badge sp-badge-unavailable").style(
+                "font-size:10px;padding:1px 6px"
+            )
+        elif is_syncing:
+            with ui.element("div").style(
+                "height:36px;display:flex;align-items:center;justify-content:center"
+            ):
+                ui.spinner(size="14px", color="primary")
+        else:
+            from pyplus.ui.components.controls import add_button, stepper_button
+
+            def _add(_=None, p=prod) -> None:
+                if cart_service:
+                    asyncio.ensure_future(
+                        cart_service.add(
+                            p.sku,
+                            product_name=p.name,
+                            product_unit=p.subtitle,
+                            product_price=p.price_new or p.price_original,
+                            product_image=p.image_url,
+                            source="promotion",
+                        )
                     )
 
-        with ui.element("div").classes("sp-search-right"):
-            if not prod.is_available:
-                # Can't be bought → just say so, no add control (and no green
-                # check on the available ones — the add button speaks for itself).
-                ui.label(t("status.discontinued")).classes("sp-badge sp-badge-unavailable").style(
-                    "font-size:10px;padding:1px 6px;white-space:nowrap"
-                )
-            elif is_syncing:
-                with ui.element("div").style(
-                    "width:36px;height:36px;display:flex;align-items:center;justify-content:center"
-                ):
-                    ui.spinner(size="14px", color="primary")
+            if cart_qty == 0:
+                add_button(aria_label=t("a11y.add_to_cart"), on_click=_add)
             else:
-                from pyplus.ui.components.controls import add_button, stepper_button
-
-                def _add(_=None, p=prod) -> None:
-                    if cart_service:
-                        asyncio.ensure_future(
-                            cart_service.add(
-                                p.sku,
-                                product_name=p.name,
-                                product_unit=p.subtitle,
-                                product_price=p.price_new or p.price_original,
-                                product_image=p.image_url,
-                            )
-                        )
-
-                if cart_qty == 0:
-                    add_button(aria_label=t("a11y.add_to_cart"), on_click=_add)
-                else:
-                    with ui.element("div").classes("sp-qty"):
-                        stepper_button(
-                            "−",
-                            aria_label=t("a11y.qty_decrease"),
-                            on_click=lambda _, p=prod: asyncio.ensure_future(
-                                cart_service.remove(p.sku) if cart_service else asyncio.sleep(0)
-                            ),
-                        )
-                        ui.label(str(cart_qty)).classes("sp-qty-count")
-                        stepper_button("+", aria_label=t("a11y.qty_increase"), on_click=_add)
+                with ui.element("div").classes("sp-qty"):
+                    stepper_button(
+                        "−",
+                        aria_label=t("a11y.qty_decrease"),
+                        on_click=lambda _, p=prod: asyncio.ensure_future(
+                            cart_service.remove(p.sku) if cart_service else asyncio.sleep(0)
+                        ),
+                    )
+                    ui.label(str(cart_qty)).classes("sp-qty-count")
+                    stepper_button("+", aria_label=t("a11y.qty_increase"), on_click=_add)
 
 
 # ── Cache helpers ──────────────────────────────────────────────────────────────

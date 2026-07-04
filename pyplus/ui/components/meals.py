@@ -24,9 +24,11 @@ from pyplus.ui.format import thumbnail_url
 
 log = logging.getLogger(__name__)
 
-_DINNER_SLOTS = ["ma", "di", "wo", "do", "vr", "za", "zo"]
+_DINNER_SLOTS = ["ma", "di", "wo", "do", "vr"]
+_WEEKEND_SLOTS = ["za", "zo"]
 _LUNCH_SLOTS = ["lunch1", "lunch2", "lunch3", "lunch4", "lunch5"]
-_ALL_SLOTS = _DINNER_SLOTS + _LUNCH_SLOTS
+_EXTRA_SLOTS = _WEEKEND_SLOTS + _LUNCH_SLOTS  # 7 slots in the extra grid
+_ALL_SLOTS = _DINNER_SLOTS + _WEEKEND_SLOTS + _LUNCH_SLOTS
 
 _DAY_LABEL = {
     "ma": "Ma",
@@ -92,9 +94,12 @@ def _format_week(week_start: datetime.date) -> str:
     return f"Week {wn} · {week_start.day} {ms}–{week_end.day} {me}"
 
 
+_DATED_SLOTS = _DINNER_SLOTS + _WEEKEND_SLOTS  # Ma–Zo all have calendar dates
+
+
 def _slot_date(slot: str, week_start: datetime.date) -> datetime.date | None:
-    if slot in _DINNER_SLOTS:
-        return week_start + datetime.timedelta(days=_DINNER_SLOTS.index(slot))
+    if slot in _DATED_SLOTS:
+        return week_start + datetime.timedelta(days=_DATED_SLOTS.index(slot))
     return None
 
 
@@ -177,7 +182,20 @@ async def create_meals_lane(session) -> None:
                         ).props("flat round dense size=sm color=grey-6").tooltip(
                             "Agenda-abonnement"
                         )
-            ui.label(t("lane.meals.subtitle")).classes("sp-lane-subtitle")
+                        ui.button(
+                            icon="restaurant",
+                            on_click=lambda: ui.navigate.to("/dishes"),
+                        ).props("flat round dense size=sm color=grey-6").tooltip(
+                            t("weekmenu.manage_dishes")
+                        )
+            _dinner_filled = sum(1 for s in _DINNER_SLOTS if state.slots.get(s) is not None)
+            _extra_filled = sum(1 for s in _EXTRA_SLOTS if state.slots.get(s) is not None)
+            _total = _dinner_filled + _extra_filled
+            if _total == 0:
+                _subtitle = "Nog geen gerechten gepland"
+            else:
+                _subtitle = f"{_dinner_filled} van 5 avonden · {_extra_filled} van 7 extra"
+            ui.label(_subtitle).classes("sp-lane-subtitle")
 
         # ── Body: slot grid ────────────────────────────────────────────────
         with ui.element("div").classes("sp-lane-body sp-meals-body"):
@@ -232,20 +250,33 @@ def _render_all_slots(session, state: _MealsState, refresh_fn) -> None:
         return f"{d.name}{_OPT_SEP}{'  '.join(chips)}" if chips else d.name
 
     options = {d.id: _opt_label(d) for d in state.dishes}
-
     weather = getattr(state, "_weather", {})
 
-    _section_header(t("lane.meals.dinner"))
-    for slot in _DINNER_SLOTS:
-        d = _slot_date(slot, state.week_start)
-        date_str = f"{d.day} {_MONTHS_NL[d.month]}" if d else ""
-        temp = weather.get(d) if d else None
-        _slot_row(slot, _DAY_LABEL[slot], date_str, temp, state, options, session, refresh_fn)
+    # Dinner section header with dishes link
+    with ui.element("div").style(
+        "display:flex;align-items:center;justify-content:space-between;margin-bottom:.375rem"
+    ):
+        _section_header(t("lane.meals.dinner"))
+        ui.link(t("weekmenu.manage_dishes"), "/dishes").style(
+            "font-size:11px;font-weight:600;color:var(--c-brand-dark);"
+            "text-decoration:none;white-space:nowrap"
+        )
 
-    ui.element("div").style("height:.375rem")
+    with ui.element("div").classes("sp-weekmenu-grid"):
+        for slot in _DINNER_SLOTS:
+            d = _slot_date(slot, state.week_start)
+            date_str = f"{d.day} {_MONTHS_NL[d.month]}" if d else ""
+            temp = weather.get(d) if d else None
+            _slot_card(slot, _DAY_LABEL[slot], date_str, temp, state, options, session, refresh_fn)
+
+    ui.element("div").style("height:.5rem")
     _section_header(t("lane.meals.lunch"))
-    for slot in _LUNCH_SLOTS:
-        _slot_row(slot, _DAY_LABEL[slot], "", None, state, options, session, refresh_fn)
+    with ui.element("div").classes("sp-weekmenu-extra-grid"):
+        for slot in _EXTRA_SLOTS:
+            d = _slot_date(slot, state.week_start)
+            date_str = f"{d.day} {_MONTHS_NL[d.month]}" if d else ""
+            temp = weather.get(d) if d else None
+            _slot_card(slot, _DAY_LABEL[slot], date_str, temp, state, options, session, refresh_fn)
 
 
 def _section_header(label: str) -> None:
@@ -256,35 +287,32 @@ def _section_header(label: str) -> None:
     )
 
 
-def _slot_row(slot, day_label, date_str, temp, state, options, session, refresh_fn) -> None:
+def _slot_card(slot, day_label, date_str, temp, state, options, session, refresh_fn) -> None:
+    """Render a single slot as a day card (used inside the weekmenu grid)."""
     dish = state.slots.get(slot)
-    with ui.element("div").classes("sp-meals-slot"):
-        # Temperature (separate span, left of day badge)
-        if temp is not None:
-            import math
+    is_filled = dish is not None
+    card_cls = "sp-weekmenu-card sp-weekmenu-card--filled" if is_filled else "sp-weekmenu-card"
 
-            hot = session.settings.weather_hot_threshold
-            t_color = "var(--c-danger)" if temp >= hot else "var(--c-text-4)"
-            temp_rounded = math.floor(temp + 0.5)
-            ui.label(f"{temp_rounded}°").style(
-                f"font-size:10px;color:{t_color};line-height:1;font-weight:600;"
-                f"width:24px;text-align:right;flex-shrink:0"
-            )
+    with ui.element("div").classes(card_cls):
+        # Card header: day label + date + temperature
+        with ui.element("div").classes("sp-weekmenu-card__head"):
+            with ui.element("div"):
+                ui.label(day_label).classes("sp-weekmenu-card__day")
+                if date_str:
+                    ui.label(date_str).classes("sp-weekmenu-card__date")
+            if temp is not None:
+                import math
 
-        # Day badge
-        with ui.element("div").classes("sp-meals-day"):
-            ui.label(day_label).style(
-                "font-size:11px;font-weight:700;line-height:1;color:var(--c-text-2)"
-            )
-            if date_str:
-                ui.label(date_str).style(
-                    "font-size:9px;color:var(--c-text-4);line-height:1;"
-                    "margin-top:1px;text-align:center"
+                hot = session.settings.weather_hot_threshold
+                temp_rounded = math.floor(temp + 0.5)
+                t_color = "#e3131d" if temp_rounded >= hot else "var(--c-text-4)"
+                ui.label(f"{temp_rounded}°").style(
+                    f"font-size:11px;font-weight:700;color:{t_color};flex-shrink:0"
                 )
 
-        # Content
-        if dish is None:
-            with ui.element("div").style("flex:1;min-width:0"):
+        # Card body
+        with ui.element("div").classes("sp-weekmenu-card__body"):
+            if dish is None:
                 picker = (
                     ui.select(
                         options,
@@ -296,48 +324,65 @@ def _slot_row(slot, day_label, date_str, temp, state, options, session, refresh_
                         ),
                     )
                     .props("outlined dense options-dense")
+                    .style("width:100%")
                     .classes("sp-meals-picker")
                 )
                 picker.add_slot("option", _PICKER_OPTION_SLOT)
-        else:
-            _filled_chip(slot, dish, state, session, refresh_fn)
+            else:
+                from pyplus.ui.format import dish_meta_chips
 
+                ui.label(dish.name).classes("sp-weekmenu-card__dish")
+                chips = dish_meta_chips(dish)
+                if chips:
+                    ui.label("  ".join(chips)).classes("sp-weekmenu-card__meta")
 
-def _filled_chip(slot, dish, state, session, refresh_fn) -> None:
-    from pyplus.ui.format import dish_meta_chips
-
-    def _do_clear(s=slot) -> None:
-        if session.settings.confirm_clear_slot:
-            _confirm_clear(session, s, dish, state, refresh_fn)
-        else:
-            asyncio.ensure_future(_clear_slot(session.user_id, s, state, refresh_fn))
-
-    with ui.element("div").classes("sp-meals-chip"):
-        with ui.element("div").style("flex:1;min-width:0;overflow:hidden"):
-            ui.label(dish.name).style(
-                "font-size:13px;font-weight:600;color:var(--c-text);"
-                "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-            )
-            chips = dish_meta_chips(dish) if session.settings.show_dish_metadata else []
-            if chips:
-                ui.label("  ".join(chips)).style(
-                    "font-size:10px;color:var(--c-text-3);line-height:1.2;"
-                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                )
-        with ui.element("div").style("display:flex;gap:1px;flex-shrink:0"):
-            ui.button(
-                icon="swap_horiz",
-                on_click=lambda: _do_clear(),
-            ).props("flat round dense size=xs color=grey-6").tooltip(t("lane.meals.swap"))
-            ui.button(
-                icon="close",
-                on_click=lambda: _do_clear(),
-            ).props("flat round dense size=xs color=grey-6").tooltip(t("lane.meals.clear"))
-            if dish.prep_notes:
+        # Card footer with action buttons (only for filled slots)
+        if is_filled and dish is not None:
+            with ui.element("div").classes("sp-weekmenu-card__foot"):
+                with ui.element("div").style("display:flex;gap:1px"):
+                    ui.button(
+                        icon="swap_horiz",
+                        on_click=lambda s=slot, d=dish: (
+                            _confirm_clear(session, s, d, state, refresh_fn)
+                            if session.settings.confirm_clear_slot
+                            else asyncio.ensure_future(
+                                _clear_slot(session.user_id, s, state, refresh_fn)
+                            )
+                        ),
+                    ).props("flat round dense size=xs color=grey-6").tooltip(t("lane.meals.swap"))
+                    ui.button(
+                        icon="close",
+                        on_click=lambda s=slot, d=dish: (
+                            _confirm_clear(session, s, d, state, refresh_fn)
+                            if session.settings.confirm_clear_slot
+                            else asyncio.ensure_future(
+                                _clear_slot(session.user_id, s, state, refresh_fn)
+                            )
+                        ),
+                    ).props("flat round dense size=xs color=grey-6").tooltip(t("lane.meals.clear"))
+                    if dish.prep_notes:
+                        ui.button(
+                            icon="menu_book",
+                            on_click=lambda d=dish: _show_prep_notes(d),
+                        ).props("flat round dense size=xs color=grey-6").tooltip(
+                            t("lane.meals.view_prep")
+                        )
                 ui.button(
-                    icon="menu_book",
-                    on_click=lambda d=dish: _show_prep_notes(d),
-                ).props("flat round dense size=xs color=grey-6").tooltip(t("lane.meals.view_prep"))
+                    icon="add_shopping_cart",
+                    on_click=lambda d=dish: asyncio.ensure_future(
+                        _add_one_slot_to_cart(session, d, state)
+                    ),
+                ).props("flat round dense size=xs color=primary").tooltip(
+                    t("weekmenu.add_ingredients")
+                )
+
+
+async def _add_one_slot_to_cart(session, dish: Dish, state: _MealsState) -> None:
+    """Add one dish's ingredients via the full add flow (availability check + dialog)."""
+    mini_state = _MealsState(week_start=state.week_start)
+    mini_state.slots = {"ma": dish}
+    mini_state.dishes = state.dishes
+    await _add_weekmenu_to_cart(session, mini_state)
 
 
 def _show_prep_notes(dish: Dish) -> None:
@@ -1360,4 +1405,5 @@ async def _confirm_add(session, agg: AggResult, overrides: set[str], dlg) -> Non
                 product_unit=line.pack_unit or "",
                 product_price=line.pack_price or 0.0,
                 product_image="",
+                source="menu",
             )

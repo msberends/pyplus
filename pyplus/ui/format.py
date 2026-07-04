@@ -21,19 +21,21 @@ def alt_text(name: str) -> str:
     return (name or "").replace('"', "").replace("\\", "").strip()
 
 
-def thumbnail_url(url: str, size: int = 44) -> str:
-    """Return a resized Contentful image URL (w=size×3, WebP, square crop).
+def thumbnail_url(url: str, size: int = 44, fit: str = "thumb") -> str:
+    """Return a resized Contentful image URL (w=size×3, WebP).
 
-    Contentful's Images API accepts ?w=&h=&fit=thumb&fm=webp.  A 3× DPR
-    factor covers HiDPI/Retina displays; still 10–30× smaller than the
-    2000 px originals PLUS.nl serves by default.  Non-ctfassets URLs are
+    fit="thumb"  — center-crop to a square (default, compact rows/search).
+    fit="pad"    — full image padded to a square (larger product cards).
+
+    A 3× DPR factor covers HiDPI/Retina displays; still 10–30× smaller than
+    the 2000 px originals PLUS.nl serves by default.  Non-ctfassets URLs are
     returned unchanged.
     """
     if not url or _CTFASSETS_HOST not in url:
         return url
     px = size * 3
     sep = "&" if "?" in url else "?"
-    return f"{url}{sep}w={px}&h={px}&fit=thumb&fm=webp"
+    return f"{url}{sep}w={px}&h={px}&fit={fit}&fm=webp"
 
 
 _MEAT_EMOJI = {

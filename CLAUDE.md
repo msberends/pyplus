@@ -28,6 +28,67 @@ uv run ruff check . && uv run ruff format .
 Run `ruff` and `pytest` clean before declaring work done. `tests/manual/` hits the live PLUS API and
 needs real credentials — it is **not** part of the suite; never put personal data in it.
 
+## Screenshots
+
+The app runs as a systemd service — never kill or restart it. For UI work, take screenshots to
+verify changes visually.
+
+**Tool:** `tools/screenshot.py` — headless Playwright, auto-login, session cached to
+`.screenshot_session.json` (gitignored). Credentials and app URL come from `.screenshot.env`
+(gitignored; never commit).
+
+```bash
+uv run python tools/screenshot.py                     # all pages (desktop 1400×900)
+uv run python tools/screenshot.py weekmenu staples    # specific pages only
+```
+
+Output lands in `screenshots/` (gitignored). Pages: `login weekmenu promos staples cart dishes settings cockpit`.
+
+**Mobile screenshots (560 px):** reuse the cached session with a custom script — the session file
+stores cookies/storage so no re-login is needed as long as the session is fresh:
+
+```python
+import asyncio
+from pathlib import Path
+from playwright.async_api import async_playwright
+
+ROOT = Path("/var/www/pyplus")
+
+def load_env():
+    env = {}
+    for line in (ROOT / ".screenshot.env").read_text().splitlines():
+        if line.strip() and not line.startswith("#"):
+            k, _, v = line.partition("=")
+            env[k.strip()] = v.strip()
+    return env
+
+async def main():
+    env = load_env()
+    base_url = env["APP_URL"].rstrip("/")
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        ctx = await browser.new_context(
+            viewport={"width": 560, "height": 900},
+            storage_state=str(ROOT / ".screenshot_session.json"),
+            locale="nl-NL",
+        )
+        page = await ctx.new_page()
+        for name, path in [("mobile_weekmenu", "/weekmenu"), ("mobile_staples", "/staples")]:
+            await page.goto(f"{base_url}{path}", wait_until="networkidle")
+            await page.wait_for_timeout(2500)
+            await page.screenshot(path=str(ROOT / f"screenshots/{name}.png"), full_page=True)
+        await browser.close()
+
+asyncio.run(main())
+```
+
+If the session is expired, run the desktop tool first (`uv run python tools/screenshot.py weekmenu`)
+to trigger a fresh login and save the session.
+
+**Assessing screenshots:** read the `.png` files with the Read tool — they are rendered visually.
+Check: content visible (not blank/clipped), nav bar present, grids lay out correctly, no horizontal
+overflow, text readable, bottom of page not obscured by the fixed nav bar.
+
 ## Layout (where things live)
 
 - `plus/` — reverse-engineered PLUS client: `client.py` (all API methods + session capture),

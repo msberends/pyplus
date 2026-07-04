@@ -17,7 +17,6 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 from pathlib import Path
 
@@ -28,9 +27,13 @@ SCREENSHOT_DIR = ROOT / "screenshots"
 
 PAGES = {
     "login": "/login",
-    "cockpit": "/cockpit",
+    "weekmenu": "/weekmenu",
+    "promos": "/promos",
+    "staples": "/staples",
+    "cart": "/cart",
     "dishes": "/dishes",
     "settings": "/settings",
+    "cockpit": "/cockpit",
 }
 
 # How long to wait for the page to settle after navigation (ms)
@@ -80,10 +83,10 @@ async def _take_screenshots(pages: list[str]) -> None:
         context = await browser.new_context(**context_kwargs)
         page = await context.new_page()
 
-        # Check if the session is still valid by hitting the cockpit
+        # Check if the session is still valid by hitting weekmenu
         if SESSION_FILE.exists():
-            await page.goto(f"{base_url}/cockpit", wait_until="networkidle")
-            if "/login" in page.url or "/cockpit" not in page.url:
+            await page.goto(f"{base_url}/weekmenu", wait_until="networkidle")
+            if "/login" in page.url or "/weekmenu" not in page.url:
                 print("Session expired — logging in again…")
                 SESSION_FILE.unlink(missing_ok=True)
                 await context.close()
@@ -130,8 +133,8 @@ async def _login(page, base_url: str, env: dict[str, str]) -> None:
     print("Submitting login form — waiting for Plus.nl OAuth (~20s)…")
     await page.get_by_role("button").filter(has_text="Inloggen").click()
 
-    # Wait for redirect to cockpit (Plus.nl OAuth + session setup)
-    await page.wait_for_url(f"{base_url}/cockpit", timeout=LOGIN_TIMEOUT_MS)
+    # Wait for redirect to weekmenu (Plus.nl OAuth + session setup)
+    await page.wait_for_url(f"{base_url}/weekmenu", timeout=LOGIN_TIMEOUT_MS)
     await page.wait_for_timeout(PAGE_SETTLE_MS)
     print("Login successful.")
 

@@ -36,6 +36,7 @@ class CartService:
         product_unit: str = "",
         product_price: float = 0.0,
         product_image: str = "",
+        source: str = "",
         check_stock: bool = True,
     ) -> bool:
         """Add qty units of sku. Returns False (and fires stock alert) if out of stock."""
@@ -67,6 +68,7 @@ class CartService:
             unit=product_unit,
             price=product_price,
             image=product_image,
+            source=source,
         )
         return True
 
@@ -124,12 +126,15 @@ class CartService:
         unit: str = "",
         price: float = 0.0,
         image: str = "",
+        source: str = "",
     ) -> None:
         # Take a pre-cycle snapshot on the very first tap of each debounce cycle.
         if sku not in self._pending:
             self._snapshots[sku] = self.session.cart
 
-        self._apply_optimistic(sku, delta, name=name, unit=unit, price=price, image=image)
+        self._apply_optimistic(
+            sku, delta, name=name, unit=unit, price=price, image=image, source=source
+        )
         self._pending[sku] = self._pending.get(sku, 0) + delta
 
         # Cancel previous debounce task and start a fresh one.
@@ -166,15 +171,18 @@ class CartService:
             from plus.client import _parse_cart_from_checkout
 
             new_cart = _parse_cart_from_checkout(checkout)
-            # PLUS cart API doesn't return ImageURLs — preserve from the optimistic cart.
+            # PLUS cart API doesn't return ImageURLs or source tags — preserve from optimistic cart.
             old_images = {it.sku: it.image_url for it in self.session.cart.items if it.image_url}
-            if old_images:
-                patched = [
-                    it.model_copy(update={"image_url": old_images[it.sku]})
-                    if not it.image_url and it.sku in old_images
-                    else it
-                    for it in new_cart.items
-                ]
+            old_sources = {it.sku: it.source for it in self.session.cart.items if it.source}
+            if old_images or old_sources:
+                patched = []
+                for it in new_cart.items:
+                    updates = {}
+                    if not it.image_url and it.sku in old_images:
+                        updates["image_url"] = old_images[it.sku]
+                    if not it.source and it.sku in old_sources:
+                        updates["source"] = old_sources[it.sku]
+                    patched.append(it.model_copy(update=updates) if updates else it)
                 new_cart = new_cart.model_copy(update={"items": patched})
             # Re-apply any taps that arrived while this call was in flight, so the
             # authoritative response doesn't clobber newer optimistic state (which
@@ -239,6 +247,7 @@ class CartService:
         unit: str,
         price: float,
         image: str,
+        source: str = "",
     ) -> None:
         from plus.models import CartItem
 
@@ -253,7 +262,14 @@ class CartService:
                 unit_price = item.price  # known per-unit price of the existing line
                 new_qty = item.quantity + delta
                 if new_qty > 0:
-                    new_items[i] = item.model_copy(update={"quantity": new_qty})
+                    # Merge source: append new origin if not already present.
+                    if source and source not in (item.source or "").split(","):
+                        merged = ",".join(filter(None, [item.source, source]))
+                        new_items[i] = item.model_copy(
+                            update={"quantity": new_qty, "source": merged}
+                        )
+                    else:
+                        new_items[i] = item.model_copy(update={"quantity": new_qty})
                 else:
                     new_items.pop(i)
                 break
@@ -268,6 +284,7 @@ class CartService:
                     quantity=delta,
                     sku=sku,
                     image_url=image,
+                    source=source,
                 )
             )
 

@@ -74,10 +74,7 @@ def _render_auto_login(email: str, password: str, name: str, user_id: int) -> No
                     .classes("sp-login-logo-mark")
                     .style("display:flex;align-items:center;justify-content:center")
                 ):
-                    ui.label("PP").style(
-                        "font-size:13px;font-weight:800;color:white;"
-                        "letter-spacing:-0.5px;line-height:1"
-                    )
+                    ui.icon("local_grocery_store", size="22px").style("color:white")
                 ui.label("PyPLUS").classes("sp-login-logo-name")
 
             ui.label(f"Welkom terug, {name.split()[0] if name else 'je'}!").classes(
@@ -120,10 +117,7 @@ def _render_login_form() -> None:
                     .classes("sp-login-logo-mark")
                     .style("display:flex;align-items:center;justify-content:center")
                 ):
-                    ui.label("PP").style(
-                        "font-size:13px;font-weight:800;color:white;"
-                        "letter-spacing:-0.5px;line-height:1"
-                    )
+                    ui.icon("local_grocery_store", size="22px").style("color:white")
                 ui.label("PyPLUS").classes("sp-login-logo-name")
 
             ui.label(t("login.heading")).classes("sp-login-heading")

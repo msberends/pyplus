@@ -36,9 +36,35 @@ async def login_page() -> None:
 
 @ui.page("/cockpit")
 async def cockpit_page() -> None:
-    from pyplus.ui.pages.cockpit import create_cockpit_page
+    ui.navigate.to("/weekmenu")
 
-    await create_cockpit_page()
+
+@ui.page("/weekmenu")
+async def weekmenu_page() -> None:
+    from pyplus.ui.pages.weekmenu import create_weekmenu_page
+
+    await create_weekmenu_page()
+
+
+@ui.page("/promos")
+async def promos_page() -> None:
+    from pyplus.ui.pages.promos import create_promos_page
+
+    await create_promos_page()
+
+
+@ui.page("/staples")
+async def staples_page() -> None:
+    from pyplus.ui.pages.staples import create_staples_page
+
+    await create_staples_page()
+
+
+@ui.page("/cart")
+async def cart_page() -> None:
+    from pyplus.ui.pages.cart import create_cart_page
+
+    await create_cart_page()
 
 
 @ui.page("/dishes")
@@ -173,7 +199,7 @@ if __name__ in {"__main__", "__mp_main__"}:
         host=settings.host,
         port=settings.port,
         title="PyPLUS",
-        favicon="🛒",
+        favicon="🧺",
         dark=False,
         storage_secret=_storage_secret,
         show=False,

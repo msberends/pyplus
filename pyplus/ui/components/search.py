@@ -241,6 +241,7 @@ def _render_search_stepper(
                     product_unit=product.subtitle,
                     product_price=product.price,
                     product_image=product.image_url,
+                    source="search",
                 )
             )
 

@@ -555,9 +555,7 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
                     db, store, [r.sku for r in rows if r.sku]
                 )
                 for r in rows:
-                    if r.sku and (
-                        r.sku not in present or not present[r.sku].is_available
-                    ):
+                    if r.sku and (r.sku not in present or not present[r.sku].is_available):
                         r.discontinued = True
 
     # ── Dialog ────────────────────────────────────────────────────────

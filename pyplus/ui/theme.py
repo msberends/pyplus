@@ -684,7 +684,53 @@ body {
   padding: 1.5rem;
   background: var(--c-bg);
   width: calc(100vw - 68px);
+  flex: 1 1 0;
+  min-width: 0;
 }
+
+/* Single-lane page: override the compact cockpit heights so the lane fills the viewport */
+.sp-page-lane .sp-meals-body,
+.sp-page-lane .sp-deals-body,
+.sp-page-lane .sp-staples-body {
+  max-height: none;
+  overflow-y: visible;
+}
+
+/* Cart two-column layout: cart (2/3) + search (1/3) */
+.sp-cart-two-col {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+.sp-cart-two-col__main {
+  flex: 2 1 0;
+  min-width: 0;
+}
+.sp-cart-two-col__search {
+  flex: 1 1 0;
+  min-width: 0;
+  position: sticky;
+  top: 0;
+  max-height: calc(100vh - 3rem);
+  overflow-y: auto;
+}
+
+/* Origin chips — small pills on cart items showing how they were added */
+.sp-origin-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--r-full);
+  font-size: 10px;
+  font-weight: var(--w-semibold);
+  letter-spacing: .02em;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+.sp-origin-chip--menu       { background: var(--c-brand-tint);  color: #1a5e22; }
+.sp-origin-chip--staple     { background: #e8f0fe;               color: #1a56b0; }
+.sp-origin-chip--promotion  { background: #fff8e1;               color: #92400e; }
+.sp-origin-chip--search     { background: var(--c-surface-2); color: var(--c-text-3); border: 1px solid var(--c-border); }
 
 /* Cart item row */
 .sp-cart-item {
@@ -816,6 +862,69 @@ body {
 }
 .sp-staples-item:last-child { border-bottom: none; }
 
+/* ─── Staples card grid ──────────────────────────────────────────────────── */
+.sp-staples-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(154px, 1fr));
+  gap: .625rem;
+  padding: .25rem 0 .5rem;
+}
+.sp-staples-card {
+  position: relative;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  padding: .625rem .5rem .5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .25rem;
+  transition: box-shadow var(--dur-fast) var(--ease);
+}
+.sp-staples-card:hover { box-shadow: var(--shadow-sm); }
+.sp-staples-card--due {
+  background: var(--c-brand-tint);
+  border-color: var(--c-brand-tint-2);
+}
+.sp-staples-card__img {
+  width: 72px; height: 72px;
+  object-fit: contain;
+  border-radius: var(--r-sm);
+  background: var(--c-surface-2);
+  flex-shrink: 0;
+}
+.sp-staples-card__name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text);
+  text-align: center;
+  line-height: 1.3;
+  word-break: break-word;
+  hyphens: auto;
+}
+.sp-staples-card__sub {
+  font-size: 10px;
+  color: var(--c-text-4);
+  text-align: center;
+  line-height: 1.2;
+}
+.sp-staples-card__price {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text-3);
+}
+.sp-staples-card__reason {
+  font-size: 10px;
+  color: var(--c-text-3);
+  text-align: center;
+  line-height: 1.2;
+}
+.sp-staples-card__delete {
+  position: absolute;
+  top: .2rem;
+  right: .2rem;
+}
+
 .sp-avail-dot {
   width: 7px; height: 7px;
   border-radius: 50%;
@@ -890,6 +999,131 @@ body {
   border: none;
   border-top: 1px solid var(--c-border);
   margin: .5rem 0 .25rem;
+}
+
+/* ─── Weekmenu card grid ─────────────────────────────────────────────────── */
+.sp-weekmenu-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: .625rem;
+  margin-bottom: .75rem;
+}
+.sp-weekmenu-extra-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: .5rem;
+}
+.sp-weekmenu-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 148px;
+  transition: box-shadow var(--dur-fast) var(--ease);
+}
+.sp-weekmenu-card:hover { box-shadow: var(--shadow-sm); }
+.sp-weekmenu-card--filled { border-color: var(--c-brand-tint-2); }
+.sp-weekmenu-card__head {
+  background: var(--c-surface-2);
+  border-bottom: 1px solid var(--c-border);
+  padding: .4rem .5rem .35rem;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: .25rem;
+  flex-shrink: 0;
+}
+.sp-weekmenu-card__day {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--c-text);
+  line-height: 1.2;
+}
+.sp-weekmenu-card__date {
+  font-size: 10px;
+  color: var(--c-text-4);
+  line-height: 1.2;
+}
+.sp-weekmenu-card__body {
+  flex: 1;
+  padding: .5rem .5rem .375rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 0;
+}
+.sp-weekmenu-card__dish {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text);
+  line-height: 1.35;
+  word-break: break-word;
+  hyphens: auto;
+}
+.sp-weekmenu-card__meta {
+  font-size: 10px;
+  color: var(--c-text-3);
+  line-height: 1.3;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sp-weekmenu-card__foot {
+  border-top: 1px solid var(--c-border);
+  padding: .2rem .375rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+/* ─── Promo expanded product grid ───────────────────────────────────────── */
+.sp-promo-product-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  gap: .5rem;
+  padding: .5rem 0 .25rem;
+  margin-top: .25rem;
+  border-top: 1px solid var(--c-border);
+}
+.sp-promo-product-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  padding: .625rem .5rem .5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .25rem;
+  text-align: center;
+  transition: box-shadow var(--dur-fast) var(--ease);
+}
+.sp-promo-product-card:hover { box-shadow: var(--shadow-sm); }
+.sp-promo-product-card__img {
+  width: 80px; height: 80px;
+  object-fit: contain;
+  border-radius: var(--r-sm);
+  background: var(--c-surface-2);
+  flex-shrink: 0;
+}
+.sp-promo-product-card__name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text);
+  line-height: 1.3;
+  word-break: break-word;
+}
+.sp-promo-product-card__sub {
+  font-size: 10px;
+  color: var(--c-text-4);
+}
+.sp-promo-product-card__price {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--c-brand-dark);
 }
 
 /* ─── Meals lane ─────────────────────────────────────────────────────────── */
@@ -1028,9 +1262,26 @@ body {
 }
 .sp-mobile-cart-bar:active { background: var(--c-surface-2); }
 
+/* Landscape phones (e.g. iPhone 15 landscape = 852px) — keep cart single-column
+   so the search panel doesn't steal half the limited screen width. */
+@media (max-width: 900px) {
+  .sp-cart-two-col { flex-direction: column; align-items: stretch; }
+  .sp-cart-two-col__search { position: static; max-height: none; }
+  .sp-cart-panel { position: static; max-height: none; overflow: visible; }
+  .sp-cart-body { overflow-y: visible; flex: none; }
+}
+
 /* Mobile */
 @media (max-width: 768px) {
-  .sp-cockpit-root { flex-direction: column; height: auto; overflow: visible; }
+  /* Quasar adds 16px side-padding to .nicegui-content on narrow viewports.
+     Remove it so the cockpit root can fill the full viewport width. */
+  .nicegui-content { padding-left: 0 !important; padding-right: 0 !important; }
+
+  /* Keep height: 100vh and overflow: hidden from desktop so sp-page-content
+     gets a definite height and its overflow-y: auto creates a real scroll area.
+     Add width: 100% to anchor the column flex container to the viewport. */
+  .sp-cockpit-root { flex-direction: column; width: 100%; }
+
   .sp-nav-rail {
     width: 100%; height: 58px; flex-direction: row;
     justify-content: space-around; border-right: none;
@@ -1040,60 +1291,44 @@ body {
   }
   .sp-nav-logo { display: none; }
   .sp-nav-spacer { display: none; }
-  .sp-cockpit-left-col, .sp-cockpit-mid-col { display: contents; }
-  .sp-cockpit-stage {
-    flex: 1 1 auto;
-    flex-direction: column; order: 1;
-    padding-bottom: calc(58px + 58px + 1.25rem);  /* nav + cart bar */
-    overflow-y: auto;
-  }
-  /* Mobile lane order: meals, deals, staples, search */
-  .sp-cockpit-stage .sp-lane { order: 10; }
-  .sp-cockpit-left-col > :first-child { order: 1; }
-  .sp-cockpit-left-col > :last-child  { order: 2; }
-  .sp-cockpit-mid-col > :first-child  { order: 3; }
-  .sp-cockpit-mid-col > :last-child   { order: 4; }
-  .sp-cockpit-cart-col { display: none; }  /* replaced by bottom bar */
-  /* In the mobile cart sheet the dialog card is the frame, so the panel fills
-     it edge-to-edge with no second border/radius and no sticky/height cap. */
-  .sp-cart-panel {
-    flex: 1;
+
+  /* Page-based views (weekmenu / promos / staples / cart / dishes / settings):
+     sp-page-content is the only child, fills 100vh, scrolls natively. */
+  .sp-page-content {
     width: 100%;
-    min-width: 0;  /* let content clip/wrap instead of widening the panel off-screen */
-    border: none;
-    border-radius: 0;
-    position: static;
-    max-height: none;
+    padding: .875rem .875rem calc(58px + 1.25rem);
+    overflow-y: auto;
+    overflow-x: hidden;  /* prevent wide children from creating horizontal scroll */
+    flex: 1 1 0;
   }
-  .sp-page-content { width: 100%; padding-bottom: calc(58px + 1.25rem); }  /* nav bar */
   .sp-deals-body, .sp-meals-body, .sp-staples-body { max-height: none; overflow-y: visible; }
+
+  /* Cart: remove the sticky/height-capped panel so the page scrolls naturally */
+  .sp-cart-panel { position: static; max-height: none; overflow: visible; }
+  .sp-cart-body { overflow-y: visible; flex: none; padding-bottom: 12rem; }
+  /* align-items:flex-start (desktop) collapses children in column mode → items overflow right;
+     stretch makes both cols fill the full available width. */
+  .sp-cart-two-col { flex-direction: column; align-items: stretch; }
+  .sp-cart-two-col__search { position: static; max-height: none; }
+  /* Sticky total footer — floats above the bottom nav bar so price+checkout are always visible */
+  .sp-cart-footer {
+    position: sticky;
+    bottom: 58px;
+    z-index: 20;
+    background: var(--c-surface);
+    border-top: 1px solid var(--c-border);
+    box-shadow: 0 -2px 10px rgba(0,0,0,.08);
+    border-radius: 0 0 var(--r-xl) var(--r-xl);
+  }
   .sp-mobile-cart-bar { display: flex; bottom: 58px; }
 
-  /* Collapsible lanes on mobile */
-  .sp-lane-header {
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: .25rem;
-  }
-  .sp-lane-header > * { flex: 1; min-width: 0; }
-  .sp-lane-header::after {
-    content: '\\e5cf';  /* expand_more */
-    font-family: 'Material Icons';
-    font-size: 20px;
-    color: var(--c-text-4);
-    flex: 0 0 auto;
-    transition: transform var(--dur-fast) var(--ease);
-  }
-  .sp-lane--collapsed .sp-lane-header::after {
-    transform: rotate(-90deg);
-  }
-  .sp-lane--collapsed .sp-lane-body,
-  .sp-lane--collapsed .sp-staples-body,
-  .sp-lane--collapsed .sp-deals-body,
-  .sp-lane--collapsed .sp-meals-body {
-    display: none;
-  }
+  /* Weekmenu grids: 2 dinner cols, auto-fill extra */
+  .sp-weekmenu-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sp-weekmenu-extra-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+
+  /* Staples/promo cards: narrower minimum so more fit */
+  .sp-staples-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+  .sp-promo-product-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
 }
 """
 
@@ -1106,7 +1341,9 @@ document.addEventListener('click', function(e) {
   if (!header) return;
   if (e.target.closest('button, a, input')) return;
   var lane = header.closest('.sp-lane');
-  if (lane) lane.classList.toggle('sp-lane--collapsed');
+  // Don't collapse lanes inside a page-based view (only cockpit side lanes)
+  if (!lane || lane.closest('.sp-page-content')) return;
+  lane.classList.toggle('sp-lane--collapsed');
 });
 </script>
 """

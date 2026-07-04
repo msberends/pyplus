@@ -82,7 +82,7 @@ def _compute_deal_total(promo, item) -> float | None:
     return None
 
 
-def create_cart_panel(session) -> None:
+def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
     """Render the cart panel and wire it to the session's live cart."""
     cart_service = getattr(session, "cart_service", None)
     savings_by_sku: dict = {}  # sku → savings.Saving for the current cart
@@ -221,6 +221,21 @@ def create_cart_panel(session) -> None:
                             "text-decoration:underline"
                         )
 
+            def _fill_origin(refs, item) -> None:
+                slot = refs.get("origin_slot")
+                if slot is None:
+                    return
+                slot.clear()
+                if not item.source:
+                    return
+                with slot:
+                    for src in item.source.split(","):
+                        src = src.strip()
+                        if not src:
+                            continue
+                        label = t(f"cart.origin.{src}")
+                        ui.label(label).classes(f"sp-origin-chip sp-origin-chip--{src}")
+
             def _fill_stepper(refs, item) -> None:
                 from pyplus.ui.components.controls import stepper_button
 
@@ -277,6 +292,9 @@ def create_cart_panel(session) -> None:
                             )
                         if item.unit:
                             ui.label(item.unit).classes("sp-cart-item-unit")
+                        refs["origin_slot"] = ui.element("div").style(
+                            "display:flex;flex-wrap:wrap;gap:3px;margin-top:2px"
+                        )
                         refs["promo_slot"] = ui.element("div").style("display:contents")
                         refs["saving_slot"] = ui.element("div").style("display:contents")
                     with ui.element("div").style(
@@ -290,6 +308,7 @@ def create_cart_panel(session) -> None:
                         refs["perunit_slot"] = ui.element("div").style("display:contents")
                         refs["stepper_slot"] = ui.element("div").style("display:contents")
                 _fill_image(refs, item)
+                _fill_origin(refs, item)
                 _fill_perunit(refs, item)
                 _fill_stepper(refs, item)
                 _fill_promo(refs, item)
@@ -355,7 +374,12 @@ def create_cart_panel(session) -> None:
                 empty_holder.clear()
 
                 plan: list = []  # ("h", label) | ("i", item)
-                if prefs.cart_group_by_category:
+                if group_by_origin and any(it.source for it in items):
+                    for origin_label, group in _group_by_origin(items):
+                        plan.append(("h", origin_label))
+                        for it in group:
+                            plan.append(("i", it))
+                elif prefs.cart_group_by_category:
                     for cat, group in _group_items(items, cat_by_sku):
                         plan.append(("h", cat))
                         for it in group:
@@ -552,7 +576,7 @@ def create_cart_panel(session) -> None:
                 _footer_expanded[0] = not _footer_expanded[0]
                 footer_details.set_visibility(_footer_expanded[0])
                 footer_toggle.props(
-                    f'icon={"expand_more" if _footer_expanded[0] else "expand_less"}'
+                    f"icon={'expand_more' if _footer_expanded[0] else 'expand_less'}"
                 )
 
             with ui.element("div").style(
@@ -739,6 +763,28 @@ def create_cart_panel(session) -> None:
     session.add_error_listener(_on_error)
     session.add_stock_alert_listener(_on_stock_alert)
     _on_cart()
+
+
+_ORIGIN_LABELS = {
+    "menu": "Weekmenu",
+    "staple": "Vaste boodschap",
+    "promotion": "Aanbieding",
+    "search": "Gezocht",
+}
+_ORIGIN_ORDER = ["menu", "staple", "promotion", "search"]
+
+
+def _group_by_origin(items: list) -> list[tuple[str, list]]:
+    """Bucket items by their first source tag, preserving insertion order within groups."""
+    buckets: dict[str, list] = {}
+    for it in items:
+        origin = (it.source or "").split(",")[0] or "other"
+        buckets.setdefault(origin, []).append(it)
+    ordered = [o for o in _ORIGIN_ORDER if o in buckets]
+    if "other" in buckets:
+        ordered.append("other")
+    labels = {**_ORIGIN_LABELS, "other": "Overig"}
+    return [(labels.get(k, k), buckets[k]) for k in ordered]
 
 
 def _sort_items(items: list, sort: str) -> list:

@@ -1686,10 +1686,14 @@ def _render_sync_status(
             ):
                 when_lbl = ui.label(when0).style("font-size:12px;color:var(--c-text-3)")
                 dur0 = _format_duration(row.last_duration_seconds if row else None)
-                dur_lbl = ui.label(dur0).style(
-                    "font-size:11px;color:var(--c-text-4)"
-                    + (";display:none" if not dur0 else "")
-                ).tooltip("Duur van de laatste uitvoering")
+                dur_lbl = (
+                    ui.label(dur0)
+                    .style(
+                        "font-size:11px;color:var(--c-text-4)"
+                        + (";display:none" if not dur0 else "")
+                    )
+                    .tooltip("Duur van de laatste uitvoering")
+                )
                 if next_dt is not None:
                     ui.label(_format_until(next_dt)).style(
                         "font-size:11px;color:var(--c-text-4)"
@@ -1740,7 +1744,10 @@ def _render_sync_status(
                     lbl.set_text(humanize_since(fresh.last_synced_at))
                     dur_str = _format_duration(fresh.last_duration_seconds)
                     dlbl.set_text(dur_str)
-                    dlbl.style("font-size:11px;color:var(--c-text-4)" + (";display:none" if not dur_str else ""))
+                    dlbl.style(
+                        "font-size:11px;color:var(--c-text-4)"
+                        + (";display:none" if not dur_str else "")
+                    )
                 dot_el.style(f"background:{_status_dot_colour(status)}")
 
             run_btn.on_click(_run)
