@@ -53,11 +53,6 @@ class CartService:
                         if pc is not None and not pc.is_available:
                             self.session.notify_stock_alert(product_name or pc.name)
                             return False
-                        if pc is None:
-                            count = await _repo.count_product_cache(_db, store)
-                            if count > 0:
-                                self.session.notify_stock_alert(product_name or sku)
-                                return False
             except Exception:
                 pass  # never block the add due to check failure
 

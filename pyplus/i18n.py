@@ -20,7 +20,6 @@ _STRINGS: dict[str, str] = {
     "login.store_change": "Andere winkel kiezen",
     "login.store_confirm": "Bevestig winkel",
     # ── Navigation ─────────────────────────────────────────────────────────────
-    "nav.cockpit": "Cockpit",
     "nav.weekmenu": "Weekmenu",
     "nav.promos": "Aanbiedingen",
     "nav.staples": "Vaste boodschappen",
@@ -28,6 +27,12 @@ _STRINGS: dict[str, str] = {
     "nav.dishes": "Gerechten",
     "nav.settings": "Instellingen",
     "nav.logout": "Uitloggen",
+    "nav.short.weekmenu": "Weekmenu",
+    "nav.short.promos": "Aanbiedingen",
+    "nav.short.staples": "Wekelijkse\nboodschappen",
+    "nav.short.cart": "Winkelwagen",
+    "nav.short.dishes": "Gerechten\nbeheren",
+    "nav.short.settings": "Instellingen",
     # ── Cart origins ──────────────────────────────────────────────────────────
     "cart.origin.menu": "Weekmenu",
     "cart.origin.staple": "Vaste boodschap",
@@ -44,8 +49,7 @@ _STRINGS: dict[str, str] = {
     "weekmenu.add_ingredients": "Ingrediënten toevoegen",
     "weekmenu.edit_dish": "Gerecht bewerken",
     "weekmenu.manage_dishes": "Gerechten beheren",
-    # ── Cockpit ────────────────────────────────────────────────────────────────
-    "cockpit.title": "Boodschappen doen",
+    # ── Weekmenu ──────────────────────────────────────────────────────────────
     # Lane ① — meals
     "lane.meals.title": "Deze week",
     "lane.meals.empty_slot": "kies gerecht",

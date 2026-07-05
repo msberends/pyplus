@@ -125,10 +125,10 @@ def _section_card(title: str, body_fn) -> None:
 
 def _infobox(
     text: str,
-    icon: str = "info",
-    color: str = "#e0f2fe",
-    border: str = "#7dd3fc",
-    text_color: str = "#0369a1",
+    icon: str = "sym_r_info",
+    color: str = "var(--c-brand-tint)",
+    border: str = "var(--c-brand-tint-2)",
+    text_color: str = "var(--c-brand-dark)",
 ) -> None:
     """Styled information box for explaining settings to the user."""
     with ui.element("div").style(
@@ -210,7 +210,7 @@ def _render_account(session, user, user_id: int) -> None:
             app.storage.user.clear()
         ui.navigate.to("/login")
 
-    ui.button(t("settings.logout"), icon="logout", on_click=_logout).props(
+    ui.button(t("settings.logout"), icon="sym_r_logout", on_click=_logout).props(
         "flat rounded no-caps color=negative"
     ).style("font-size:13px")
 
@@ -539,7 +539,7 @@ def _render_ml(settings: UserSettings, user_id: int, save_fn) -> None:
     recompute_btn = (
         ui.button(
             "Herbereken suggesties",
-            icon="refresh",
+            icon="sym_r_refresh",
             on_click=lambda: asyncio.ensure_future(_recompute()),
         )
         .props("flat rounded no-caps color=primary size=sm")
@@ -550,7 +550,7 @@ def _render_ml(settings: UserSettings, user_id: int, save_fn) -> None:
 def _render_ml_weights(settings: UserSettings, save_fn) -> None:
     """Signal weight sliders inside a collapsible expansion."""
     with (
-        ui.expansion("Weegfactoren", icon="tune", value=True)
+        ui.expansion("Weegfactoren", icon="sym_r_tune", value=True)
         .style("border-top:1px solid var(--c-border);margin-top:.625rem")
         .props("dense")
     ):
@@ -640,7 +640,7 @@ def _render_ml_day_preferences(settings: UserSettings, save_fn) -> None:
     from pyplus.ui.format import meat_emoji, meat_label, starch_emoji, starch_label
 
     with (
-        ui.expansion(t("settings.ml.day_prefs"), icon="calendar_month")
+        ui.expansion(t("settings.ml.day_prefs"), icon="sym_r_calendar_month")
         .style("border-top:1px solid var(--c-border)")
         .props("dense")
     ):
@@ -677,10 +677,10 @@ def _render_ml_day_preferences(settings: UserSettings, save_fn) -> None:
                     "Deze voorkeuren gelden voor alle vijf extra-slots. "
                     "De extra-slots delen dezelfde regels — ze worden niet "
                     "individueel ingesteld.",
-                    icon="restaurant",
-                    color="#fef3c7",
-                    border="#fde68a",
-                    text_color="#92400e",
+                    icon="sym_r_skillet",
+                    color="#eee8f5",
+                    border="#d5cef0",
+                    text_color="var(--c-accent)",
                 )
                 _render_single_day_pref(
                     settings,
@@ -830,7 +830,7 @@ def _render_chip_multiselect(
 def _render_ml_week_constraints(settings: UserSettings, save_fn) -> None:
     """Cross-week diversity constraints."""
     with (
-        ui.expansion(t("settings.ml.week_goals"), icon="rule")
+        ui.expansion(t("settings.ml.week_goals"), icon="sym_r_rule")
         .style("border-top:1px solid var(--c-border)")
         .props("dense")
     ):
@@ -955,7 +955,7 @@ def _render_ml_week_constraints(settings: UserSettings, save_fn) -> None:
 def _render_ml_advanced(settings: UserSettings, save_fn) -> None:
     """Advanced ML knobs for power users."""
     with (
-        ui.expansion(t("settings.ml.advanced"), icon="science")
+        ui.expansion(t("settings.ml.advanced"), icon="sym_r_science")
         .style("border-top:1px solid var(--c-border)")
         .props("dense")
     ):
@@ -966,10 +966,10 @@ def _render_ml_advanced(settings: UserSettings, save_fn) -> None:
             "hebzuchtig pakt altijd de hoogste score, softmax maakt het probabilistisch "
             "(temperatuur regelt de spreiding), en Thompson-steekproef gebruikt Bayesiaanse "
             "exploratie met een Beta-verdeling.",
-            icon="science",
-            color="#f5f3ff",
-            border="#ddd6fe",
-            text_color="#6d28d9",
+            icon="sym_r_science",
+            color="#eee8f5",
+            border="#d5cef0",
+            text_color="var(--c-accent)",
         )
 
         # Repeat cooldown
@@ -1049,10 +1049,10 @@ def _render_ml_advanced(settings: UserSettings, save_fn) -> None:
             "Thompson-steekproef: Bayesiaanse exploratie — trekt per kandidaat uit een "
             "Beta(α,β)-verdeling gebaseerd op de score, kiest de hoogste sample. "
             "Balanceert van nature exploratie en exploitatie.",
-            icon="casino",
-            color="#fef9c3",
-            border="#fde047",
-            text_color="#854d0e",
+            icon="sym_r_casino",
+            color="#eee8f5",
+            border="#d5cef0",
+            text_color="var(--c-accent)",
         )
 
         method_opts = {
@@ -1165,8 +1165,8 @@ def _adv_slider(
 def _render_ml_autopilot(settings: UserSettings, save_fn) -> None:
     """Autopilot section with per-meal toggles and slot limits."""
     with ui.element("div").style(
-        "padding:.75rem;background:#fffbeb;border-radius:var(--r-md);"
-        "border:1px solid #fde68a;margin-top:.625rem"
+        "padding:.75rem;background:#eee8f5;border-radius:var(--r-md);"
+        "border:1px solid #d5cef0;margin-top:.625rem"
     ):
         _infobox(
             "Autopilot laat het model automatisch lege slots invullen — "
@@ -1174,17 +1174,17 @@ def _render_ml_autopilot(settings: UserSettings, save_fn) -> None:
             "Schakel avondeten en extra apart in en begrens het aantal slots dat "
             "automatisch wordt gevuld. Alle hierboven ingestelde regels, "
             "dagvoorkeuren en weekdoelen worden gerespecteerd.",
-            icon="smart_toy",
-            color="#fef3c7",
-            border="#fde68a",
-            text_color="#92400e",
+            icon="sym_r_smart_toy",
+            color="#eee8f5",
+            border="#d5cef0",
+            text_color="var(--c-accent)",
         )
 
         with ui.row().style("align-items:flex-start;gap:.625rem;padding:.375rem 0"):
             ap_dinner = ui.switch(value=settings.ml_autopilot_dinner).props("color=warning size=sm")
             with ui.element("div"):
                 ui.label(t("settings.ml.autopilot_dinner")).style(
-                    "font-size:13px;font-weight:600;color:#92400e"
+                    "font-size:13px;font-weight:600;color:var(--c-accent)"
                 )
 
         async def _on_ap_dinner(e) -> None:
@@ -1198,7 +1198,7 @@ def _render_ml_autopilot(settings: UserSettings, save_fn) -> None:
             ap_lunch = ui.switch(value=settings.ml_autopilot_lunch).props("color=warning size=sm")
             with ui.element("div"):
                 ui.label(t("settings.ml.autopilot_lunch")).style(
-                    "font-size:13px;font-weight:600;color:#92400e"
+                    "font-size:13px;font-weight:600;color:var(--c-accent)"
                 )
 
         async def _on_ap_lunch(e) -> None:
@@ -1212,7 +1212,7 @@ def _render_ml_autopilot(settings: UserSettings, save_fn) -> None:
         with ui.row().style("gap:.75rem;margin-top:.375rem"):
             with ui.element("div"):
                 ui.label(t("settings.ml.autopilot_max_dinner")).style(
-                    "font-size:11px;color:#92400e"
+                    "font-size:11px;color:var(--c-accent)"
                 )
                 max_d = (
                     ui.number(value=settings.ml_autopilot_max_dinner, min=1, max=7)
@@ -1227,7 +1227,9 @@ def _render_ml_autopilot(settings: UserSettings, save_fn) -> None:
                 max_d.on("change", lambda e: asyncio.ensure_future(_save_max_d()))
 
             with ui.element("div"):
-                ui.label(t("settings.ml.autopilot_max_lunch")).style("font-size:11px;color:#92400e")
+                ui.label(t("settings.ml.autopilot_max_lunch")).style(
+                    "font-size:11px;color:var(--c-accent)"
+                )
                 max_l = (
                     ui.number(value=settings.ml_autopilot_max_lunch, min=1, max=5)
                     .props("outlined dense")
@@ -1410,10 +1412,10 @@ def _render_weather(settings: UserSettings, save_fn) -> None:
     _infobox(
         "Stel de gewichten in bij Weegfactoren → 'Weer: oven/airfryer vermijden' "
         "en 'Weer: voorkeur koud' om het effect op suggesties te bepalen.",
-        icon="tune",
-        color="#f5f3ff",
-        border="#ddd6fe",
-        text_color="#6d28d9",
+        icon="sym_r_tune",
+        color="#eee8f5",
+        border="#d5cef0",
+        text_color="var(--c-accent)",
     )
 
 
@@ -1493,7 +1495,7 @@ def _render_ntfy(settings: UserSettings, save_fn) -> None:
     ui.element("div").style("height:.5rem")
     ui.button(
         t("settings.ntfy.test"),
-        icon="send",
+        icon="sym_r_send",
         on_click=lambda: asyncio.ensure_future(_test_ntfy(settings)),
     ).props("flat rounded no-caps color=primary size=sm").style("font-size:12px")
 
@@ -1700,7 +1702,7 @@ def _render_sync_status(
                     ).tooltip(f"Volgende automatische run: {next_dt:%a %d %b %H:%M}")
 
             run_btn = (
-                ui.button(icon="refresh")
+                ui.button(icon="sym_r_refresh")
                 .props("flat round dense size=sm color=grey-6")
                 .tooltip("Nu uitvoeren")
             )

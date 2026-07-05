@@ -535,7 +535,7 @@ def _build_ntfy_message(relevant_with_scores: list, base_url: str = "") -> str:
             body += f"\n… en {count - _NTFY_MAX_PROMOS} meer"
 
     if base_url:
-        body += f"\n\n→ {base_url}/cockpit"
+        body += f"\n\n→ {base_url}/weekmenu"
     return body
 
 

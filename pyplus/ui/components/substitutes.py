@@ -59,7 +59,7 @@ def show_substitute_dialog(
                 ui.label(t("substitute.dialog_title")).style(
                     "font-size:16px;font-weight:700;color:var(--c-text)"
                 )
-                ui.button(icon="close", on_click=dlg.close).props(
+                ui.button(icon="sym_r_close", on_click=dlg.close).props(
                     "flat round dense size=sm color=grey"
                 )
 

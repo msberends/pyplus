@@ -40,7 +40,7 @@ async def create_staples_page() -> None:
                     with ui.element("div").classes("sp-lane-header"):
                         ui.label(t("lane.staples.title")).classes("sp-lane-title")
                     with ui.element("div").classes("sp-lane-body sp-lane-error"):
-                        ui.icon("error_outline", size="24px").style(
+                        ui.icon("sym_r_error", size="24px").style(
                             "color:var(--c-danger);opacity:.6"
                         )
                         ui.label("Er is iets misgegaan. Vernieuw de pagina.").style(

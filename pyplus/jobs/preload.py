@@ -203,12 +203,11 @@ def start_scheduler() -> None:
         misfire_grace_time=3600,
     )
 
-    # Weekly full-catalogue sync every Saturday at 02:15 — fresh for weekend
-    # shopping (heavy ~5–7 min download; the nightly full_preload skips it while
-    # the cache is < 7 days old).
+    # Catalogue sync Fri–Mon at 02:15 — covers new promo products (live Thursday
+    # night) through the main shopping window. Heavy (~5–7 min download).
     _scheduler.add_job(
         _run_catalogue_all_users,
-        CronTrigger(day_of_week="sat", hour=2, minute=15),
+        CronTrigger(day_of_week="fri,sat,sun,mon", hour=2, minute=15),
         id="catalogue_weekly",
         replace_existing=True,
         misfire_grace_time=7200,
@@ -226,7 +225,7 @@ def start_scheduler() -> None:
     _scheduler.start()
     log.info(
         "APScheduler started — full_preload + weather at 02:30, "
-        "catalogue Saturdays at 02:15, weekly_ntfy Thursdays at 07:00 Amsterdam"
+        "catalogue Fri–Mon at 02:15, weekly_ntfy Thursdays at 07:00 Amsterdam"
     )
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
+import zoneinfo
 
 from icalendar import Calendar, Event
 
@@ -79,13 +80,23 @@ async def _build_events(user_id: int, week_start: datetime.date) -> list[Event]:
         if event_date is None:
             continue
 
+        is_extra = row.slot.startswith("lunch")
+        ams = zoneinfo.ZoneInfo("Europe/Amsterdam")
+
         event = Event()
         event.add("uid", str(uuid.uuid4()) + "@pyplus")
-        event.add("dtstart", event_date)
-        event.add("dtend", event_date + datetime.timedelta(days=1))
+        if is_extra:
+            event.add("dtstart", event_date)
+            event.add("dtend", event_date + datetime.timedelta(days=1))
+        else:
+            dtstart = datetime.datetime(
+                event_date.year, event_date.month, event_date.day, 17, 30, tzinfo=ams
+            )
+            event.add("dtstart", dtstart)
+            event.add("dtend", dtstart + datetime.timedelta(hours=1))
         event.add(
             "summary",
-            f"Extra: {dish.name}" if row.slot.startswith("lunch") else dish.name,
+            f"Extra: {dish.name}" if is_extra else dish.name,
         )
         event.add("status", "CONFIRMED")
         event.add("transp", "TRANSPARENT")

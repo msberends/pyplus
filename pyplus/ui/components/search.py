@@ -37,7 +37,6 @@ def create_search_lane(session) -> None:
         # ── Header ─────────────────────────────────────────────────────
         with ui.element("div").classes("sp-lane-header"):
             ui.label(t("lane.search.title")).classes("sp-lane-title")
-            ui.label(t("lane.search.placeholder").replace("…", "")).classes("sp-lane-subtitle")
 
         # ── Body ────────────────────────────────────────────────────────
         with (

@@ -214,7 +214,7 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
                             )
                         )
                     ):
-                        ui.icon("savings", size="12px").style("color:var(--c-brand-dark)")
+                        ui.icon("sym_r_savings", size="12px").style("color:var(--c-brand-dark)")
                         amt = f"{saving.saving:.2f}".replace(".", ",")
                         ui.label(f"{t('cart.save_amount', amount=amt)} →").style(
                             "font-size:10px;font-weight:600;color:var(--c-brand-dark);"
@@ -523,35 +523,38 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
             # Total row + collapse toggle (always visible)
             with ui.element("div").classes("sp-cart-total-row"):
                 ui.label(t("cart.total")).style(
-                    "font-size:13px;font-weight:600;color:var(--c-text-3)"
+                    "font-size:var(--t-md);font-weight:700;color:var(--c-text)"
                 )
-                total_label = ui.label("€ 0,00").classes("sp-cart-total")
-                footer_toggle = (
-                    ui.button(icon="expand_more", on_click=lambda: _toggle_footer_details())
-                    .props("flat round dense size=sm color=grey-7")
-                    .classes("sp-cart-footer-toggle")
-                )
+                with ui.element("div").style("display:flex;align-items:center;gap:.25rem"):
+                    total_label = ui.label("€ 0,00").classes("sp-cart-total")
+                    footer_toggle = (
+                        ui.button(
+                            icon="sym_r_expand_more", on_click=lambda: _toggle_footer_details()
+                        )
+                        .props("flat round dense size=sm color=grey-7")
+                        .classes("sp-cart-footer-toggle")
+                    )
 
             # Collapsible details (korting, statiegeld, free delivery, optimise)
             footer_details = ui.element("div").classes("sp-cart-footer-details")
             with footer_details:
                 # Promotional discount banner
                 with ui.element("div").classes("sp-cart-savings-banner") as savings_row:
-                    ui.icon("local_offer", size="15px")
+                    ui.icon("sym_r_sell", size="15px")
                     savings_label = ui.label("").classes("sp-cart-savings")
                     ui.label(t("cart.savings_from")).classes("sp-cart-savings-from")
                 savings_row.set_visibility(False)
 
                 # Statiegeld line
                 with ui.element("div").classes("sp-cart-deposit-line") as deposit_row:
-                    ui.icon("recycling", size="15px")
+                    ui.icon("sym_r_recycling", size="15px")
                     deposit_label = ui.label("").classes("sp-cart-deposit-amount")
                     ui.label(t("cart.deposit_note")).classes("sp-cart-deposit-note")
                 deposit_row.set_visibility(False)
 
                 # Free delivery status
                 with ui.element("div").classes("sp-cart-fd-line") as fd_row:
-                    ui.icon("local_shipping", size="15px")
+                    ui.icon("sym_r_local_shipping", size="15px")
                     ui.label(t("deals.free_delivery")).style("font-weight:700")
                     fd_suffix = ui.label("")
                 fd_row.set_visibility(False)
@@ -560,7 +563,7 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
                 optimise_btn = (
                     ui.button(
                         t("cart.optimise"),
-                        icon="savings",
+                        icon="sym_r_savings",
                         on_click=lambda: _show_optimise_dialog(
                             session, cart_service, savings_by_sku, image_by_sku
                         ),
@@ -584,10 +587,10 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
             ):
                 ui.button(
                     t("cart.clear"),
-                    icon="delete_outline",
+                    icon="sym_r_delete",
                     on_click=lambda: _confirm_clear_cart(cart_service),
                 ).props("flat rounded no-caps color=negative").style(
-                    "font-size:13px;font-weight:600;height:40px;flex-shrink:0"
+                    "font-size:13px;font-weight:600;height:44px;flex-shrink:0"
                 )
                 ui.button(
                     t("cart.checkout"),
@@ -595,7 +598,7 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
                         "https://www.plus.nl/winkelwagen", new_tab=True
                     ),
                 ).props("unelevated rounded color=primary no-caps").style(
-                    "flex:1;font-size:13px;font-weight:600;height:40px"
+                    "flex:1;font-size:13px;font-weight:600;height:44px"
                 )
 
             # ── Export row ─────────────────────────────────────────────
@@ -603,11 +606,11 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
                 "display:flex;justify-content:center;gap:.25rem;margin-top:.375rem"
             ):
                 ui.button(
-                    icon="list_alt",
+                    icon="sym_r_list_alt",
                     on_click=lambda: _download_shopping_list(session),
                 ).props("flat round dense size=sm color=grey-6").tooltip(t("exports.text"))
                 ui.button(
-                    icon="content_copy",
+                    icon="sym_r_content_copy",
                     on_click=lambda: _copy_shopping_list(session),
                 ).props("flat round dense size=sm color=grey-6").tooltip(t("exports.copy"))
 
@@ -744,7 +747,7 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
                 "padding:1.25rem 1rem;display:flex;flex-direction:column;gap:.5rem"
             ):
                 with ui.element("div").style("display:flex;align-items:center;gap:.5rem"):
-                    ui.icon("error_outline", size="22px").style("color:var(--c-danger)")
+                    ui.icon("sym_r_error", size="22px").style("color:var(--c-danger)")
                     ui.label(t("error.product_not_in_stock_title")).style(
                         "font-size:16px;font-weight:700;color:var(--c-text)"
                     )
@@ -920,7 +923,7 @@ def _show_swap_dialog(session, cart_service, s, cur_image: str) -> None:
                 ui.label(t("cart.swap_title")).style(
                     "font-size:16px;font-weight:700;color:var(--c-text)"
                 )
-                ui.button(icon="close", on_click=dlg.close).props(
+                ui.button(icon="sym_r_close", on_click=dlg.close).props(
                     "flat round dense size=sm color=grey"
                 )
 
@@ -937,7 +940,7 @@ def _show_swap_dialog(session, cart_service, s, cur_image: str) -> None:
                     s.cur_cost,
                     highlight=False,
                 )
-                ui.icon("south", size="18px").style("color:var(--c-text-4);align-self:center")
+                ui.icon("sym_r_south", size="18px").style("color:var(--c-text-4);align-self:center")
                 _swap_product_row(
                     t("cart.swap_suggested"),
                     s.new_image,
@@ -952,7 +955,7 @@ def _show_swap_dialog(session, cart_service, s, cur_image: str) -> None:
                 with ui.element("div").style(
                     "display:flex;align-items:center;gap:.25rem;align-self:center;margin-top:.125rem"
                 ):
-                    ui.icon("savings", size="14px").style("color:var(--c-brand-dark)")
+                    ui.icon("sym_r_savings", size="14px").style("color:var(--c-brand-dark)")
                     ui.label(t("cart.save_amount", amount=amt).capitalize()).style(
                         "font-size:13px;font-weight:700;color:var(--c-brand-dark)"
                     )
@@ -993,7 +996,7 @@ def _show_optimise_dialog(
                 ui.label(t("cart.optimise_title")).style(
                     "font-size:16px;font-weight:700;color:var(--c-text)"
                 )
-                ui.button(icon="close", on_click=dlg.close).props(
+                ui.button(icon="sym_r_close", on_click=dlg.close).props(
                     "flat round dense size=sm color=grey"
                 )
 
@@ -1019,7 +1022,7 @@ def _show_optimise_dialog(
                             s.cur_cost,
                             highlight=False,
                         )
-                        ui.icon("south", size="16px").style(
+                        ui.icon("sym_r_south", size="16px").style(
                             "color:var(--c-text-4);align-self:center"
                         )
                         _swap_product_row(
@@ -1039,7 +1042,9 @@ def _show_optimise_dialog(
                             with ui.element("div").style(
                                 "display:flex;align-items:center;gap:.25rem;flex:1"
                             ):
-                                ui.icon("savings", size="14px").style("color:var(--c-brand-dark)")
+                                ui.icon("sym_r_savings", size="14px").style(
+                                    "color:var(--c-brand-dark)"
+                                )
                                 ui.label(t("cart.save_amount", amount=amt)).style(
                                     "font-size:12px;font-weight:700;color:var(--c-brand-dark)"
                                 )
@@ -1068,7 +1073,7 @@ def _show_optimise_dialog(
 
                     ui.button(
                         t("cart.apply_all"),
-                        icon="done_all",
+                        icon="sym_r_done_all",
                         on_click=lambda: _all(),
                     ).props("unelevated rounded no-caps color=primary size=sm")
 
@@ -1083,7 +1088,7 @@ def create_mobile_cart_bar(session) -> None:
             "display:flex;align-items:center;justify-content:center;"
             "width:28px;height:28px;background:var(--c-brand);border-radius:var(--r-sm);flex-shrink:0"
         ) as cart_icon_wrap:
-            ui.icon("shopping_cart", size="16px").style("color:white")
+            ui.icon("sym_r_shopping_cart", size="16px").style("color:white")
 
         bar_count = ui.label("0 stuks").style("font-size:13px;font-weight:700;color:var(--c-text)")
         ui.element("div").style("width:1px;height:16px;background:var(--c-border);margin:0 .5rem")
@@ -1119,7 +1124,7 @@ def create_mobile_cart_bar(session) -> None:
                         "width:36px;height:4px;background:var(--c-border-strong);"
                         "border-radius:var(--r-full)"
                     )
-                    ui.button(icon="close", on_click=sheet.close).props(
+                    ui.button(icon="sym_r_close", on_click=sheet.close).props(
                         "flat round dense size=sm color=grey"
                     ).style("position:absolute;right:.5rem;top:.25rem")
                 with ui.element("div").style("flex:1;min-height:0;overflow:hidden;display:flex"):

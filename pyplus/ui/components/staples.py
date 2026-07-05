@@ -68,7 +68,7 @@ async def create_staples_lane(session) -> None:
                 ui.label(t("lane.staples.title")).classes("sp-lane-title")
                 with ui.element("div").style("display:flex;align-items:center;gap:.25rem"):
                     add_btn = (
-                        ui.button(icon="add")
+                        ui.button(icon="sym_r_add")
                         .props("flat round dense size=sm color=primary")
                         .tooltip("Vaste boodschap toevoegen")
                     )
@@ -116,17 +116,17 @@ async def create_staples_lane(session) -> None:
                 if products:
                     ui.button(
                         "Alles toevoegen",
-                        icon="add_shopping_cart",
+                        icon="sym_r_add_shopping_cart",
                         on_click=lambda: asyncio.ensure_future(
                             _add_all(products, sku_cache, session, cart_service)
                         ),
                     ).props("flat dense no-caps color=primary size=sm").style(
-                        "font-size:12px;font-weight:600"
+                        "font-size:11px;font-weight:600"
                     )
 
             if load_error:
                 with ui.element("div").classes("sp-lane-error"):
-                    ui.icon("error_outline", size="24px").style("color:var(--c-danger);opacity:.6")
+                    ui.icon("sym_r_error", size="24px").style("color:var(--c-danger);opacity:.6")
                     ui.label(load_error).style("font-size:13px;color:var(--c-text-3)")
                 return
 
@@ -376,7 +376,12 @@ def _render_row(
 
     # Availability: catalogue is authoritative. Not in catalogue (once synced) =
     # the store no longer carries it → "vervallen". In catalogue = use its flag.
-    discontinued = catalogue_known and catalogue_row is None
+    discontinued = (
+        catalogue_known
+        and catalogue_row is None
+        and cached is not None
+        and cached.last_seen_available is False
+    )
     if catalogue_row is not None:
         available = catalogue_row.is_available
     elif cached and cached.last_seen_available is not None:
@@ -483,7 +488,7 @@ def _render_row(
                     await repo.remove_fixed_product(db, session.user_id, s)
                 body_refresh.refresh()
 
-            ui.button(icon="close", on_click=lambda: asyncio.ensure_future(_delete())).props(
+            ui.button(icon="sym_r_close", on_click=lambda: asyncio.ensure_future(_delete())).props(
                 "flat round dense size=xs color=grey-5"
             ).tooltip("Verwijderen uit vaste boodschappen")
 
@@ -520,7 +525,12 @@ def _render_card(
         or (purchased.image_url if purchased else "")
     )
     slug = (catalogue_row.slug if catalogue_row else None) or (cached.slug if cached else "")
-    discontinued = catalogue_known and catalogue_row is None
+    discontinued = (
+        catalogue_known
+        and catalogue_row is None
+        and cached is not None
+        and cached.last_seen_available is False
+    )
     if catalogue_row is not None:
         available = catalogue_row.is_available
     elif cached and cached.last_seen_available is not None:
@@ -544,7 +554,7 @@ def _render_card(
                     await repo.remove_fixed_product(db, session.user_id, s)
                 body_refresh.refresh()
 
-            ui.button(icon="close", on_click=lambda: asyncio.ensure_future(_delete())).props(
+            ui.button(icon="sym_r_close", on_click=lambda: asyncio.ensure_future(_delete())).props(
                 "flat round dense size=xs color=grey-5"
             ).classes("sp-staples-card__delete").tooltip("Verwijderen uit vaste boodschappen")
 

@@ -522,13 +522,32 @@ class PlusClient:
             body = await response.json()
             data = body.get("data", {})
             checkout = data.get("Checkout") or data.get("Cart") or next(iter(data.values()), {})
+            log.info(
+                "[cart-parse] data keys=%s, checkout type=%s, checkout keys=%s",
+                list(data.keys())[:10],
+                type(checkout).__name__,
+                list(checkout.keys())[:15] if isinstance(checkout, dict) else "N/A",
+            )
             if isinstance(checkout, dict):
-                if "Version" in checkout:
-                    self._session.checkout_version = checkout["Version"]
+                version = checkout.get("Version")
+                if version is None:
+                    for v in data.values():
+                        if isinstance(v, dict) and "Version" in v:
+                            version = v["Version"]
+                            break
+                if version is not None:
+                    self._session.checkout_version = version
+                    log.info("[cart-parse] checkout_version set to %s", version)
+                else:
+                    log.info(
+                        "[cart-parse] no 'Version' found — data keys: %s, checkout keys: %s",
+                        sorted(data.keys()),
+                        sorted(checkout.keys()),
+                    )
                 self._update_line_item_ids(checkout)
                 self._primed_cart = _parse_cart_from_checkout(checkout)
         except Exception:
-            pass
+            log.debug("[cart-parse] exception", exc_info=True)
 
     async def _parse_store_response(self, response) -> None:
         try:
@@ -681,10 +700,25 @@ class PlusClient:
         _log = _logging.getLogger(__name__)
 
         if self._primed_cart is not None:
-            _log.info("get_cart_api — primed cart beschikbaar, geen fetch nodig")
-            cart = self._primed_cart
+            if self._cart_parse_task and not self._cart_parse_task.done():
+                try:
+                    await asyncio.wait_for(self._cart_parse_task, timeout=2.0)
+                except Exception:
+                    pass
+            if self._session.checkout_version:
+                _log.info(
+                    "get_cart_api — primed cart beschikbaar, geen fetch nodig "
+                    "(checkout_version=%s)",
+                    self._session.checkout_version,
+                )
+                cart = self._primed_cart
+                self._primed_cart = None
+                return cart
+            _log.info(
+                "get_cart_api — primed cart heeft checkout_version=0, "
+                "volledige fetch nodig voor version"
+            )
             self._primed_cart = None
-            return cart
 
         _log.info(
             "get_cart_api — geen primed cart; fetch starten (cart_get_api_version=%s)",

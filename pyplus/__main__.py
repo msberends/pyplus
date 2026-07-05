@@ -34,11 +34,6 @@ async def login_page() -> None:
     await create_login_page()
 
 
-@ui.page("/cockpit")
-async def cockpit_page() -> None:
-    ui.navigate.to("/weekmenu")
-
-
 @ui.page("/weekmenu")
 async def weekmenu_page() -> None:
     from pyplus.ui.pages.weekmenu import create_weekmenu_page

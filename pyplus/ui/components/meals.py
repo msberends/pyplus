@@ -27,36 +27,36 @@ log = logging.getLogger(__name__)
 _DINNER_SLOTS = ["ma", "di", "wo", "do", "vr"]
 _WEEKEND_SLOTS = ["za", "zo"]
 _LUNCH_SLOTS = ["lunch1", "lunch2", "lunch3", "lunch4", "lunch5"]
-_EXTRA_SLOTS = _WEEKEND_SLOTS + _LUNCH_SLOTS  # 7 slots in the extra grid
+_EXTRA_SLOTS = _LUNCH_SLOTS  # 5 extra slots below the dinner grid
 _ALL_SLOTS = _DINNER_SLOTS + _WEEKEND_SLOTS + _LUNCH_SLOTS
 
 _DAY_LABEL = {
-    "ma": "Ma",
-    "di": "Di",
-    "wo": "Wo",
-    "do": "Do",
-    "vr": "Vr",
-    "za": "Za",
-    "zo": "Zo",
-    "lunch1": "1",
-    "lunch2": "2",
-    "lunch3": "3",
-    "lunch4": "4",
-    "lunch5": "5",
+    "ma": "Maandag",
+    "di": "Dinsdag",
+    "wo": "Woensdag",
+    "do": "Donderdag",
+    "vr": "Vrijdag",
+    "za": "Zaterdag",
+    "zo": "Zondag",
+    "lunch1": "Extra (maandag)",
+    "lunch2": "Extra (dinsdag)",
+    "lunch3": "Extra (woensdag)",
+    "lunch4": "Extra (donderdag)",
+    "lunch5": "Extra (vrijdag)",
 }
 _MONTHS_NL = {
-    1: "jan",
-    2: "feb",
-    3: "mrt",
-    4: "apr",
+    1: "januari",
+    2: "februari",
+    3: "maart",
+    4: "april",
     5: "mei",
-    6: "jun",
-    7: "jul",
-    8: "aug",
-    9: "sep",
-    10: "okt",
-    11: "nov",
-    12: "dec",
+    6: "juni",
+    7: "juli",
+    8: "augustus",
+    9: "september",
+    10: "oktober",
+    11: "november",
+    12: "december",
 }
 
 # The dish picker packs "<name><US><properties>" into each option label, where
@@ -80,8 +80,8 @@ _PICKER_OPTION_SLOT = """
 
 
 def _current_monday() -> datetime.date:
-    today = datetime.date.today()
-    return today - datetime.timedelta(days=today.weekday())
+    tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+    return tomorrow - datetime.timedelta(days=tomorrow.weekday())
 
 
 def _format_week(week_start: datetime.date) -> str:
@@ -101,6 +101,28 @@ def _slot_date(slot: str, week_start: datetime.date) -> datetime.date | None:
     if slot in _DATED_SLOTS:
         return week_start + datetime.timedelta(days=_DATED_SLOTS.index(slot))
     return None
+
+
+_RELATIVE_DAYS = {-2: "Eergisteren", -1: "Gisteren", 0: "Vandaag", 1: "Morgen", 2: "Overmorgen"}
+
+
+def _relative_label(d: datetime.date | None) -> str | None:
+    if d is None:
+        return None
+    return _RELATIVE_DAYS.get((d - datetime.date.today()).days)
+
+
+def _week_title(week_start: datetime.date) -> str:
+    today = datetime.date.today()
+    this_monday = today - datetime.timedelta(days=today.weekday())
+    diff = (week_start - this_monday).days // 7
+    if diff == 0:
+        return "Deze week"
+    if diff == -1:
+        return "Vorige week"
+    if diff == 1:
+        return "Komende week"
+    return _format_week(week_start)
 
 
 # ── State ──────────────────────────────────────────────────────────────────────
@@ -147,13 +169,13 @@ async def create_meals_lane(session) -> None:
             with ui.element("div").style(
                 "display:flex;align-items:center;justify-content:space-between;gap:.5rem"
             ):
-                ui.label(t("lane.meals.title")).classes("sp-lane-title")
+                title_lbl = ui.label(_week_title(state.week_start)).classes("sp-lane-title")
                 if not load_error:
                     with ui.element("div").style("display:flex;align-items:center;gap:0px"):
                         ui.button(
-                            icon="chevron_left",
+                            icon="sym_r_chevron_left",
                             on_click=lambda: _navigate(
-                                session.user_id, state, -1, week_lbl, _render, session
+                                session.user_id, state, -1, week_lbl, title_lbl, _render, session
                             ),
                         ).props("flat round dense size=sm color=grey-6")
                         week_lbl = ui.label(_format_week(state.week_start)).style(
@@ -161,14 +183,14 @@ async def create_meals_lane(session) -> None:
                             "white-space:nowrap;min-width:130px;text-align:center"
                         )
                         ui.button(
-                            icon="chevron_right",
+                            icon="sym_r_chevron_right",
                             on_click=lambda: _navigate(
-                                session.user_id, state, +1, week_lbl, _render, session
+                                session.user_id, state, +1, week_lbl, title_lbl, _render, session
                             ),
                         ).props("flat round dense size=sm color=grey-6")
                         plan_btn = (
                             ui.button(
-                                icon="auto_awesome",
+                                icon="sym_r_auto_awesome",
                                 on_click=lambda: _plan_week(session, state, _render),
                             )
                             .props("flat round dense size=sm color=primary")
@@ -177,36 +199,39 @@ async def create_meals_lane(session) -> None:
                         plan_btn.set_visibility(False)
                         asyncio.ensure_future(_check_recommender_available(session, plan_btn))
                         ui.button(
-                            icon="event",
+                            icon="sym_r_event",
                             on_click=lambda: _show_ical_dialog(session, state.week_start),
                         ).props("flat round dense size=sm color=grey-6").tooltip(
                             "Agenda-abonnement"
                         )
                         ui.button(
-                            icon="restaurant",
+                            icon="sym_r_skillet",
                             on_click=lambda: ui.navigate.to("/dishes"),
                         ).props("flat round dense size=sm color=grey-6").tooltip(
                             t("weekmenu.manage_dishes")
                         )
-            _dinner_filled = sum(1 for s in _DINNER_SLOTS if state.slots.get(s) is not None)
-            _extra_filled = sum(1 for s in _EXTRA_SLOTS if state.slots.get(s) is not None)
-            _total = _dinner_filled + _extra_filled
-            if _total == 0:
-                _subtitle = "Nog geen gerechten gepland"
-            else:
-                _subtitle = f"{_dinner_filled} van 5 avonden · {_extra_filled} van 7 extra"
-            ui.label(_subtitle).classes("sp-lane-subtitle")
+
+            def _subtitle_text() -> str:
+                _dinner_all = _DINNER_SLOTS + _WEEKEND_SLOTS
+                _d = sum(1 for s in _dinner_all if state.slots.get(s) is not None)
+                _e = sum(1 for s in _EXTRA_SLOTS if state.slots.get(s) is not None)
+                if _d + _e == 0:
+                    return "Nog geen gerechten gepland"
+                return f"{_d} van 7 avonden · {_e} van 5 extra"
+
+            _subtitle_lbl = ui.label(_subtitle_text()).classes("sp-lane-subtitle")
 
         # ── Body: slot grid ────────────────────────────────────────────────
         with ui.element("div").classes("sp-lane-body sp-meals-body"):
             if load_error:
                 with ui.element("div").classes("sp-lane-error"):
-                    ui.icon("error_outline", size="24px").style("color:var(--c-danger);opacity:.6")
+                    ui.icon("sym_r_error", size="24px").style("color:var(--c-danger);opacity:.6")
                     ui.label(load_error).style("font-size:13px;color:var(--c-text-3)")
                 return
 
             @ui.refreshable
             def _render() -> None:
+                _subtitle_lbl.set_text(_subtitle_text())
                 _render_all_slots(session, state, _render)
 
             _render()
@@ -215,10 +240,10 @@ async def create_meals_lane(session) -> None:
             ui.separator().style("margin:.5rem 0")
             ui.button(
                 t("lane.meals.add_all"),
-                icon="add_shopping_cart",
+                icon="sym_r_add_shopping_cart",
                 on_click=lambda: _add_weekmenu_to_cart(session, state),
             ).props("unelevated rounded color=primary no-caps").style(
-                "width:100%;font-size:13px;font-weight:600;height:40px"
+                "width:100%;font-size:13px;font-weight:600;height:44px"
             )
 
 
@@ -268,6 +293,12 @@ def _render_all_slots(session, state: _MealsState, refresh_fn) -> None:
             date_str = f"{d.day} {_MONTHS_NL[d.month]}" if d else ""
             temp = weather.get(d) if d else None
             _slot_card(slot, _DAY_LABEL[slot], date_str, temp, state, options, session, refresh_fn)
+    with ui.element("div").classes("sp-weekmenu-weekend-grid"):
+        for slot in _WEEKEND_SLOTS:
+            d = _slot_date(slot, state.week_start)
+            date_str = f"{d.day} {_MONTHS_NL[d.month]}" if d else ""
+            temp = weather.get(d) if d else None
+            _slot_card(slot, _DAY_LABEL[slot], date_str, temp, state, options, session, refresh_fn)
 
     ui.element("div").style("height:.5rem")
     _section_header(t("lane.meals.lunch"))
@@ -281,8 +312,8 @@ def _render_all_slots(session, state: _MealsState, refresh_fn) -> None:
 
 def _section_header(label: str) -> None:
     ui.label(label).style(
-        "font-size:10px;font-weight:700;color:var(--c-text-4);"
-        "letter-spacing:.10em;text-transform:uppercase;"
+        "font-size:11px;font-weight:700;color:var(--c-text-3);"
+        "letter-spacing:.08em;text-transform:uppercase;"
         "margin:.25rem 0 .2rem;display:block"
     )
 
@@ -299,13 +330,15 @@ def _slot_card(slot, day_label, date_str, temp, state, options, session, refresh
             with ui.element("div"):
                 ui.label(day_label).classes("sp-weekmenu-card__day")
                 if date_str:
-                    ui.label(date_str).classes("sp-weekmenu-card__date")
+                    rel = _relative_label(_slot_date(slot, state.week_start))
+                    label = f"{date_str} · {rel}" if rel else date_str
+                    ui.label(label).classes("sp-weekmenu-card__date")
             if temp is not None:
                 import math
 
                 hot = session.settings.weather_hot_threshold
                 temp_rounded = math.floor(temp + 0.5)
-                t_color = "#e3131d" if temp_rounded >= hot else "var(--c-text-4)"
+                t_color = "#d97706" if temp_rounded >= hot else "var(--c-text-4)"
                 ui.label(f"{temp_rounded}°").style(
                     f"font-size:11px;font-weight:700;color:{t_color};flex-shrink:0"
                 )
@@ -341,7 +374,7 @@ def _slot_card(slot, day_label, date_str, temp, state, options, session, refresh
             with ui.element("div").classes("sp-weekmenu-card__foot"):
                 with ui.element("div").style("display:flex;gap:1px"):
                     ui.button(
-                        icon="swap_horiz",
+                        icon="sym_r_swap_horiz",
                         on_click=lambda s=slot, d=dish: (
                             _confirm_clear(session, s, d, state, refresh_fn)
                             if session.settings.confirm_clear_slot
@@ -351,7 +384,7 @@ def _slot_card(slot, day_label, date_str, temp, state, options, session, refresh
                         ),
                     ).props("flat round dense size=xs color=grey-6").tooltip(t("lane.meals.swap"))
                     ui.button(
-                        icon="close",
+                        icon="sym_r_close",
                         on_click=lambda s=slot, d=dish: (
                             _confirm_clear(session, s, d, state, refresh_fn)
                             if session.settings.confirm_clear_slot
@@ -362,13 +395,13 @@ def _slot_card(slot, day_label, date_str, temp, state, options, session, refresh
                     ).props("flat round dense size=xs color=grey-6").tooltip(t("lane.meals.clear"))
                     if dish.prep_notes:
                         ui.button(
-                            icon="menu_book",
+                            icon="sym_r_menu_book",
                             on_click=lambda d=dish: _show_prep_notes(d),
                         ).props("flat round dense size=xs color=grey-6").tooltip(
                             t("lane.meals.view_prep")
                         )
                 ui.button(
-                    icon="add_shopping_cart",
+                    icon="sym_r_add_shopping_cart",
                     on_click=lambda d=dish: asyncio.ensure_future(
                         _add_one_slot_to_cart(session, d, state)
                     ),
@@ -395,7 +428,7 @@ def _show_prep_notes(dish: Dish) -> None:
                 ui.label(dish.name).style(
                     "font-size:16px;font-weight:700;color:var(--c-text);letter-spacing:-.2px"
                 )
-                ui.button(icon="close", on_click=dlg.close).props(
+                ui.button(icon="sym_r_close", on_click=dlg.close).props(
                     "flat round dense size=sm color=grey"
                 )
             with ui.element("div").style("padding:1rem"):
@@ -412,6 +445,7 @@ async def _navigate(
     state: _MealsState,
     delta_weeks: int,
     week_lbl,
+    title_lbl,
     refresh_fn,
     session=None,
 ) -> None:
@@ -420,6 +454,7 @@ async def _navigate(
     if session:
         state._weather = await _load_weather(session, state.week_start)
     week_lbl.set_text(_format_week(state.week_start))
+    title_lbl.set_text(_week_title(state.week_start))
     refresh_fn.refresh()
 
 
@@ -661,7 +696,7 @@ def _show_unavail_resolve_dialog(
                 ui.label(t("substitute.unavail_title")).style(
                     "font-size:16px;font-weight:700;color:var(--c-text)"
                 )
-                ui.button(icon="close", on_click=dlg.close).props(
+                ui.button(icon="sym_r_close", on_click=dlg.close).props(
                     "flat round dense size=sm color=grey"
                 )
 
@@ -699,7 +734,7 @@ def _show_unavail_resolve_dialog(
 
                 ui.button(
                     t("substitute.continue"),
-                    icon="arrow_forward",
+                    icon="sym_r_arrow_forward",
                     on_click=_proceed,
                 ).props("unelevated rounded color=primary no-caps").style("font-weight:600")
 
@@ -777,7 +812,7 @@ def _render_unavail_row(
                     replacements.pop(s, None)
                     refresh_fn.refresh()
 
-                ui.button(icon="undo", on_click=_undo).props(
+                ui.button(icon="sym_r_undo", on_click=_undo).props(
                     "flat dense size=sm color=grey"
                 ).tooltip("Ongedaan maken")
 
@@ -787,7 +822,7 @@ def _render_unavail_row(
                     skipped.discard(s)
                     refresh_fn.refresh()
 
-                ui.button(icon="undo", on_click=_unskip).props(
+                ui.button(icon="sym_r_undo", on_click=_unskip).props(
                     "flat dense size=sm color=grey"
                 ).tooltip("Terugzetten")
 
@@ -819,7 +854,7 @@ def _show_resolve_dialog(
                 ui.label("Ingrediënten kiezen").style(
                     "font-size:17px;font-weight:700;color:var(--c-text);letter-spacing:-.2px"
                 )
-                ui.button(icon="close", on_click=dlg.close).props(
+                ui.button(icon="sym_r_close", on_click=dlg.close).props(
                     "flat round dense size=sm color=grey"
                 )
 
@@ -883,7 +918,7 @@ def _show_resolve_dialog(
 
                 ui.button(
                     "Doorgaan",
-                    icon="arrow_forward",
+                    icon="sym_r_arrow_forward",
                     on_click=lambda: _continue(),
                 ).props("unelevated rounded color=primary no-caps").style("flex:2;font-weight:600")
 
@@ -898,7 +933,7 @@ def _render_flex_picker(session, flex_ing, st: dict, flex_choice: dict, refresh_
         with ui.element("div").style(
             "display:flex;align-items:center;gap:.375rem;margin-bottom:.375rem"
         ):
-            ui.icon("tune", size="15px").style("color:var(--c-brand-dark)")
+            ui.icon("sym_r_tune", size="15px").style("color:var(--c-brand-dark)")
             ui.label(flex_ing.display_name).style(
                 "font-size:12px;font-weight:600;color:var(--c-text-2);flex:1;min-width:0"
             )
@@ -1018,7 +1053,7 @@ def _show_agg_dialog(session, agg: AggResult) -> None:
                 ui.label(t("agg.summary_title")).style(
                     "font-size:17px;font-weight:700;color:var(--c-text);letter-spacing:-.2px"
                 )
-                ui.button(icon="close", on_click=dlg.close).props(
+                ui.button(icon="sym_r_close", on_click=dlg.close).props(
                     "flat round dense size=sm color=grey"
                 )
 
@@ -1043,7 +1078,7 @@ def _show_agg_dialog(session, agg: AggResult) -> None:
                             "gap:.375rem;margin-top:.75rem;padding:.5rem .625rem;"
                             "background:var(--c-brand-tint);border-radius:var(--r-md)"
                         ):
-                            ui.icon("savings", size="15px").style("color:var(--c-brand-dark)")
+                            ui.icon("sym_r_savings", size="15px").style("color:var(--c-brand-dark)")
                             total_str = f"{agg.total_savings:.2f}".replace(".", ",")
                             ui.label(f"Totaal korting: € {total_str}").style(
                                 "font-size:13px;font-weight:700;color:var(--c-brand-dark)"
@@ -1058,7 +1093,7 @@ def _show_agg_dialog(session, agg: AggResult) -> None:
                 ).style("flex:1")
                 ui.button(
                     t("agg.confirm"),
-                    icon="add_shopping_cart",
+                    icon="sym_r_add_shopping_cart",
                     on_click=lambda: _confirm_add(session, agg, overrides, dlg),
                 ).props("unelevated rounded color=primary no-caps").style("flex:2;font-weight:600")
 
@@ -1234,7 +1269,9 @@ def render_ical_subscription_body(user_id: int) -> None:
             "display:flex;align-items:flex-start;gap:.5rem;padding:.625rem .75rem;"
             "background:#fffbeb;border-radius:var(--r-md);border:1px solid #fde68a"
         ):
-            ui.icon("warning", size="16px").style("color:#92400e;flex-shrink:0;margin-top:1px")
+            ui.icon("sym_r_warning", size="16px").style(
+                "color:#92400e;flex-shrink:0;margin-top:1px"
+            )
             ui.label(
                 "Geen PYPLUS_SECRET_KEY ingesteld. Stel deze in om abonneer-links te activeren."
             ).style("font-size:13px;color:#92400e;line-height:1.5")
@@ -1266,7 +1303,7 @@ def render_ical_subscription_body(user_id: int) -> None:
         # a client-side js_handler with an execCommand fallback for non-HTTPS. The
         # Python handler only shows the confirmation toast.
         copy_btn = (
-            ui.button(icon="content_copy")
+            ui.button(icon="sym_r_content_copy")
             .props("flat round dense size=sm color=primary")
             .tooltip("URL kopiëren")
         )
@@ -1311,7 +1348,7 @@ async def _show_ical_dialog(session, week_start: datetime.date) -> None:
                 ui.label("Agenda-abonnement").style(
                     "font-size:16px;font-weight:700;color:var(--c-text)"
                 )
-                ui.button(icon="close", on_click=dlg.close).props(
+                ui.button(icon="sym_r_close", on_click=dlg.close).props(
                     "flat round dense size=sm color=grey"
                 )
 
@@ -1325,7 +1362,7 @@ async def _show_ical_dialog(session, week_start: datetime.date) -> None:
                 )
                 ui.button(
                     f"Download .ics (week {week_start.strftime('%-d %b')})",
-                    icon="download",
+                    icon="sym_r_download",
                     on_click=lambda ws=week_start, uid=session.user_id: _one_off_download(uid, ws),
                 ).props("flat rounded no-caps color=primary size=sm").style("font-size:12px")
 

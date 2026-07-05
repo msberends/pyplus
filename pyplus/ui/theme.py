@@ -7,7 +7,7 @@ from nicegui import ui
 _GOOGLE_FONTS = (
     '<link rel="preconnect" href="https://fonts.googleapis.com">'
     '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
-    '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">'
+    '<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">'
 )
 
 # ── Design tokens + component styles ──────────────────────────────────────────
@@ -23,29 +23,29 @@ _CSS = """
   --c-danger-tint:    #fff0f0;
   --c-accent:         #554da7;   /* PLUS purple — highlight */
 
-  /* Neutrals */
-  --c-bg:             #f5f7fa;
+  /* Neutrals — warm stone */
+  --c-bg:             #f5f4f1;
   --c-surface:        #ffffff;
-  --c-surface-2:      #f9fafb;
-  --c-border:         #e5e8ef;
-  --c-border-strong:  #cfd4de;
+  --c-surface-2:      #faf9f7;
+  --c-border:         #e6e4df;
+  --c-border-strong:  #d1cfc9;
 
-  /* Text — text-3/text-4 darkened to meet WCAG AA (4.5:1) on white at small sizes */
-  --c-text:    #0f1923;
-  --c-text-2:  #374151;
-  --c-text-3:  #5b6470;   /* ~6.0:1 */
-  --c-text-4:  #6b7280;   /* ~4.8:1 — lightest text that still passes AA */
+  /* Text — warm neutrals, WCAG AA compliant */
+  --c-text:    #111810;
+  --c-text-2:  #3d3d38;
+  --c-text-3:  #5c5c56;   /* ~6.0:1 */
+  --c-text-4:  #7a7a73;   /* ~4.8:1 — lightest text that still passes AA */
 
-  /* Shadows */
-  --shadow-xs: 0 1px 2px rgba(0,0,0,.05);
-  --shadow-sm: 0 1px 4px rgba(0,0,0,.07), 0 1px 2px rgba(0,0,0,.04);
-  --shadow-md: 0 4px 16px rgba(0,0,0,.08), 0 2px 6px rgba(0,0,0,.04);
-  --shadow-lg: 0 12px 40px rgba(0,0,0,.10), 0 4px 16px rgba(0,0,0,.06);
-  --shadow-xl: 0 24px 64px rgba(0,0,0,.12), 0 8px 24px rgba(0,0,0,.06);
+  /* Shadows — eliminated; depth comes from borders */
+  --shadow-xs: none;
+  --shadow-sm: none;
+  --shadow-md: none;
+  --shadow-lg: none;
+  --shadow-xl: none;
 
   /* Border radius */
-  --r-xs:   3px;
-  --r-sm:   6px;
+  --r-xs:   4px;
+  --r-sm:   8px;
   --r-md:   10px;
   --r-lg:   16px;
   --r-xl:   20px;
@@ -53,7 +53,7 @@ _CSS = """
   --r-full: 9999px;
 
   /* Typography */
-  --font:  'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font:  'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --t-xs:  11px;
   --t-sm:  13px;
   --t-base:14px;
@@ -80,6 +80,7 @@ _CSS = """
 
 /* ─── Base ───────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
+button, a, [role="button"], [onclick], [tabindex] { cursor: pointer; }
 
 body {
   font-family: var(--font);
@@ -95,6 +96,11 @@ body {
 /* Remove Quasar page padding — pages manage their own layout */
 .q-page { padding: 0 !important; }
 .q-page-container { padding-top: 0 !important; }
+
+/* ─── Material Symbols — thin, open, modern ─────────────────────────────── */
+.material-symbols-rounded {
+  font-variation-settings: 'FILL' 0, 'wght' 300, 'GRAD' 0, 'opsz' 24;
+}
 
 /* ─── Scrollbar ──────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -152,8 +158,8 @@ body {
   letter-spacing: 0.02em !important;
   transition: all var(--dur-fast) var(--ease) !important;
 }
-.q-btn--rounded { border-radius: var(--r-md) !important; }
-.q-btn:not([disabled]):hover { filter: brightness(1.05); }
+.q-btn--rounded, .q-btn.q-btn--rounded { border-radius: var(--r-md) !important; }
+.q-btn:not([disabled]):hover { opacity: .92; }
 .q-btn:not([disabled]):active { transform: scale(.98); }
 
 /* ─── Quasar checkbox ────────────────────────────────────────────────────── */
@@ -164,7 +170,6 @@ body {
   border-radius: var(--r-lg) !important;
   font-size: var(--t-sm) !important;
   font-weight: var(--w-medium) !important;
-  box-shadow: var(--shadow-lg) !important;
 }
 
 /* ─── Login page ─────────────────────────────────────────────────────────── */
@@ -174,18 +179,15 @@ body {
   align-items: center;
   justify-content: center;
   padding: 1.5rem;
-  background:
-    radial-gradient(ellipse 60% 40% at 15% 15%, rgba(128,189,29,.08) 0%, transparent 55%),
-    radial-gradient(ellipse 50% 40% at 85% 85%, rgba(34,118,71,.06) 0%, transparent 55%),
-    var(--c-bg);
+  background: var(--c-bg);
 }
 
 .sp-login-card {
   width: 100%;
   max-width: 420px;
   background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: var(--r-2xl);
-  box-shadow: var(--shadow-xl);
   padding: 2.25rem 2.25rem 1.75rem;
   display: flex;
   flex-direction: column;
@@ -201,13 +203,12 @@ body {
 .sp-login-logo-mark {
   width: 38px;
   height: 38px;
-  background: linear-gradient(145deg, #80bd1d 0%, #227647 100%);
-  border-radius: var(--r-md);
+  background: var(--c-brand-dark);
+  border-radius: var(--r-lg);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  box-shadow: 0 2px 10px rgba(34,118,71,.30);
 }
 .sp-login-logo-mark span {
   font-size: 13px;
@@ -252,7 +253,7 @@ body {
 
 .sp-login-btn {
   width: 100%;
-  height: 48px !important;
+  height: 44px !important;
   font-size: var(--t-md) !important;
   margin-top: .6rem;
   border-radius: var(--r-md) !important;
@@ -292,10 +293,9 @@ body {
   border: 1px solid var(--c-border);
   border-radius: var(--r-lg);
   overflow: hidden;
-  transition: box-shadow var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+  transition: border-color var(--dur-fast) var(--ease);
 }
 .sp-product-card:hover {
-  box-shadow: var(--shadow-md);
   border-color: var(--c-border-strong);
 }
 
@@ -303,10 +303,11 @@ body {
 .sp-qty {
   display: inline-flex;
   align-items: center;
-  border: 1.5px solid var(--c-border);
+  border: 1.5px solid var(--c-brand);
   border-radius: var(--r-full);
   overflow: hidden;
   background: var(--c-surface);
+  align-self: flex-end;
 }
 .sp-qty-btn {
   width: 36px; height: 36px;
@@ -338,9 +339,9 @@ body {
 
 /* Category group header — for grouped cart + staples views. */
 .sp-cat-header {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: var(--w-bold);
-  color: var(--c-text-4);
+  color: var(--c-text-3);
   letter-spacing: .08em;
   text-transform: uppercase;
   padding: .5rem 0 .2rem;
@@ -379,6 +380,9 @@ body {
   text-transform: uppercase;
   white-space: nowrap;
 }
+
+/* ─── Quasar separator ───────────────────────────────────────────────────── */
+.q-separator { background: var(--c-border) !important; }
 
 /* ─── Lane error state ───────────────────────────────────────────────────── */
 .sp-lane-error {
@@ -543,25 +547,6 @@ body {
   min-width: 0;
 }
 
-/* ─── Dish card ──────────────────────────────────────────────────────────── */
-.sp-dish-card {
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: var(--r-lg);
-  padding: .875rem 1rem;
-  transition: box-shadow var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
-  cursor: pointer;
-}
-.sp-dish-card:hover {
-  box-shadow: var(--shadow-sm);
-  border-color: var(--c-border-strong);
-}
-.sp-dish-card-name {
-  font-size: var(--t-md) !important;
-  font-weight: var(--w-semibold) !important;
-  color: var(--c-text) !important;
-}
-
 /* ─── Suggestion chip ────────────────────────────────────────────────────── */
 .sp-chip {
   display: inline-flex;
@@ -599,37 +584,50 @@ body {
 
 /* Left nav rail */
 .sp-nav-rail {
-  width: 68px;
+  width: 108px;
   flex-shrink: 0;
   background: var(--c-surface);
   border-right: 1px solid var(--c-border);
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   padding: .75rem 0;
-  gap: .25rem;
+  gap: .375rem;
   z-index: 10;
 }
 .sp-nav-logo {
-  width: 36px; height: 36px;
-  background: linear-gradient(145deg, #80bd1d 0%, #227647 100%);
-  border-radius: var(--r-md);
+  width: 34px; height: 34px;
+  background: var(--c-brand-dark);
+  border-radius: var(--r-lg);
   display: flex; align-items: center; justify-content: center;
   margin-bottom: .75rem;
-  box-shadow: 0 2px 8px rgba(34,118,71,.25);
   flex-shrink: 0;
+  align-self: center;
 }
 .sp-nav-btn {
-  width: 44px; height: 44px;
-  border-radius: var(--r-md);
-  display: flex; align-items: center; justify-content: center;
+  padding: .625rem 0;
+  border-radius: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px;
   color: var(--c-text-3);
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
   text-decoration: none;
 }
-.sp-nav-btn:hover { background: var(--c-brand-tint); color: var(--c-brand-dark); }
-.sp-nav-btn.active { background: var(--c-brand-tint-2); color: var(--c-brand-dark); }
+.sp-nav-btn:hover { background: var(--c-surface-2); color: var(--c-brand-dark); }
+.sp-nav-btn.active {
+  background: var(--c-brand-tint);
+  color: var(--c-brand-dark);
+  box-shadow: inset 3px 0 0 0 var(--c-brand-dark);
+}
+.sp-nav-label {
+  font-size: 10px;
+  font-weight: var(--w-medium);
+  line-height: 1.2;
+  letter-spacing: .01em;
+  white-space: pre-line;
+  text-align: center;
+}
 .sp-nav-spacer { flex: 1; }
 
 /* Main stage — 2 flex columns (left + middle); cart is a sibling outside */
@@ -683,7 +681,7 @@ body {
   overflow-y: auto;
   padding: 1.5rem;
   background: var(--c-bg);
-  width: calc(100vw - 68px);
+  width: calc(100vw - 108px);
   flex: 1 1 0;
   min-width: 0;
 }
@@ -695,6 +693,14 @@ body {
   max-height: none;
   overflow-y: visible;
 }
+
+/* Stretch the lane card to fill the available height on single-lane pages */
+.sp-page-lane .sp-lane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.sp-page-lane .sp-lane .sp-lane-body { flex: 1; }
 
 /* Cart two-column layout: cart (2/3) + search (1/3) */
 .sp-cart-two-col {
@@ -736,7 +742,7 @@ body {
 .sp-cart-item {
   display: flex; align-items: center; gap: .625rem;
   padding: .5rem 0;
-  border-bottom: 1px solid var(--c-border-subtle, #f1f3f7);
+  border-bottom: 1px solid var(--c-border);
 }
 .sp-cart-item:last-child { border-bottom: none; }
 /* On-offer rows: green tint + a green accent rail (matches the korting banner /
@@ -811,18 +817,22 @@ body {
 .sp-lane-placeholder-icon { font-size: 2rem; line-height: 1; opacity: .4; }
 
 /* ─── Dishes ─────────────────────────────────────────────────────────────── */
+.sp-dish-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
 .sp-dish-card {
   background: var(--c-surface);
   border: 1px solid var(--c-border);
   border-radius: var(--r-xl);
-  padding: 1.125rem 1.25rem;
-  transition: box-shadow var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+  padding: .875rem 1rem;
+  transition: border-color var(--dur-fast) var(--ease);
   cursor: pointer;
   display: flex;
   flex-direction: column;
 }
 .sp-dish-card:hover {
-  box-shadow: var(--shadow-md);
   border-color: var(--c-border-strong);
 }
 .sp-dish-card-name {
@@ -830,11 +840,32 @@ body {
   font-weight: var(--w-semibold) !important;
   color: var(--c-text) !important;
   line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.sp-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: .625rem;
+  margin-bottom: 1rem;
+}
+.sp-ing-row {
+  display: flex;
+  flex-direction: column;
+  gap: .375rem;
+  min-width: 0;
+}
+.sp-filters-mobile { display: none !important; }
+.sp-filters-mobile .q-expansion-item { width: 100%; }
 .sp-editor-dialog .q-dialog__inner { padding: 1rem; }
+@media (max-width: 640px) {
+  .sp-filters-desktop { display: none !important; }
+  .sp-filters-mobile { display: flex !important; }
+  .sp-meta-grid { grid-template-columns: 1fr; }
+  .sp-ing-controls { padding-left: 0; }
+}
 @media (max-width: 600px) {
-  /* Full-height editor on phones so the body scrolls and the pinned
-     footer (add-ingredient) stays on screen. */
   .sp-editor-dialog .q-dialog__inner { padding: 0; }
   .sp-editor-dialog .q-card {
     width: 100vw !important;
@@ -879,9 +910,9 @@ body {
   flex-direction: column;
   align-items: center;
   gap: .25rem;
-  transition: box-shadow var(--dur-fast) var(--ease);
+  transition: border-color var(--dur-fast) var(--ease);
 }
-.sp-staples-card:hover { box-shadow: var(--shadow-sm); }
+.sp-staples-card:hover { border-color: var(--c-border-strong); }
 .sp-staples-card--due {
   background: var(--c-brand-tint);
   border-color: var(--c-brand-tint-2);
@@ -1006,11 +1037,17 @@ body {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: .625rem;
+  margin-bottom: .5rem;
+}
+.sp-weekmenu-weekend-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: .625rem;
   margin-bottom: .75rem;
 }
 .sp-weekmenu-extra-grid {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: .5rem;
 }
 .sp-weekmenu-card {
@@ -1021,9 +1058,9 @@ body {
   flex-direction: column;
   overflow: hidden;
   min-height: 148px;
-  transition: box-shadow var(--dur-fast) var(--ease);
+  transition: border-color var(--dur-fast) var(--ease);
 }
-.sp-weekmenu-card:hover { box-shadow: var(--shadow-sm); }
+.sp-weekmenu-card:hover { border-color: var(--c-border-strong); }
 .sp-weekmenu-card--filled { border-color: var(--c-brand-tint-2); }
 .sp-weekmenu-card__head {
   background: var(--c-surface-2);
@@ -1099,9 +1136,9 @@ body {
   align-items: center;
   gap: .25rem;
   text-align: center;
-  transition: box-shadow var(--dur-fast) var(--ease);
+  transition: border-color var(--dur-fast) var(--ease);
 }
-.sp-promo-product-card:hover { box-shadow: var(--shadow-sm); }
+.sp-promo-product-card:hover { border-color: var(--c-border-strong); }
 .sp-promo-product-card__img {
   width: 80px; height: 80px;
   object-fit: contain;
@@ -1230,6 +1267,7 @@ body {
   border: 1.5px solid var(--c-brand-tint-2);
   display: flex; align-items: center; justify-content: center;
   padding: 0; cursor: pointer;
+  color: var(--c-brand-dark);
   transition: background var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
 }
 .sp-search-add-btn:hover { background: var(--c-brand-tint-2); transform: scale(1.08); }
@@ -1257,8 +1295,6 @@ body {
   gap: .625rem;
   z-index: 200;
   cursor: pointer;
-  box-shadow: 0 -4px 16px rgba(0,0,0,.08);
-  transition: box-shadow var(--dur-base) var(--ease);
 }
 .sp-mobile-cart-bar:active { background: var(--c-surface-2); }
 
@@ -1287,10 +1323,14 @@ body {
     justify-content: space-around; border-right: none;
     border-top: 1px solid var(--c-border); order: 3; padding: 0 .5rem;
     position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
-    background: var(--c-surface);
+    background: var(--c-surface); gap: 0;
   }
   .sp-nav-logo { display: none; }
   .sp-nav-spacer { display: none; }
+  .sp-nav-logout { display: none; }
+  .sp-nav-label { display: none; }
+  .sp-nav-btn { width: 44px; height: 44px; padding: 0; flex-direction: row; }
+  .sp-nav-btn.active { box-shadow: inset 0 2px 0 0 var(--c-brand-dark); }
 
   /* Page-based views (weekmenu / promos / staples / cart / dishes / settings):
      sp-page-content is the only child, fills 100vh, scrolls natively. */
@@ -1317,14 +1357,14 @@ body {
     z-index: 20;
     background: var(--c-surface);
     border-top: 1px solid var(--c-border);
-    box-shadow: 0 -2px 10px rgba(0,0,0,.08);
     border-radius: 0 0 var(--r-xl) var(--r-xl);
   }
   .sp-mobile-cart-bar { display: flex; bottom: 58px; }
 
-  /* Weekmenu grids: 2 dinner cols, auto-fill extra */
+  /* Weekmenu grids: 2 cols on mobile */
   .sp-weekmenu-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .sp-weekmenu-extra-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+  .sp-weekmenu-weekend-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sp-weekmenu-extra-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
   /* Staples/promo cards: narrower minimum so more fit */
   .sp-staples-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }

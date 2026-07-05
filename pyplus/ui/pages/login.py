@@ -40,7 +40,7 @@ async def create_login_page() -> None:
         from pyplus.session import manager
 
         if manager.get(user_id):
-            ui.navigate.to("/cockpit")
+            ui.navigate.to("/weekmenu")
             return
 
         # Try remember-me auto-login
@@ -74,7 +74,7 @@ def _render_auto_login(email: str, password: str, name: str, user_id: int) -> No
                     .classes("sp-login-logo-mark")
                     .style("display:flex;align-items:center;justify-content:center")
                 ):
-                    ui.icon("local_grocery_store", size="22px").style("color:white")
+                    ui.icon("sym_r_storefront", size="22px").style("color:white")
                 ui.label("PyPLUS").classes("sp-login-logo-name")
 
             ui.label(f"Welkom terug, {name.split()[0] if name else 'je'}!").classes(
@@ -98,7 +98,7 @@ def _render_auto_login(email: str, password: str, name: str, user_id: int) -> No
                 app.storage.user.clear(),
                 ui.navigate.to("/login"),
             ),
-            on_success=lambda: ui.navigate.to("/cockpit"),
+            on_success=lambda: ui.navigate.to("/weekmenu"),
         )
 
     ui.timer(0.1, _run, once=True)
@@ -117,7 +117,7 @@ def _render_login_form() -> None:
                     .classes("sp-login-logo-mark")
                     .style("display:flex;align-items:center;justify-content:center")
                 ):
-                    ui.icon("local_grocery_store", size="22px").style("color:white")
+                    ui.icon("sym_r_storefront", size="22px").style("color:white")
                 ui.label("PyPLUS").classes("sp-login-logo-name")
 
             ui.label(t("login.heading")).classes("sp-login-heading")
@@ -180,7 +180,7 @@ def _render_login_form() -> None:
                     remember=remember,
                     on_progress=lambda msg: progress_label.set_text(msg),
                     on_error=_on_err,
-                    on_success=lambda: ui.navigate.to("/cockpit"),
+                    on_success=lambda: ui.navigate.to("/weekmenu"),
                 )
 
             submit_btn = (

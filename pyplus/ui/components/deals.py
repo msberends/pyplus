@@ -49,6 +49,11 @@ def create_deals_lane(session) -> None:
     cart_service = getattr(session, "cart_service", None)
     state = _DealsState()
 
+    _steppers: dict[str, object] = {}
+    _qty_labels: dict[str, ui.label] = {}
+    _last_promo_qtys: list[dict] = [{}]
+    _last_promo_syncing: list[frozenset] = [frozenset()]
+
     with ui.element("div").classes("sp-lane"):
         # ── Header ────────────────────────────────────────────────────────
         with ui.element("div").classes("sp-lane-header"):
@@ -63,15 +68,17 @@ def create_deals_lane(session) -> None:
 
             @ui.refreshable
             def _render() -> None:
+                _steppers.clear()
+                _qty_labels.clear()
                 if state.error:
                     with ui.element("div").classes("sp-lane-error"):
-                        ui.icon("error_outline", size="24px").style(
+                        ui.icon("sym_r_error", size="24px").style(
                             "color:var(--c-danger);opacity:.6"
                         )
                         ui.label(state.error).style("font-size:13px;color:var(--c-text-3)")
                         ui.button(
                             "Opnieuw proberen",
-                            icon="refresh",
+                            icon="sym_r_refresh",
                             on_click=lambda: asyncio.ensure_future(_reset_and_retry()),
                         ).props("flat rounded no-caps color=primary size=sm").style(
                             "font-size:12px;margin-top:.125rem"
@@ -98,14 +105,16 @@ def create_deals_lane(session) -> None:
                     def _card_for(promo) -> None:
                         @ui.refreshable
                         def _card(p=promo) -> None:
-                            _render_promo(p, state, session, cart_service, _card)
+                            _render_promo(
+                                p, state, session, cart_service, _card, _steppers, _qty_labels
+                            )
 
                         state.card_refreshers[promo.slug] = _card
                         _card()
 
                     if fd_promos:
                         with ui.element("div").classes("sp-fd-header"):
-                            ui.icon("local_shipping", size="18px")
+                            ui.icon("sym_r_local_shipping", size="18px")
                             ui.label(t("deals.free_delivery"))
                         for promo in fd_promos:
                             _card_for(promo)
@@ -131,35 +140,34 @@ def create_deals_lane(session) -> None:
 
             _render()
 
-            # Re-render only affected promo cards when cart changes.
-            # Tracking the previous in-cart / syncing sets per single-product promo
-            # prevents needless full-lane rebuilds (which would re-fetch all images).
-            _last_promo_in_cart: list[frozenset] = [frozenset()]
-            _last_promo_syncing: list[frozenset] = [frozenset()]
-
             def _on_cart_for_deals() -> None:
                 if not state.promotions:
                     return
                 cart_qty_map = {it.sku: it.quantity for it in session.cart.items}
                 syncing = session.syncing_skus
-                single_skus = {p.sku for p in state.promotions if p.is_single_product and p.sku}
-                in_cart_now = frozenset(s for s in single_skus if cart_qty_map.get(s, 0) > 0)
-                syncing_now = frozenset(single_skus & syncing)
-
-                changed_in_cart = in_cart_now.symmetric_difference(_last_promo_in_cart[0])
-                changed_syncing = syncing_now.symmetric_difference(_last_promo_syncing[0])
-                changed_skus = changed_in_cart | changed_syncing
-
-                if changed_skus:
-                    _last_promo_in_cart[0] = in_cart_now
-                    _last_promo_syncing[0] = syncing_now
-                    for promo in state.promotions:
-                        if promo.is_single_product and promo.sku in changed_skus:
-                            card = state.card_refreshers.get(promo.slug)
-                            if card is not None:
-                                card.refresh()
-                # qty-only changes within already-in-cart promos: no refresh needed;
-                # the stepper qty label is not shown prominently in deal cards.
+                tracked = set(_steppers.keys())
+                for sku in tracked:
+                    old_qty = _last_promo_qtys[0].get(sku, 0)
+                    new_qty = cart_qty_map.get(sku, 0)
+                    old_sync = sku in _last_promo_syncing[0]
+                    new_sync = sku in syncing
+                    if (old_qty > 0) != (new_qty > 0) or old_sync != new_sync:
+                        refill = _steppers.get(sku)
+                        if refill is not None:
+                            try:
+                                lbl = refill()
+                                if lbl is not None:
+                                    _qty_labels[sku] = lbl
+                                else:
+                                    _qty_labels.pop(sku, None)
+                            except Exception:
+                                pass
+                    elif old_qty != new_qty:
+                        lbl = _qty_labels.get(sku)
+                        if lbl is not None:
+                            lbl.set_text(str(new_qty))
+                _last_promo_qtys[0] = {s: cart_qty_map.get(s, 0) for s in tracked}
+                _last_promo_syncing[0] = frozenset(tracked & syncing)
 
             session.add_cart_listener(_on_cart_for_deals)
 
@@ -231,16 +239,17 @@ def _render_skeleton() -> None:
                 )
 
 
-def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, refresh_fn) -> None:
+def _render_promo(
+    promo: Promotion,
+    state: _DealsState,
+    session,
+    cart_service,
+    refresh_fn,
+    steppers: dict | None = None,
+    qty_labels: dict | None = None,
+) -> None:
     """Render one promotion entry."""
     is_expanded = promo.slug in state.expanded
-    cart_qty = 0
-    if promo.is_single_product and promo.sku:
-        cart_qty = next((it.quantity for it in session.cart.items if it.sku == promo.sku), 0)
-        is_syncing = promo.sku in session.syncing_skus
-    else:
-        is_syncing = False
-
     is_fd = promo.is_free_delivery
     card_cls = "sp-promo-card sp-promo-card-fd" if is_fd else "sp-promo-card"
     ribbon_cls = "sp-promo-ribbon-fd" if is_fd else "sp-promo-ribbon"
@@ -261,7 +270,10 @@ def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, r
             with ui.element("div").style("flex:1;min-width:0;overflow:hidden"):
                 # Deal label ribbon
                 if promo.label:
-                    ui.label(promo.label).classes(ribbon_cls).style(
+                    _label = promo.label
+                    if is_fd and _label.upper().startswith("GRATIS BEZORGING "):
+                        _label = _label[len("GRATIS BEZORGING ") :]
+                    ui.label(_label).classes(ribbon_cls).style(
                         "display:inline-block;margin-bottom:.2rem"
                     )
 
@@ -298,7 +310,23 @@ def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, r
             # Right action
             with ui.element("div").style("flex-shrink:0;display:flex;align-items:center"):
                 if promo.is_single_product and promo.sku:
-                    _render_promo_stepper(promo, cart_qty, is_syncing, cart_service)
+                    stepper_slot = ui.element("div").style("display:contents")
+
+                    def _fill_stepper(slot=stepper_slot, p=promo):
+                        slot.clear()
+                        cq = next((it.quantity for it in session.cart.items if it.sku == p.sku), 0)
+                        sync = p.sku in session.syncing_skus
+                        with slot:
+                            return _render_promo_stepper(p, cq, sync, cart_service)
+
+                    lbl = _fill_stepper()
+                    if steppers is not None:
+                        steppers[promo.sku] = _fill_stepper
+                    if qty_labels is not None:
+                        if lbl is not None:
+                            qty_labels[promo.sku] = lbl
+                        else:
+                            qty_labels.pop(promo.sku, None)
                 else:
                     # Group deal: expand/collapse button. Show the child count up front
                     # ("Bekijken (N)") from the warmed cache; fall back to the fetched
@@ -313,15 +341,16 @@ def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, r
                     with ui.element("div").style(
                         "display:flex;flex-direction:column;align-items:center;gap:1px"
                     ):
+                        btn_color = "accent" if is_fd else "grey"
                         ui.button(
                             icon=icon,
                             on_click=lambda _, s=promo.slug: asyncio.ensure_future(
                                 _toggle_expand(s, state, session, refresh_fn)
                             ),
-                        ).props("flat round dense size=sm color=grey")
+                        ).props(f"flat round dense size=sm color={btn_color}")
                         if not is_expanded:
                             ui.label(label).style(
-                                "font-size:10px;color:var(--c-text-3);line-height:1"
+                                f"font-size:11px;color:{accent};font-weight:500;line-height:1"
                             )
 
         # Expanded products for group deals
@@ -332,7 +361,12 @@ def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, r
                     for prod in products:
                         if prod.sku:
                             _render_promo_product(
-                                prod, session, cart_service, show_ribbon=not is_fd
+                                prod,
+                                session,
+                                cart_service,
+                                show_ribbon=not is_fd,
+                                steppers=steppers,
+                                qty_labels=qty_labels,
                             )
             else:
                 ui.label("Geen producten gevonden").style(
@@ -346,7 +380,9 @@ def _render_promo(promo: Promotion, state: _DealsState, session, cart_service, r
                 ui.label("Producten laden…").style("font-size:12px;color:var(--c-text-3)")
 
 
-def _render_promo_stepper(promo: Promotion, cart_qty: int, syncing: bool, cart_service) -> None:
+def _render_promo_stepper(
+    promo: Promotion, cart_qty: int, syncing: bool, cart_service
+) -> "ui.label | None":
     from pyplus.ui.components.controls import add_button, stepper_button
 
     if syncing:
@@ -354,7 +390,7 @@ def _render_promo_stepper(promo: Promotion, cart_qty: int, syncing: bool, cart_s
             "width:36px;height:36px;display:flex;align-items:center;justify-content:center"
         ):
             ui.spinner(size="14px", color="primary")
-        return
+        return None
 
     name = promo.name or promo.brand
     price = promo.price_new or promo.price_was
@@ -374,25 +410,31 @@ def _render_promo_stepper(promo: Promotion, cart_qty: int, syncing: bool, cart_s
 
     if cart_qty == 0:
         add_button(aria_label=t("a11y.add_to_cart"), on_click=_add)
-    else:
-        with ui.element("div").classes("sp-qty"):
-            stepper_button(
-                "−",
-                aria_label=t("a11y.qty_decrease"),
-                on_click=lambda _: asyncio.ensure_future(
-                    cart_service.remove(promo.sku) if cart_service else asyncio.sleep(0)
-                ),
-            )
-            ui.label(str(cart_qty)).classes("sp-qty-count")
-            stepper_button("+", aria_label=t("a11y.qty_increase"), on_click=_add)
+        return None
+
+    with ui.element("div").classes("sp-qty"):
+        stepper_button(
+            "−",
+            aria_label=t("a11y.qty_decrease"),
+            on_click=lambda _: asyncio.ensure_future(
+                cart_service.remove(promo.sku) if cart_service else asyncio.sleep(0)
+            ),
+        )
+        qty_lbl = ui.label(str(cart_qty)).classes("sp-qty-count")
+        stepper_button("+", aria_label=t("a11y.qty_increase"), on_click=_add)
+    return qty_lbl
 
 
 def _render_promo_product(
-    prod: PromotionProduct, session, cart_service, *, show_ribbon: bool = True
+    prod: PromotionProduct,
+    session,
+    cart_service,
+    *,
+    show_ribbon: bool = True,
+    steppers: dict | None = None,
+    qty_labels: dict | None = None,
 ) -> None:
     """One product inside an expanded group deal — square card."""
-    cart_qty = next((it.quantity for it in session.cart.items if it.sku == prod.sku), 0)
-    is_syncing = prod.sku in session.syncing_skus
 
     with ui.element("div").classes("sp-promo-product-card"):
         # Product image
@@ -427,45 +469,71 @@ def _render_promo_product(
                 "sp-promo-product-card__price"
             )
 
-        # Add control
+        # Add control — slot pattern for in-place stepper updates
         if not prod.is_available:
             ui.label(t("status.discontinued")).classes("sp-badge sp-badge-unavailable").style(
                 "font-size:10px;padding:1px 6px"
             )
-        elif is_syncing:
-            with ui.element("div").style(
-                "height:36px;display:flex;align-items:center;justify-content:center"
-            ):
-                ui.spinner(size="14px", color="primary")
         else:
-            from pyplus.ui.components.controls import add_button, stepper_button
+            stepper_slot = ui.element("div").style("display:contents")
 
-            def _add(_=None, p=prod) -> None:
-                if cart_service:
-                    asyncio.ensure_future(
-                        cart_service.add(
-                            p.sku,
-                            product_name=p.name,
-                            product_unit=p.subtitle,
-                            product_price=p.price_new or p.price_original,
-                            product_image=p.image_url,
-                            source="promotion",
-                        )
-                    )
+            def _fill_child(slot=stepper_slot, p=prod):
+                slot.clear()
+                cq = next((it.quantity for it in session.cart.items if it.sku == p.sku), 0)
+                sync = p.sku in session.syncing_skus
+                with slot:
+                    return _render_child_stepper(p, cq, sync, cart_service)
 
-            if cart_qty == 0:
-                add_button(aria_label=t("a11y.add_to_cart"), on_click=_add)
-            else:
-                with ui.element("div").classes("sp-qty"):
-                    stepper_button(
-                        "−",
-                        aria_label=t("a11y.qty_decrease"),
-                        on_click=lambda _, p=prod: asyncio.ensure_future(
-                            cart_service.remove(p.sku) if cart_service else asyncio.sleep(0)
-                        ),
-                    )
-                    ui.label(str(cart_qty)).classes("sp-qty-count")
-                    stepper_button("+", aria_label=t("a11y.qty_increase"), on_click=_add)
+            lbl = _fill_child()
+            if steppers is not None:
+                steppers[prod.sku] = _fill_child
+            if qty_labels is not None:
+                if lbl is not None:
+                    qty_labels[prod.sku] = lbl
+                else:
+                    qty_labels.pop(prod.sku, None)
+
+
+def _render_child_stepper(
+    prod: PromotionProduct, cart_qty: int, syncing: bool, cart_service
+) -> "ui.label | None":
+    from pyplus.ui.components.controls import add_button, stepper_button
+
+    if syncing:
+        with ui.element("div").style(
+            "height:36px;display:flex;align-items:center;justify-content:center"
+        ):
+            ui.spinner(size="14px", color="primary")
+        return None
+
+    def _add(_=None, p=prod) -> None:
+        if cart_service:
+            asyncio.ensure_future(
+                cart_service.add(
+                    p.sku,
+                    product_name=p.name,
+                    product_unit=p.subtitle,
+                    product_price=p.price_new or p.price_original,
+                    product_image=p.image_url,
+                    source="promotion",
+                )
+            )
+
+    if cart_qty == 0:
+        add_button(aria_label=t("a11y.add_to_cart"), on_click=_add)
+        return None
+
+    with ui.element("div").classes("sp-qty"):
+        stepper_button(
+            "−",
+            aria_label=t("a11y.qty_decrease"),
+            on_click=lambda _, p=prod: asyncio.ensure_future(
+                cart_service.remove(p.sku) if cart_service else asyncio.sleep(0)
+            ),
+        )
+        qty_lbl = ui.label(str(cart_qty)).classes("sp-qty-count")
+        stepper_button("+", aria_label=t("a11y.qty_increase"), on_click=_add)
+    return qty_lbl
 
 
 # ── Cache helpers ──────────────────────────────────────────────────────────────
@@ -576,6 +644,7 @@ async def _enrich_from_catalogue(session, products: list[PromotionProduct]) -> N
 
     The promotion-detail endpoint returns IsAvailable=False and NewPrice=0 for all
     children, so we override from product_cache (store-accurate) when present.
+    Falls back to ingredient_skus for SKUs absent from the catalogue.
     """
     store = getattr(session, "store_number", 0) or 0
     if not store or not products:
@@ -584,21 +653,26 @@ async def _enrich_from_catalogue(session, products: list[PromotionProduct]) -> N
         from pyplus.db import repo
         from pyplus.db.engine import AsyncSessionLocal
 
+        skus = [p.sku for p in products]
         async with AsyncSessionLocal() as db:
-            cat = await repo.get_product_cache_by_skus(db, store, [p.sku for p in products])
+            cat = await repo.get_product_cache_by_skus(db, store, skus)
+            sku_cache = await repo.get_ingredient_skus_by_skus(db, session.user_id, skus)
     except Exception as exc:
         log.debug("Promo catalogue enrich failed: %s", exc)
         return
 
     for p in products:
         row = cat.get(p.sku)
-        if row is None:
-            continue
-        p.is_available = row.is_available
-        if p.price_new <= 0 and row.price:
-            p.price_new = row.price
-        if not p.image_url and row.image_url:
-            p.image_url = row.image_url
+        if row is not None:
+            p.is_available = row.is_available
+            if p.price_new <= 0 and row.price:
+                p.price_new = row.price
+            if not p.image_url and row.image_url:
+                p.image_url = row.image_url
+        else:
+            cached = sku_cache.get(p.sku)
+            if cached is not None and cached.last_seen_available is not None:
+                p.is_available = cached.last_seen_available
 
 
 async def _toggle_expand(slug: str, state: _DealsState, session, refresh_fn) -> None:

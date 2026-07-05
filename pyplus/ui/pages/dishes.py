@@ -31,11 +31,19 @@ class _DishCardData:
     """Pre-fetched data for rendering a dish card without DB calls."""
 
     ingredients: list = field(default_factory=list)
-    img_urls: list = field(default_factory=list)
     avail: int = 0
     unavail: int = 0
     unknown: int = 0
     discontinued: list = field(default_factory=list)
+
+
+@dataclass
+class _PageState:
+    """All page data, fetched once and filtered in-memory."""
+
+    dishes: list = field(default_factory=list)
+    dish_data: dict = field(default_factory=dict)  # dish_id -> _DishCardData
+    loaded: bool = False
 
 
 # ── Filters ───────────────────────────────────────────────────────────────────
@@ -49,7 +57,6 @@ class _DishFilters:
     cooking_methods: set = field(default_factory=set)
     prep_max: int | None = None
     is_cold: bool | None = None
-    availability: str | None = None  # None=all, "ok", "issue"
 
 
 def _apply_filters(dishes: list, filters: _DishFilters) -> list:
@@ -80,7 +87,18 @@ def _apply_filters(dishes: list, filters: _DishFilters) -> list:
     return result
 
 
-def _render_filters(filters: _DishFilters, refresh_fn) -> None:
+def _active_filter_count(filters: _DishFilters) -> int:
+    return (
+        len(filters.meat_types)
+        + len(filters.starch_types)
+        + len(filters.cooking_methods)
+        + (1 if filters.prep_max is not None else 0)
+        + (1 if filters.is_cold else 0)
+    )
+
+
+def _render_filter_chips(filters: _DishFilters, refresh_fn) -> None:
+    """Shared chip rendering used by both desktop and mobile filter sections."""
     from pyplus.db.models import COOKING_METHODS, MEAT_TYPES, PREP_TIME_BUCKETS, STARCH_TYPES
     from pyplus.ui.format import (
         cooking_emoji,
@@ -92,119 +110,226 @@ def _render_filters(filters: _DishFilters, refresh_fn) -> None:
         starch_label,
     )
 
-    with ui.element("div").style(
-        "display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;"
-        "margin-bottom:1.25rem;padding:.75rem 1rem;"
-        "background:var(--c-surface);border:1px solid var(--c-border);"
-        "border-radius:var(--r-xl)"
+    for mt in MEAT_TYPES:
+        lbl = f"{meat_emoji(mt)} {meat_label(mt)}"
+        is_on = mt in filters.meat_types
+        chip = (
+            ui.chip(lbl, selectable=True, selected=is_on)
+            .props(f"{'color=primary' if is_on else 'outline'} size=sm clickable")
+            .style("font-size:11px")
+        )
+
+        def _toggle_meat(e, m=mt):
+            if m in filters.meat_types:
+                filters.meat_types.discard(m)
+            else:
+                filters.meat_types.add(m)
+            refresh_fn()
+
+        chip.on("update:selected", _toggle_meat)
+
+    for st in STARCH_TYPES:
+        lbl = f"{starch_emoji(st)} {starch_label(st)}"
+        is_on = st in filters.starch_types
+        chip = (
+            ui.chip(lbl, selectable=True, selected=is_on)
+            .props(f"{'color=primary' if is_on else 'outline'} size=sm clickable")
+            .style("font-size:11px")
+        )
+
+        def _toggle_starch(e, s=st):
+            if s in filters.starch_types:
+                filters.starch_types.discard(s)
+            else:
+                filters.starch_types.add(s)
+            refresh_fn()
+
+        chip.on("update:selected", _toggle_starch)
+
+    for cm in COOKING_METHODS:
+        lbl = f"{cooking_emoji(cm)} {cooking_label(cm)}"
+        is_on = cm in filters.cooking_methods
+        chip = (
+            ui.chip(lbl, selectable=True, selected=is_on)
+            .props(f"{'color=primary' if is_on else 'outline'} size=sm clickable")
+            .style("font-size:11px")
+        )
+
+        def _toggle_cm(e, c=cm):
+            if c in filters.cooking_methods:
+                filters.cooking_methods.discard(c)
+            else:
+                filters.cooking_methods.add(c)
+            refresh_fn()
+
+        chip.on("update:selected", _toggle_cm)
+
+    prep_opts = {None: "Bereiding", **{m: prep_time_label(m) for m in PREP_TIME_BUCKETS}}
+    prep_sel = (
+        ui.select(prep_opts, value=filters.prep_max)
+        .props("outlined dense options-dense")
+        .style("width:130px;flex-shrink:0")
+    )
+
+    def _on_prep(e):
+        filters.prep_max = prep_sel.value
+        refresh_fn()
+
+    prep_sel.on("update:model-value", _on_prep)
+
+    cold_chip = (
+        ui.chip("❄️ Koud", selectable=True, selected=filters.is_cold is True)
+        .props(f"{'color=info' if filters.is_cold else 'outline'} size=sm clickable")
+        .style("font-size:11px")
+    )
+
+    def _toggle_cold(e):
+        filters.is_cold = True if filters.is_cold is None else None
+        refresh_fn()
+
+    cold_chip.on("update:selected", _toggle_cold)
+
+
+def _render_filters(filters: _DishFilters, refresh_fn) -> None:
+    # Desktop filter bar
+    with (
+        ui.element("div")
+        .classes("sp-filters-desktop")
+        .style(
+            "display:flex;flex-wrap:wrap;align-items:center;gap:.375rem;"
+            "margin-bottom:1.25rem;padding:.75rem 1rem;"
+            "background:var(--c-surface);border:1px solid var(--c-border);"
+            "border-radius:var(--r-xl)"
+        )
     ):
-        # Search
         search_input = (
             ui.input(placeholder="Zoek gerecht…", value=filters.search)
             .props("outlined dense clearable")
             .style("width:180px;flex-shrink:0")
         )
 
-        def _on_search(e):
+        def _on_search_desktop(e):
             val = e.value if hasattr(e, "value") else search_input.value
             filters.search = val or ""
             refresh_fn()
 
-        search_input.on("update:model-value", _on_search)
-        search_input.on("clear", lambda: (_on_search(type("E", (), {"value": ""})()),))
+        search_input.on("update:model-value", _on_search_desktop)
+        search_input.on("clear", lambda: (_on_search_desktop(type("E", (), {"value": ""})()),))
 
-        # Separator
-        ui.element("div").style("width:1px;height:24px;background:var(--c-border);flex-shrink:0")
+        _render_filter_chips(filters, refresh_fn)
 
-        # Meat type chips
-        for mt in MEAT_TYPES:
-            lbl = f"{meat_emoji(mt)} {meat_label(mt)}"
-            is_on = mt in filters.meat_types
-            chip = (
-                ui.chip(lbl, selectable=True, selected=is_on)
-                .props(f"{'color=primary' if is_on else 'outline'} size=sm clickable")
-                .style("font-size:11px")
+    # Mobile filter bar
+    with (
+        ui.element("div")
+        .classes("sp-filters-mobile")
+        .style("display:none;flex-direction:column;gap:.5rem;margin-bottom:1rem")
+    ):
+        with ui.element("div").style("display:flex;gap:.5rem;align-items:center"):
+            mobile_search = (
+                ui.input(placeholder="Zoek gerecht…", value=filters.search)
+                .props("outlined dense clearable")
+                .style("flex:1")
             )
 
-            def _toggle_meat(e, m=mt):
-                if m in filters.meat_types:
-                    filters.meat_types.discard(m)
-                else:
-                    filters.meat_types.add(m)
+            def _on_search_mobile(e):
+                val = e.value if hasattr(e, "value") else mobile_search.value
+                filters.search = val or ""
                 refresh_fn()
 
-            chip.on("update:selected", _toggle_meat)
+            mobile_search.on("update:model-value", _on_search_mobile)
+            mobile_search.on("clear", lambda: (_on_search_mobile(type("E", (), {"value": ""})()),))
 
-        ui.element("div").style("width:1px;height:24px;background:var(--c-border);flex-shrink:0")
+            @ui.refreshable
+            def _filter_badge():
+                count = _active_filter_count(filters)
+                label = f"Filters ({count})" if count else "Filters"
+                return label
 
-        # Starch chips
-        for st in STARCH_TYPES:
-            lbl = f"{starch_emoji(st)} {starch_label(st)}"
-            is_on = st in filters.starch_types
-            chip = (
-                ui.chip(lbl, selectable=True, selected=is_on)
-                .props(f"{'color=primary' if is_on else 'outline'} size=sm clickable")
-                .style("font-size:11px")
+            filter_btn = (
+                ui.button(
+                    "Filters",
+                    icon="sym_r_tune",
+                )
+                .props("flat dense no-caps")
+                .style("font-size:12px;flex-shrink:0")
             )
 
-            def _toggle_starch(e, s=st):
-                if s in filters.starch_types:
-                    filters.starch_types.discard(s)
-                else:
-                    filters.starch_types.add(s)
-                refresh_fn()
-
-            chip.on("update:selected", _toggle_starch)
-
-        ui.element("div").style("width:1px;height:24px;background:var(--c-border);flex-shrink:0")
-
-        # Cooking method chips
-        for cm in COOKING_METHODS:
-            lbl = f"{cooking_emoji(cm)} {cooking_label(cm)}"
-            is_on = cm in filters.cooking_methods
-            chip = (
-                ui.chip(lbl, selectable=True, selected=is_on)
-                .props(f"{'color=primary' if is_on else 'outline'} size=sm clickable")
-                .style("font-size:11px")
+        with (
+            ui.expansion(value=False)
+            .classes("sp-mobile-filter-expand")
+            .style(
+                "background:var(--c-surface);border:1px solid var(--c-border);"
+                "border-radius:var(--r-lg)"
             )
+            .props("dense") as expansion
+        ):
+            with ui.element("div").style("display:flex;flex-wrap:wrap;gap:.375rem;padding:.5rem"):
+                _render_filter_chips(filters, refresh_fn)
 
-            def _toggle_cm(e, c=cm):
-                if c in filters.cooking_methods:
-                    filters.cooking_methods.discard(c)
-                else:
-                    filters.cooking_methods.add(c)
-                refresh_fn()
+        filter_btn.on("click", lambda: expansion.set_value(not expansion.value))
 
-            chip.on("update:selected", _toggle_cm)
 
-        ui.element("div").style("width:1px;height:24px;background:var(--c-border);flex-shrink:0")
+# ── Data loading ──────────────────────────────────────────────────────────────
 
-        # Prep time select
-        prep_opts = {None: "Bereidingstijd", **{m: prep_time_label(m) for m in PREP_TIME_BUCKETS}}
-        prep_sel = (
-            ui.select(prep_opts, value=filters.prep_max)
-            .props("outlined dense options-dense")
-            .style("width:130px;flex-shrink:0")
+
+async def _load_page_data(state: _PageState, user_id: int, session, include_archived: bool) -> None:
+    """Fetch all dish data in ~4 queries total."""
+    async with AsyncSessionLocal() as db:
+        state.dishes = await repo.get_dishes(db, user_id, include_archived=include_archived)
+
+        all_ings = await repo.get_all_dish_ingredients_for_user(
+            db, user_id, include_archived=include_archived
         )
 
-        def _on_prep(e):
-            filters.prep_max = prep_sel.value
-            refresh_fn()
+        all_skus: set[str] = set()
+        for ings in all_ings.values():
+            for ing in ings:
+                if ing.sku:
+                    all_skus.add(ing.sku)
 
-        prep_sel.on("update:model-value", _on_prep)
+        sku_cache = await repo.get_ingredient_skus_by_skus(db, user_id, list(all_skus))
 
-        # Cold toggle
-        cold_chip = (
-            ui.chip("❄️ Koud", selectable=True, selected=filters.is_cold is True)
-            .props(f"{'color=info' if filters.is_cold else 'outline'} size=sm clickable")
-            .style("font-size:11px")
+        store = session.store_number or 0
+        product_cache: dict = {}
+        has_catalogue = False
+        if store:
+            has_catalogue = await repo.count_product_cache(db, store) > 0
+            if has_catalogue:
+                product_cache = await repo.get_product_cache_by_skus(db, store, list(all_skus))
+
+    dish_data: dict[int, _DishCardData] = {}
+    for dish in state.dishes:
+        ings = all_ings.get(dish.id, [])
+        non_optional = [i for i in ings if not i.optional]
+
+        avail = unavail = unknown = 0
+        for ing in non_optional:
+            row = sku_cache.get(ing.sku)
+            if row is None or row.last_seen_available is None:
+                unknown += 1
+            elif row.last_seen_available:
+                avail += 1
+            else:
+                unavail += 1
+
+        discontinued: list[str] = []
+        if has_catalogue:
+            for ing in non_optional:
+                if ing.sku and (
+                    ing.sku not in product_cache or not product_cache[ing.sku].is_available
+                ):
+                    discontinued.append(ing.sku)
+
+        dish_data[dish.id] = _DishCardData(
+            ingredients=ings,
+            avail=avail,
+            unavail=unavail,
+            unknown=unknown,
+            discontinued=discontinued,
         )
 
-        def _toggle_cold(e):
-            filters.is_cold = True if filters.is_cold is None else None
-            refresh_fn()
-
-        cold_chip.on("update:selected", _toggle_cold)
+    state.dish_data = dish_data
+    state.loaded = True
 
 
 # ── Page entry ─────────────────────────────────────────────────────────────────
@@ -219,13 +344,17 @@ async def create_dishes_page() -> None:
 
     apply_theme()
 
+    state = _PageState()
+    filters = _DishFilters()
+
     with ui.element("div").classes("sp-cockpit-root"):
         create_nav_rail(active="dishes", user_display_name=session.display_name)
 
         with ui.element("div").classes("sp-page-content"):
-            # ── Page header ────────────────────────────────────────────
+            # Page header
             with ui.element("div").style(
-                "display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem"
+                "display:flex;align-items:center;justify-content:space-between;"
+                "margin-bottom:1rem;flex-wrap:wrap;gap:.5rem"
             ):
                 ui.label(t("dishes.title")).style(
                     "font-size:22px;font-weight:700;color:var(--c-text);letter-spacing:-.3px"
@@ -234,35 +363,32 @@ async def create_dishes_page() -> None:
                     show_archived = ui.checkbox("Archief tonen").style("font-size:13px")
                     ui.button(
                         t("dishes.new"),
-                        on_click=lambda: _open_editor(user_id, session, None, dish_grid_refresh),
+                        on_click=lambda: _open_editor(user_id, session, None, _reload_and_refresh),
                     ).props("unelevated rounded color=primary no-caps").style(
-                        "font-size:13px;font-weight:600"
+                        "font-size:13px;font-weight:600;height:44px;border-radius:var(--r-md)"
                     )
 
-            # ── Filters ───────────────────────────────────────────────
-            filters = _DishFilters()
             _render_filters(filters, lambda: dish_grid_refresh.refresh())
 
-            # ── Dish grid ─────────────────────────────────────────────
             @ui.refreshable
-            async def dish_grid_refresh() -> None:
-                await _render_dish_grid(
-                    user_id, session, show_archived.value, filters, dish_grid_refresh
-                )
+            def dish_grid_refresh() -> None:
+                _render_dish_grid_sync(state, filters, session, _reload_and_refresh)
 
-            await dish_grid_refresh()
+            async def _reload_and_refresh():
+                await _load_page_data(state, user_id, session, show_archived.value)
+                dish_grid_refresh.refresh()
+
+            await _load_page_data(state, user_id, session, show_archived.value)
+            dish_grid_refresh()
 
             show_archived.on(
                 "update:model-value",
-                lambda _: dish_grid_refresh.refresh(),
+                lambda _: asyncio.ensure_future(_reload_and_refresh()),
             )
 
 
-async def _render_dish_grid(user_id, session, include_archived, filters, refresh_fn) -> None:
-    async with AsyncSessionLocal() as db:
-        dishes = await repo.get_dishes(db, user_id, include_archived=include_archived)
-
-    if not dishes:
+def _render_dish_grid_sync(state: _PageState, filters, session, reload_fn) -> None:
+    if not state.dishes:
         with ui.element("div").style(
             "display:flex;flex-direction:column;align-items:center;padding:4rem 2rem;gap:.75rem"
         ):
@@ -270,47 +396,26 @@ async def _render_dish_grid(user_id, session, include_archived, filters, refresh
             ui.label("Nog geen gerechten.").style("font-size:15px;color:var(--c-text-3)")
             ui.button(
                 t("dishes.new"),
-                on_click=lambda: _open_editor(user_id, session, None, refresh_fn),
+                on_click=lambda: _open_editor(session.user_id, session, None, reload_fn),
             ).props("unelevated rounded color=primary no-caps")
         return
 
-    filtered = _apply_filters(dishes, filters)
-    if not filtered and dishes:
+    filtered = _apply_filters(state.dishes, filters)
+    if not filtered:
         ui.label("Geen gerechten gevonden met deze filters.").style(
             "font-size:14px;color:var(--c-text-3);padding:2rem 0"
         )
         return
 
-    # Pre-fetch all ingredient images + availability in one batch
-    dish_data: dict[int, _DishCardData] = {}
-    async with AsyncSessionLocal() as db:
+    with ui.element("div").classes("sp-dish-grid"):
         for dish in filtered:
-            ings = await repo.get_ingredients(db, dish.id)
-            avail, unavail, unknown = await repo.get_dish_availability(db, user_id, dish.id)
-            disc = await repo.get_dish_discontinued_skus(db, session.store_number or 0, dish.id)
-            img_urls = []
-            for ing in ings:
-                cached = await repo.get_ingredient_sku(db, user_id, ing.sku)
-                img_urls.append(cached.image_url if cached and cached.image_url else "")
-            dish_data[dish.id] = _DishCardData(
-                ingredients=ings,
-                img_urls=img_urls,
-                avail=avail,
-                unavail=unavail,
-                unknown=unknown,
-                discontinued=disc,
-            )
-
-    with ui.element("div").style(
-        "display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:1.25rem"
-    ):
-        for dish in filtered:
-            _render_dish_card(dish, dish_data.get(dish.id), session, refresh_fn)
+            _render_dish_card(dish, state.dish_data.get(dish.id), session, reload_fn)
 
 
-def _render_dish_card(dish, data: _DishCardData | None, session, refresh_fn) -> None:
+def _render_dish_card(dish, data: _DishCardData | None, session, reload_fn) -> None:
     from pyplus.ui.format import (
         cooking_emoji,
+        cooking_label,
         meat_emoji,
         meat_label,
         parse_cooking_methods,
@@ -329,75 +434,53 @@ def _render_dish_card(dish, data: _DishCardData | None, session, refresh_fn) -> 
         ui.element("div")
         .classes("sp-dish-card")
         .style("opacity:.6" if dish.archived else "")
-        .on("click", lambda di=dish: _open_editor(user_id, session, di.id, refresh_fn))
+        .on("click", lambda di=dish: _open_editor(user_id, session, di.id, reload_fn))
     ):
-        # ── Top zone: thumbnails + badges (flex-grows to align titles) ────
-        with ui.element("div").style("flex:1"):
-            with ui.element("div").style(
-                "display:flex;align-items:flex-start;justify-content:space-between"
-            ):
-                with ui.element("div").style(
-                    "display:flex;gap:5px;align-items:center;flex-wrap:wrap"
-                ):
-                    for url in d.img_urls:
-                        if url:
-                            ui.image(url).style(
-                                "width:38px;height:38px;border-radius:var(--r-sm);"
-                                "object-fit:contain;background:var(--c-surface);"
-                                "border:1px solid var(--c-border)"
-                            )
-                        else:
-                            ui.element("div").style(
-                                "width:38px;height:38px;border-radius:var(--r-sm);"
-                                "background:var(--c-surface);border:1px solid var(--c-border)"
-                            )
-
-                if show_meta:
-                    with ui.element("div").style(
-                        "display:flex;gap:5px;align-items:center;flex-shrink:0;margin-left:.5rem"
-                    ):
-                        st = getattr(dish, "starch_type", None)
-                        if st and starch_emoji(st):
-                            ui.label(f"{starch_emoji(st)} {starch_label(st)}").style(
-                                "font-size:10px;color:var(--c-text-2);"
-                                "background:#f5f0e8;border-radius:var(--r-full);"
-                                "padding:2px 9px;font-weight:500;white-space:nowrap"
-                            )
-                        if getattr(dish, "is_cold", False):
-                            ui.label("❄️").style(
-                                "font-size:14px;background:#e0f2fe;"
-                                "border-radius:var(--r-full);"
-                                "padding:2px 7px;line-height:1.3"
-                            ).tooltip("Koud gerecht")
-
-        # ── Bottom zone: title + meta + count + actions (pinned) ──────────
-        ui.label(dish.name).classes("sp-dish-card-name").style(
-            "margin-bottom:.25rem;margin-top:.75rem"
-        )
+        ui.label(dish.name).classes("sp-dish-card-name")
 
         if show_meta:
-            parts: list[str] = []
+            # Row 1: dish classification — emoji only, no labels
+            prop_parts: list[str] = []
             me = meat_emoji(dish.meat_type)
             if me:
-                parts.append(f"{me} {meat_label(dish.meat_type)}")
-            for m in parse_cooking_methods(dish):
-                ce = cooking_emoji(m)
-                if ce:
-                    parts.append(ce)
+                prop_parts.append(me)
+            se = starch_emoji(dish.starch_type)
+            if se and dish.starch_type != "geen_anders":
+                prop_parts.append(se)
+            ve = veg_emoji(dish.veg_count)
+            if ve and ve != "➖":
+                prop_parts.append(ve)
             prep = prep_time_label(dish.prep_minutes)
             if prep:
-                parts.append(f"⏱ {prep}")
-            ve = veg_emoji(dish.veg_count)
-            if ve:
-                parts.append(ve)
-            if parts:
-                ui.label(" · ".join(parts)).style(
-                    "font-size:11px;color:var(--c-text-3);margin-bottom:.375rem"
+                prop_parts.append(f"⏱ {prep}")
+            if prop_parts:
+                ui.label(" · ".join(prop_parts)).style(
+                    "font-size:11px;color:var(--c-text-3);margin-top:2px"
                 )
 
-        with ui.element("div").style(
-            "display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem"
-        ):
+            # Row 2: cooking methods as small chips
+            cooking_methods = parse_cooking_methods(dish)
+            if cooking_methods or dish.is_cold:
+                with ui.element("div").style(
+                    "display:flex;gap:.25rem;flex-wrap:wrap;margin-top:3px"
+                ):
+                    for m in cooking_methods:
+                        ce = cooking_emoji(m)
+                        cl = cooking_label(m)
+                        if ce:
+                            ui.label(f"{ce} {cl}").style(
+                                "font-size:10px;padding:1px 6px;border-radius:10px;"
+                                "background:var(--c-surface-2);color:var(--c-text-3);"
+                                "white-space:nowrap"
+                            )
+                    if dish.is_cold:
+                        ui.label("❄️ Koud").style(
+                            "font-size:10px;padding:1px 6px;border-radius:10px;"
+                            "background:var(--c-surface-2);color:var(--c-text-3);"
+                            "white-space:nowrap"
+                        )
+
+        with ui.element("div").style("display:flex;align-items:center;gap:.5rem;margin-top:4px"):
             ui.label(f"{total} ingrediënt{'en' if total != 1 else ''}").style(
                 "font-size:11px;color:var(--c-text-4)"
             )
@@ -405,7 +488,7 @@ def _render_dish_card(dish, data: _DishCardData | None, session, refresh_fn) -> 
                 if d.discontinued:
                     ui.label(t("dishes.discontinued_count", n=len(d.discontinued))).classes(
                         "sp-badge sp-badge-unavailable"
-                    ).style("font-size:10px").tooltip(t("status.discontinued"))
+                    ).style("font-size:10px")
                 elif d.unavail > 0:
                     ui.label(t("dishes.partial_unavail", n=d.unavail)).classes(
                         "sp-badge sp-badge-unavailable"
@@ -417,40 +500,25 @@ def _render_dish_card(dish, data: _DishCardData | None, session, refresh_fn) -> 
                         "sp-badge sp-badge-available"
                     ).style("font-size:10px")
 
-        with ui.element("div").style(
-            "display:flex;gap:.375rem;padding-top:.375rem;border-top:1px solid var(--c-border)"
-        ):
-            ui.button(
-                t("action.edit"),
-                on_click=lambda di=dish: _open_editor(user_id, session, di.id, refresh_fn),
-            ).props("flat dense no-caps color=primary").style("font-size:11px")
-            ui.button(
-                t("dishes.duplicate"),
-                on_click=lambda di=dish: _duplicate(user_id, di.id, refresh_fn),
-            ).props("flat dense no-caps color=grey").style("font-size:11px")
-            label = t("dishes.restore") if dish.archived else t("dishes.archive")
-            ui.button(
-                label,
-                on_click=lambda di=dish: _toggle_archive(user_id, di, refresh_fn),
-            ).props("flat dense no-caps color=negative").style("font-size:11px")
-
 
 # ── CRUD helpers ───────────────────────────────────────────────────────────────
 
 
-async def _duplicate(user_id: int, dish_id: int, refresh_fn) -> None:
+async def _duplicate(user_id: int, dish_id: int, reload_fn) -> None:
     async with AsyncSessionLocal() as db:
         await repo.duplicate_dish(db, user_id, dish_id)
     ui.notify("Gerecht gedupliceerd", type="positive", timeout=2000)
-    await refresh_fn.refresh()
+    await reload_fn()
 
 
-async def _toggle_archive(user_id: int, dish, refresh_fn) -> None:
+async def _toggle_archive(user_id: int, dish, reload_fn, dlg=None) -> None:
     async with AsyncSessionLocal() as db:
         await repo.archive_dish(db, user_id, dish.id, not dish.archived)
     action = "hersteld" if dish.archived else "gearchiveerd"
     ui.notify(f"Gerecht {action}", type="info", timeout=2000)
-    await refresh_fn.refresh()
+    if dlg:
+        dlg.close()
+    await reload_fn()
 
 
 # ── Dish editor dialog ─────────────────────────────────────────────────────────
@@ -460,7 +528,7 @@ async def _toggle_archive(user_id: int, dish, refresh_fn) -> None:
 class _IngRow:
     """Mutable state for one ingredient row in the editor."""
 
-    id: int | None  # None for newly added, not yet saved
+    id: int | None
     dish_id: int | None
     sku: str
     display_name: str
@@ -471,19 +539,17 @@ class _IngRow:
     pack_unit: str | None
     optional: bool
     sort_order: int
-    flexible: bool = False  # placeholder: product chosen at add-to-cart time
-    subtitle: str = ""  # product pack subtitle, e.g. "Per 400 ml" (display only)
-    # Transient — not stored
-    discontinued: bool = False  # not in store catalogue (no longer carried)
+    flexible: bool = False
+    subtitle: str = ""
+    discontinued: bool = False
     relinking: bool = False
     search_query: str = ""
     search_results: list = field(default_factory=list)
     searching: bool = False
 
 
-async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -> None:
+async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) -> None:
     """Open the dish editor dialog for creating or editing a dish."""
-    # Load existing dish
     if dish_id is not None:
         async with AsyncSessionLocal() as db:
             dish = await repo.get_dish(db, user_id, dish_id)
@@ -525,12 +591,14 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
         "is_cold": cold_val,
     }
 
-    # Build mutable ingredient row state
     rows: list[_IngRow] = []
     if raw_ings:
         async with AsyncSessionLocal() as db:
+            skus = [ing.sku for ing in raw_ings if ing.sku]
+            sku_cache = await repo.get_ingredient_skus_by_skus(db, user_id, skus)
+
             for ing in sorted(raw_ings, key=lambda x: (x.sort_order, x.id)):
-                cached = await repo.get_ingredient_sku(db, user_id, ing.sku)
+                cached = sku_cache.get(ing.sku)
                 rows.append(
                     _IngRow(
                         id=ing.id,
@@ -548,7 +616,6 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
                         subtitle=cached.subtitle if cached else "",
                     )
                 )
-            # Flag ingredients missing or unavailable in the store catalogue.
             store = session.store_number or 0
             if store and await repo.count_product_cache(db, store) > 0:
                 present = await repo.get_product_cache_by_skus(
@@ -567,11 +634,41 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
             # Header
             with ui.element("div").style(
                 "display:flex;align-items:center;justify-content:space-between;"
-                "padding:1rem 1.25rem .875rem;border-bottom:1px solid var(--c-border);flex-shrink:0"
+                "padding:1rem 1.25rem .875rem;border-bottom:1px solid var(--c-border);"
+                "flex-shrink:0;gap:.5rem"
             ):
-                title = t("dishes.edit") if dish else t("dishes.new")
-                ui.label(title).style("font-size:17px;font-weight:700;color:var(--c-text)")
-                with ui.row().style("gap:.5rem"):
+                with ui.element("div").style(
+                    "display:flex;align-items:center;gap:.25rem;min-width:0"
+                ):
+                    title = t("dishes.edit") if dish else t("dishes.new")
+                    ui.label(title).style(
+                        "font-size:17px;font-weight:700;color:var(--c-text);white-space:nowrap"
+                    )
+                    if dish:
+                        with ui.button(icon="sym_r_more_vert").props("flat dense round size=sm"):
+                            with ui.menu():
+                                ui.menu_item(
+                                    t("dishes.duplicate"),
+                                    on_click=lambda: (
+                                        dlg.close(),
+                                        asyncio.ensure_future(
+                                            _duplicate(user_id, dish.id, reload_fn)
+                                        ),
+                                    ),
+                                )
+                                label = (
+                                    t("dishes.restore") if dish.archived else t("dishes.archive")
+                                )
+                                ui.menu_item(
+                                    label,
+                                    on_click=lambda: asyncio.ensure_future(
+                                        _toggle_archive(user_id, dish, reload_fn, dlg)
+                                    ),
+                                )
+
+                with ui.element("div").style(
+                    "display:flex;align-items:center;gap:.25rem;flex-shrink:0"
+                ):
                     ui.button(
                         t("action.cancel"),
                         on_click=dlg.close,
@@ -587,7 +684,7 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
                             meta,
                             rows,
                             dlg,
-                            refresh_fn,
+                            reload_fn,
                         )
 
                     ui.button(
@@ -597,14 +694,12 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
 
             # Scrollable body
             with ui.element("div").style("flex:1;overflow-y:auto;padding:1.25rem"):
-                # Name
                 name_input = (
                     ui.input(label=t("dishes.name_label"), value=name_val)
                     .props("outlined")
                     .style("width:100%;margin-bottom:.875rem")
                 )
 
-                # Prep notes
                 notes_input = (
                     ui.textarea(
                         label=t("dishes.prep_notes_label"),
@@ -617,10 +712,8 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
                     "font-size:11px;color:var(--c-text-4);margin-top:-.625rem;margin-bottom:1rem"
                 )
 
-                # Planning metadata (prep time / meat / vegetables) — all optional.
                 _render_meta_fields(meta)
 
-                # Ingredients header
                 with ui.element("div").style(
                     "display:flex;align-items:center;justify-content:space-between;"
                     "margin-bottom:.625rem"
@@ -629,7 +722,6 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
                         "font-size:14px;font-weight:600;color:var(--c-text)"
                     )
 
-                # Ingredient rows
                 @ui.refreshable
                 def _ingredient_list() -> None:
                     if not rows:
@@ -642,8 +734,7 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
 
                 _ingredient_list()
 
-            # Pinned footer — add-ingredient actions stay reachable on phones
-            # even when the ingredient list scrolls past the viewport.
+            # Pinned footer
             with ui.element("div").style(
                 "display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;flex-shrink:0;"
                 "padding:.75rem 1.25rem;border-top:1px solid var(--c-border);background:var(--c-surface)"
@@ -661,7 +752,6 @@ async def _open_editor(user_id: int, session, dish_id: int | None, refresh_fn) -
 
 
 def _infer_starch_type(name: str, ingredients: list[_IngRow]) -> str | None:
-    """Guess starch type from the dish name or ingredient names."""
     name_lower = name.lower()
     ing_names = " ".join(r.display_name.lower() for r in ingredients if r.display_name)
     combined = f"{name_lower} {ing_names}"
@@ -709,7 +799,6 @@ def _infer_starch_type(name: str, ingredients: list[_IngRow]) -> str | None:
 
 
 def _render_meta_fields(meta: dict) -> None:
-    """Render the optional prep-time / meat / starch / cooking / cold / vegetable fields."""
     from pyplus.db.models import COOKING_METHODS, MEAT_TYPES, PREP_TIME_BUCKETS, STARCH_TYPES
     from pyplus.ui.format import (
         cooking_emoji,
@@ -731,38 +820,35 @@ def _render_meta_fields(meta: dict) -> None:
     }
     veg_opts = {None: unset} | {n: (veg_emoji(n) or "➖") for n in (0, 1, 2, 3)}
 
-    with ui.element("div").style(
-        "display:grid;grid-template-columns:repeat(2,1fr);gap:.625rem;margin-bottom:1rem"
-    ):
+    with ui.element("div").classes("sp-meta-grid"):
         prep_sel = (
             ui.select(prep_opts, value=meta["prep_minutes"], label=t("dishes.prep_time_label"))
             .props("outlined dense options-dense")
             .style("width:100%")
         )
-        prep_sel.on("update:model-value", lambda e: meta.update(prep_minutes=e.value))
+        prep_sel.on("update:model-value", lambda e, s=prep_sel: meta.update(prep_minutes=s.value))
 
         meat_sel = (
             ui.select(meat_opts, value=meta["meat_type"], label=t("dishes.meat_label"))
             .props("outlined dense options-dense")
             .style("width:100%")
         )
-        meat_sel.on("update:model-value", lambda e: meta.update(meat_type=e.value))
+        meat_sel.on("update:model-value", lambda e, s=meat_sel: meta.update(meat_type=s.value))
 
         starch_sel = (
             ui.select(starch_opts, value=meta["starch_type"], label=t("dishes.starch_label"))
             .props("outlined dense options-dense")
             .style("width:100%")
         )
-        starch_sel.on("update:model-value", lambda e: meta.update(starch_type=e.value))
+        starch_sel.on("update:model-value", lambda e, s=starch_sel: meta.update(starch_type=s.value))
 
         veg_sel = (
             ui.select(veg_opts, value=meta["veg_count"], label=t("dishes.veg_label"))
             .props("outlined dense options-dense")
             .style("width:100%")
         )
-        veg_sel.on("update:model-value", lambda e: meta.update(veg_count=e.value))
+        veg_sel.on("update:model-value", lambda e, s=veg_sel: meta.update(veg_count=s.value))
 
-    # Cooking methods — checkboxes (not combined, each separate)
     ui.label(t("dishes.cooking_methods_label")).style(
         "font-size:12px;font-weight:600;color:var(--c-text-2);margin-bottom:.25rem"
     )
@@ -784,7 +870,6 @@ def _render_meta_fields(meta: dict) -> None:
 
             cb.on("update:model-value", _on_cooking)
 
-    # Is cold checkbox
     cold_cb = (
         ui.checkbox(f"❄️ {t('dishes.is_cold_label')}", value=meta.get("is_cold", False))
         .props("dense")
@@ -810,7 +895,7 @@ def _add_new_row(rows: list[_IngRow], refresh_fn) -> None:
             pack_unit=None,
             optional=False,
             sort_order=len(rows),
-            relinking=True,  # start in search mode
+            relinking=True,
         )
     )
     refresh_fn.refresh()
@@ -838,62 +923,77 @@ def _add_flexible_row(rows: list[_IngRow], refresh_fn) -> None:
 
 def _render_flexible_row(row: _IngRow, idx: int, rows: list, refresh_fn) -> None:
     """A placeholder ingredient: free-text label now, product chosen at cart-add."""
-    with ui.element("div").style(
-        "display:flex;align-items:center;gap:.5rem;"
-        "padding:.625rem .75rem;border:1px dashed var(--c-brand);"
-        "border-radius:var(--r-md);margin-bottom:.5rem;background:var(--c-brand-tint)"
+    with (
+        ui.element("div")
+        .classes("sp-ing-row")
+        .style(
+            "padding:.625rem .75rem;border:1px dashed var(--c-brand);"
+            "border-radius:var(--r-md);margin-bottom:.5rem;background:var(--c-brand-tint)"
+        )
     ):
-        ui.icon("tune", size="20px").style("color:var(--c-brand-dark);flex-shrink:0")
-
+        # Top line: icon + label
         with ui.element("div").style(
-            "flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"
+            "display:flex;align-items:center;gap:.5rem;min-width:0;overflow:hidden"
         ):
-            ui.label(t("dishes.flexible_badge")).style(
-                "font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;"
-                "color:var(--c-brand-dark)"
+            ui.icon("sym_r_tune", size="20px").style("color:var(--c-brand-dark);flex-shrink:0")
+            with ui.element("div").style(
+                "flex:1;min-width:0;overflow:hidden;display:flex;flex-direction:column;gap:2px"
+            ):
+                ui.label(t("dishes.flexible_badge")).style(
+                    "font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;"
+                    "color:var(--c-brand-dark)"
+                )
+                label_input = (
+                    ui.input(placeholder=t("dishes.flexible_placeholder"), value=row.display_name)
+                    .props("dense borderless")
+                    .style("width:100%;font-size:13px;overflow:hidden")
+                )
+                label_input.on(
+                    "blur", lambda e, r=row: setattr(r, "display_name", label_input.value or "")
+                )
+
+        # Bottom line: amount + unit + buttons
+        with (
+            ui.element("div")
+            .classes("sp-ing-controls")
+            .style("display:flex;align-items:center;gap:.375rem;flex-wrap:wrap")
+        ):
+            amount_input = (
+                ui.input(value=_fmt_amount(row.amount))
+                .props("outlined dense")
+                .style("width:56px;flex-shrink:0")
             )
-            label_input = (
-                ui.input(placeholder=t("dishes.flexible_placeholder"), value=row.display_name)
-                .props("dense borderless")
-                .style("width:100%;font-size:13px")
+
+            def _amount_change(e, r=row):
+                try:
+                    r.amount = float((e.value or "").replace(",", "."))
+                except (ValueError, AttributeError):
+                    pass
+
+            amount_input.on("blur", _amount_change)
+            unit_select = (
+                ui.select(_UNITS, value=row.amount_unit if row.amount_unit in _UNITS else _UNITS[0])
+                .props("outlined dense options-dense")
+                .style("width:72px;flex-shrink:0")
             )
-            label_input.on(
-                "blur", lambda e, r=row: setattr(r, "display_name", label_input.value or "")
+            unit_select.on(
+                "update:model-value", lambda e, r=row: setattr(r, "amount_unit", e.value)
             )
 
-        # Amount + unit (the placeholder still carries a quantity/unit)
-        amount_input = (
-            ui.input(value=_fmt_amount(row.amount))
-            .props("outlined dense")
-            .style("width:56px;flex-shrink:0")
-        )
-
-        def _amount_change(e, r=row):
-            try:
-                r.amount = float((e.value or "").replace(",", "."))
-            except (ValueError, AttributeError):
-                pass
-
-        amount_input.on("blur", _amount_change)
-        unit_select = (
-            ui.select(_UNITS, value=row.amount_unit if row.amount_unit in _UNITS else _UNITS[0])
-            .props("outlined dense options-dense")
-            .style("width:72px;flex-shrink:0")
-        )
-        unit_select.on("update:model-value", lambda e, r=row: setattr(r, "amount_unit", e.value))
-
-        with ui.element("div").style("display:flex;gap:2px;flex-shrink:0"):
-            if idx > 0:
+            with ui.element("div").style("display:flex;gap:2px;flex-shrink:0;margin-left:auto"):
+                if idx > 0:
+                    ui.button(
+                        icon="sym_r_arrow_upward",
+                        on_click=lambda i=idx: _move_row(rows, i, -1, refresh_fn),
+                    ).props("flat dense size=sm")
+                if idx < len(rows) - 1:
+                    ui.button(
+                        icon="sym_r_arrow_downward",
+                        on_click=lambda i=idx: _move_row(rows, i, +1, refresh_fn),
+                    ).props("flat dense size=sm")
                 ui.button(
-                    icon="arrow_upward", on_click=lambda i=idx: _move_row(rows, i, -1, refresh_fn)
-                ).props("flat dense size=sm")
-            if idx < len(rows) - 1:
-                ui.button(
-                    icon="arrow_downward", on_click=lambda i=idx: _move_row(rows, i, +1, refresh_fn)
-                ).props("flat dense size=sm")
-            ui.button(icon="delete", on_click=lambda i=idx: _remove_row(rows, i, refresh_fn)).props(
-                "flat dense size=sm color=negative"
-            )
+                    icon="sym_r_delete", on_click=lambda i=idx: _remove_row(rows, i, refresh_fn)
+                ).props("flat dense size=sm color=negative")
 
 
 def _fmt_amount(amount: float) -> str:
@@ -901,7 +1001,6 @@ def _fmt_amount(amount: float) -> str:
 
 
 async def _open_substitute_for_row(row: _IngRow, session, user_id: int, refresh_fn) -> None:
-    """Open the substitute dialog for a discontinued ingredient row."""
     from pyplus.services.categories import parse_categories
     from pyplus.ui.components.substitutes import show_substitute_dialog
 
@@ -961,15 +1060,17 @@ def _render_ingredient_row(
     if row.flexible:
         _render_flexible_row(row, idx, rows, refresh_fn)
         return
-    with ui.element("div").style(
-        "display:flex;flex-direction:column;gap:.5rem;"
-        "padding:.625rem .75rem;border:1px solid var(--c-border);"
-        "border-radius:var(--r-md);margin-bottom:.5rem;"
-        "background:var(--c-surface)"
+    with (
+        ui.element("div")
+        .classes("sp-ing-row")
+        .style(
+            "padding:.625rem .75rem;border:1px solid var(--c-border);"
+            "border-radius:var(--r-md);margin-bottom:.5rem;"
+            "background:var(--c-surface)"
+        )
     ):
-        # Top row: [image] [name/search] [amount] [unit] [up/down/relink/delete]
-        with ui.element("div").style("display:flex;align-items:center;gap:.5rem"):
-            # Product image / placeholder
+        # Top row: [image] [name/search] — always on first line
+        with ui.element("div").style("display:flex;align-items:center;gap:.5rem;min-width:0"):
             if row.image_url and not row.relinking:
                 ui.image(row.image_url).style(
                     "width:40px;height:40px;border-radius:var(--r-sm);"
@@ -981,73 +1082,21 @@ def _render_ingredient_row(
                     "background:var(--c-border);flex-shrink:0"
                 )
 
-            # Name display / relink search
             if row.relinking or not row.sku:
-                # Search field. The input is rendered once and kept alive; only
-                # the results box below it is cleared/redrawn per keystroke, so
-                # the field never loses focus while typing.
-                with ui.element("div").style("flex:1;position:relative"):
-                    search_field = (
-                        ui.input(
-                            placeholder=t("dishes.ingredient_search"),
-                            value=row.search_query,
-                        )
-                        .props("outlined dense clearable autofocus")
-                        .style("width:100%")
+                search_field = (
+                    ui.input(
+                        placeholder=t("dishes.ingredient_search"),
+                        value=row.search_query,
                     )
-                    results_box = ui.element("div").style(
-                        "position:absolute;top:42px;left:0;right:0;z-index:999"
-                    )
-
-                    def _draw_results(r=row, box=results_box):
-                        box.clear()
-                        with box:
-                            if r.searching:
-                                with ui.element("div").style(
-                                    "background:white;border:1px solid var(--c-border);"
-                                    "border-radius:var(--r-md);box-shadow:var(--shadow-md)"
-                                ):
-                                    ui.label("Zoeken…").style(
-                                        "padding:.5rem .75rem;font-size:12px;color:var(--c-text-3)"
-                                    )
-                            elif r.search_results:
-                                with ui.element("div").style(
-                                    "background:white;border:1px solid var(--c-border);"
-                                    "border-radius:var(--r-md);box-shadow:var(--shadow-md);"
-                                    "max-height:200px;overflow-y:auto"
-                                ):
-                                    for prod in r.search_results[:8]:
-                                        _render_search_result(prod, r, session, user_id, refresh_fn)
-
-                    async def _on_search(e, r=row, field=search_field):
-                        # update:model-value events don't carry `.value` in this
-                        # NiceGUI version — read the synced field value instead.
-                        r.search_query = (e.value if hasattr(e, "value") else field.value) or ""
-                        if len(r.search_query.strip()) >= 2:
-                            r.searching = True
-                            _draw_results()
-                            try:
-                                from pyplus.services.search import search_products
-
-                                r.search_results = await search_products(session, r.search_query)
-                            except Exception:
-                                r.search_results = []
-                            r.searching = False
-                        else:
-                            r.search_results = []
-                        _draw_results()
-
-                    search_field.on("update:model-value", _on_search)
-                    _draw_results()
+                    .props("outlined dense clearable autofocus")
+                    .style("flex:1;min-width:0")
+                )
             else:
-                # Pinned product display
                 with ui.element("div").style("flex:1;min-width:0;overflow:hidden"):
                     ui.label(row.display_name).style(
                         "font-size:13px;font-weight:500;overflow:hidden;"
                         "text-overflow:ellipsis;white-space:nowrap"
                     )
-                    # Product pack unit, e.g. "Per 400 ml" — shown for every
-                    # SKU-bound ingredient, like the staples and cart lanes do.
                     unit_text = row.subtitle or (
                         f"Per {row.pack_size:g} {row.pack_unit}"
                         if row.pack_size and row.pack_unit
@@ -1064,28 +1113,74 @@ def _render_ingredient_row(
                         ):
                             ui.label(t("status.discontinued")).classes(
                                 "sp-badge sp-badge-unavailable"
-                            ).style("font-size:10px;display:inline-block").tooltip(
-                                "Nu niet verkrijgbaar — kan later terugkomen"
-                            )
+                            ).style("font-size:10px;display:inline-block")
 
                             async def _open_sub(r=row):
                                 await _open_substitute_for_row(r, session, user_id, refresh_fn)
 
                             ui.button(
                                 t("substitute.replace_btn"),
-                                icon="find_replace",
+                                icon="sym_r_find_replace",
                                 on_click=_open_sub,
                             ).props("flat dense no-caps size=sm color=primary")
 
-            # Amount input
+        # Inline results — rendered as a column sibling so they never clip on mobile
+        if row.relinking or not row.sku:
+            results_box = ui.element("div").style("min-width:0")
+
+            def _draw_results(r=row, box=results_box):
+                box.clear()
+                with box:
+                    if r.searching:
+                        with ui.element("div").style(
+                            "background:var(--c-surface);border:1px solid var(--c-border);"
+                            "border-radius:var(--r-md);padding:.5rem .75rem"
+                        ):
+                            ui.label("Zoeken…").style(
+                                "font-size:12px;color:var(--c-text-3)"
+                            )
+                    elif r.search_results:
+                        with ui.element("div").style(
+                            "background:var(--c-surface);border:1px solid var(--c-border);"
+                            "border-radius:var(--r-md);box-shadow:var(--shadow-md);"
+                            "max-height:50vh;overflow-y:auto"
+                        ):
+                            for prod in r.search_results[:8]:
+                                _render_search_result(prod, r, session, user_id, refresh_fn)
+
+            async def _on_search(e, r=row, field=search_field):
+                r.search_query = (e.value if hasattr(e, "value") else field.value) or ""
+                if len(r.search_query.strip()) >= 2:
+                    r.searching = True
+                    _draw_results()
+                    try:
+                        from pyplus.services.search import search_products
+
+                        r.search_results = await search_products(session, r.search_query)
+                    except Exception:
+                        r.search_results = []
+                    r.searching = False
+                else:
+                    r.search_results = []
+                _draw_results()
+
+            search_field.on("update:model-value", _on_search)
+            _draw_results()
+
+        # Controls row: [amount] [unit] [optional] [buttons]
+        with (
+            ui.element("div")
+            .classes("sp-ing-controls")
+            .style("display:flex;align-items:center;gap:.375rem;flex-wrap:wrap")
+        ):
             amount_str = [str(int(row.amount) if row.amount == int(row.amount) else row.amount)]
             amount_input = (
                 ui.input(value=amount_str[0])
                 .props("outlined dense")
-                .style("width:60px;flex-shrink:0")
+                .style("width:56px;flex-shrink:0")
             )
 
-            def _amount_change(e, r=row, a=amount_str):
+            def _amount_change(e, r=row):
                 try:
                     r.amount = float(e.value.replace(",", "."))
                 except (ValueError, AttributeError):
@@ -1094,54 +1189,10 @@ def _render_ingredient_row(
             amount_input.on("blur", _amount_change)
             amount_input.on("keydown.enter", _amount_change)
 
-            # Unit — static. It is fixed by the linked product (its pack), so it
-            # is shown read-only rather than as an editable select.
             ui.label(row.amount_unit or "").style(
-                "font-size:12px;color:var(--c-text-3);flex-shrink:0;min-width:34px;text-align:left"
+                "font-size:12px;color:var(--c-text-3);flex-shrink:0;min-width:34px"
             )
 
-            # Control buttons
-            with ui.element("div").style("display:flex;gap:2px;flex-shrink:0"):
-                # Move up
-                if idx > 0:
-                    ui.button(
-                        icon="arrow_upward",
-                        on_click=lambda i=idx: _move_row(rows, i, -1, refresh_fn),
-                    ).props("flat dense size=sm")
-                else:
-                    ui.element("div").style("width:28px")
-
-                # Move down
-                if idx < len(rows) - 1:
-                    ui.button(
-                        icon="arrow_downward",
-                        on_click=lambda i=idx: _move_row(rows, i, +1, refresh_fn),
-                    ).props("flat dense size=sm")
-                else:
-                    ui.element("div").style("width:28px")
-
-                # Relink
-                if row.sku and not row.relinking:
-                    ui.button(
-                        icon="edit",
-                        on_click=lambda r=row: (
-                            setattr(r, "relinking", True),
-                            setattr(r, "search_results", []),
-                            refresh_fn.refresh(),
-                        ),
-                    ).props("flat dense size=sm color=primary").tooltip(t("dishes.relink"))
-
-                # Delete
-                ui.button(
-                    icon="delete",
-                    on_click=lambda i=idx: _remove_row(rows, i, refresh_fn),
-                ).props("flat dense size=sm color=negative")
-
-        # Second line: a clearly-labelled optional toggle (the previous bare
-        # checkbox was easy to miss).
-        with ui.element("div").style(
-            "display:flex;align-items:center;gap:.375rem;padding-left:48px"
-        ):
             opt_check = ui.checkbox(t("dishes.optional"), value=row.optional).props("dense")
             opt_check.tooltip(t("dishes.optional_hint"))
             opt_check.on(
@@ -1149,10 +1200,36 @@ def _render_ingredient_row(
                 lambda e, r=row: setattr(r, "optional", bool(e.value)),
             )
 
+            with ui.element("div").style("display:flex;gap:2px;flex-shrink:0;margin-left:auto"):
+                if idx > 0:
+                    ui.button(
+                        icon="sym_r_arrow_upward",
+                        on_click=lambda i=idx: _move_row(rows, i, -1, refresh_fn),
+                    ).props("flat dense size=sm")
+
+                if idx < len(rows) - 1:
+                    ui.button(
+                        icon="sym_r_arrow_downward",
+                        on_click=lambda i=idx: _move_row(rows, i, +1, refresh_fn),
+                    ).props("flat dense size=sm")
+
+                if row.sku and not row.relinking:
+                    ui.button(
+                        icon="sym_r_edit",
+                        on_click=lambda r=row: (
+                            setattr(r, "relinking", True),
+                            setattr(r, "search_results", []),
+                            refresh_fn.refresh(),
+                        ),
+                    ).props("flat dense size=sm color=primary").tooltip(t("dishes.relink"))
+
+                ui.button(
+                    icon="sym_r_delete",
+                    on_click=lambda i=idx: _remove_row(rows, i, refresh_fn),
+                ).props("flat dense size=sm color=negative")
+
 
 def _render_search_result(prod, row: _IngRow, session, user_id: int, refresh_fn) -> None:
-    """One row in the ingredient-search dropdown; clicking it links the SKU."""
-
     async def _pick(p=prod, r=row):
         r.sku = p.sku
         r.display_name = p.name
@@ -1162,7 +1239,6 @@ def _render_search_result(prod, row: _IngRow, session, user_id: int, refresh_fn)
         r.discontinued = False
         r.search_query = ""
         r.search_results = []
-        # Infer unit from subtitle
         from pyplus.services.dishes import _parse_pack_from_subtitle
 
         pack_size, pack_unit = _parse_pack_from_subtitle(p.subtitle)
@@ -1170,7 +1246,6 @@ def _render_search_result(prod, row: _IngRow, session, user_id: int, refresh_fn)
             r.amount_unit = pack_unit
         r.pack_size = pack_size
         r.pack_unit = pack_unit
-        # Cache to ingredient_skus
         from pyplus.services.dishes import cache_ingredient_sku_from_product
 
         async with AsyncSessionLocal() as db:
@@ -1228,7 +1303,7 @@ async def _save_dish(
     meta: dict,
     rows: list[_IngRow],
     dlg,
-    refresh_fn,
+    reload_fn,
 ) -> None:
     name = name.strip()
     if not name:
@@ -1239,7 +1314,6 @@ async def _save_dish(
 
     cooking_json = _json.dumps(meta.get("cooking_methods", []))
 
-    # Auto-infer starch if not set by user
     if not meta.get("starch_type"):
         inferred = _infer_starch_type(name, rows)
         if inferred:
@@ -1278,19 +1352,17 @@ async def _save_dish(
             ui.notify(t("status.error"), type="negative")
             return
 
-        # Sync ingredients: delete all then re-insert in order
         existing = await repo.get_ingredients(db, dish.id)
         for ing in existing:
             await db.delete(ing)
         await db.flush()
 
         for i, row in enumerate(rows):
-            # Keep product-bound rows (have a sku) and flexible rows (have a label).
             if row.flexible:
                 if not (row.display_name or "").strip():
-                    continue  # empty flexible placeholder — drop it
+                    continue
             elif not row.sku:
-                continue  # unbound product row — drop it
+                continue
             await repo.add_ingredient(
                 db,
                 dish.id,
@@ -1309,4 +1381,4 @@ async def _save_dish(
 
     ui.notify("Gerecht opgeslagen", type="positive", timeout=2000)
     dlg.close()
-    await refresh_fn.refresh()
+    await reload_fn()

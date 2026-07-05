@@ -24,13 +24,12 @@ def stepper_button(symbol: str, *, aria_label: str, on_click: Callable, font_siz
         .on("click", on_click)
     )
     with btn:
-        ui.label(symbol).style(
-            f"font-size:{font_size};font-weight:700;line-height:1;pointer-events:none"
-        )
+        icon_name = "sym_r_remove" if symbol == "−" else "sym_r_add"
+        ui.icon(icon_name, size="16px").style("pointer-events:none")
     return btn
 
 
-def add_button(*, aria_label: str, on_click: Callable, font_size: str = "18px"):
+def add_button(*, aria_label: str, on_click: Callable, font_size: str = "20px"):
     """The round green "+" add-to-cart button. `on_click` is the click handler."""
     btn = (
         ui.element("button")
@@ -39,8 +38,5 @@ def add_button(*, aria_label: str, on_click: Callable, font_size: str = "18px"):
         .on("click", on_click)
     )
     with btn:
-        ui.label("+").style(
-            f"font-size:{font_size};font-weight:700;color:var(--c-brand-dark);"
-            "line-height:1;pointer-events:none"
-        )
+        ui.icon("sym_r_add", size=font_size).style("pointer-events:none")
     return btn

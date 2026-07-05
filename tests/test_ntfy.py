@@ -76,12 +76,12 @@ def test_message_no_truncation_at_exact_max():
 
 def test_message_deep_link_included():
     msg = _build_ntfy_message([_promo("Kaas", "kaas")], base_url="http://localhost:8080")
-    assert "http://localhost:8080/cockpit" in msg
+    assert "http://localhost:8080/weekmenu" in msg
 
 
 def test_message_no_deep_link_when_base_url_empty():
     msg = _build_ntfy_message([_promo("Kaas", "kaas")], base_url="")
-    assert "cockpit" not in msg
+    assert "weekmenu" not in msg
     assert "→" not in msg
 
 

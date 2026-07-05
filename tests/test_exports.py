@@ -143,7 +143,10 @@ async def test_ical_basic_structure():
     assert len(events) == 1
     ev = events[0]
     assert str(ev["summary"]) == "Pasta Bolognese"
-    assert ev["dtstart"].dt == datetime.date(2026, 6, 1)
+    import zoneinfo
+
+    ams = zoneinfo.ZoneInfo("Europe/Amsterdam")
+    assert ev["dtstart"].dt == datetime.datetime(2026, 6, 1, 17, 30, tzinfo=ams)
     assert "Verhit de saus" in str(ev.get("description", ""))
 
 
@@ -205,7 +208,7 @@ async def test_ical_lunch_prefix():
     events = [c for c in cal.walk() if c.name == "VEVENT"]
     assert len(events) == 1
     assert str(events[0]["summary"]) == "Extra: Soep"
-    # lunch2 → Tuesday
+    # lunch2 → Tuesday (all-day)
     assert events[0]["dtstart"].dt == datetime.date(2026, 6, 2)
 
 

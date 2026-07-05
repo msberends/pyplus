@@ -975,15 +975,18 @@ async def get_weekmenu_history(
 
 
 async def get_all_dish_ingredients_for_user(
-    db: AsyncSession, user_id: int
+    db: AsyncSession, user_id: int, *, include_archived: bool = False
 ) -> dict[int, list[DishIngredient]]:
-    """Single query: all ingredients for all non-archived dishes. Returns dish_id → list."""
-    result = await db.execute(
+    """Single query: all ingredients for a user's dishes. Returns dish_id → list."""
+    stmt = (
         select(DishIngredient)
         .join(Dish, Dish.id == DishIngredient.dish_id)
-        .where(Dish.user_id == user_id, Dish.archived == False)  # noqa: E712
+        .where(Dish.user_id == user_id)
         .order_by(DishIngredient.dish_id, DishIngredient.sort_order)
     )
+    if not include_archived:
+        stmt = stmt.where(Dish.archived == False)  # noqa: E712
+    result = await db.execute(stmt)
     by_dish: dict[int, list[DishIngredient]] = {}
     for ing in result.scalars().all():
         by_dish.setdefault(ing.dish_id, []).append(ing)
