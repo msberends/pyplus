@@ -35,6 +35,7 @@ class _DishCardData:
     unavail: int = 0
     unknown: int = 0
     discontinued: list = field(default_factory=list)
+    total_price: float = 0.0
 
 
 @dataclass
@@ -320,12 +321,19 @@ async def _load_page_data(state: _PageState, user_id: int, session, include_arch
                 ):
                     discontinued.append(ing.sku)
 
+        total_price = 0.0
+        for ing in non_optional:
+            cached_sku = sku_cache.get(ing.sku)
+            if cached_sku and cached_sku.last_price:
+                total_price += cached_sku.last_price
+
         dish_data[dish.id] = _DishCardData(
             ingredients=ings,
             avail=avail,
             unavail=unavail,
             unknown=unknown,
             discontinued=discontinued,
+            total_price=total_price,
         )
 
     state.dish_data = dish_data
@@ -481,7 +489,10 @@ def _render_dish_card(dish, data: _DishCardData | None, session, reload_fn) -> N
                         )
 
         with ui.element("div").style("display:flex;align-items:center;gap:.5rem;margin-top:4px"):
-            ui.label(f"{total} ingrediënt{'en' if total != 1 else ''}").style(
+            parts = [f"{total} ingrediënt{'en' if total != 1 else ''}"]
+            if d.total_price > 0:
+                parts.append(f"· ≈ €\xa0{d.total_price:.2f}".replace(".", ","))
+            ui.label(" ".join(parts)).style(
                 "font-size:11px;color:var(--c-text-4)"
             )
             if total > 0:
@@ -495,10 +506,6 @@ def _render_dish_card(dish, data: _DishCardData | None, session, reload_fn) -> N
                     ).style("font-size:10px")
                 elif d.unknown == total:
                     pass
-                else:
-                    ui.label(t("dishes.fully_available")).classes(
-                        "sp-badge sp-badge-available"
-                    ).style("font-size:10px")
 
 
 # ── CRUD helpers ───────────────────────────────────────────────────────────────
@@ -541,6 +548,7 @@ class _IngRow:
     sort_order: int
     flexible: bool = False
     subtitle: str = ""
+    price: float = 0.0
     discontinued: bool = False
     relinking: bool = False
     search_query: str = ""
@@ -614,6 +622,7 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
                         flexible=ing.flexible,
                         sort_order=ing.sort_order,
                         subtitle=cached.subtitle if cached else "",
+                        price=cached.last_price if cached and cached.last_price else 0.0,
                     )
                 )
             store = session.store_number or 0
@@ -723,7 +732,20 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
                     )
 
                 @ui.refreshable
+                def _total_price_label() -> None:
+                    total = sum(r.price for r in rows if r.price > 0 and not r.optional)
+                    if total > 0:
+                        ui.label(
+                            f"Totaal ongeveer €\xa0{total:.2f}".replace(".", ",")
+                        ).style(
+                            "font-size:11px;color:var(--c-text-4)"
+                        )
+
+                _total_price_label()
+
+                @ui.refreshable
                 def _ingredient_list() -> None:
+                    _total_price_label.refresh()
                     if not rows:
                         ui.label("Nog geen ingrediënten.").style(
                             "font-size:13px;color:var(--c-text-4);padding:.5rem 0"
@@ -1011,12 +1033,15 @@ async def _open_substitute_for_row(row: _IngRow, session, user_id: int, refresh_
     async with AsyncSessionLocal() as db:
         pc = await repo.get_product_cache_by_skus(db, session.store_number or 0, [row.sku])
         cached_sku = await repo.get_ingredient_sku(db, user_id, row.sku)
+    subtitle = row.subtitle
     if row.sku in pc:
         cats = parse_categories(pc[row.sku].categories_json)
         price = pc[row.sku].price or 0.0
         brand = pc[row.sku].brand or ""
+        subtitle = subtitle or pc[row.sku].subtitle or ""
     elif cached_sku:
         price = cached_sku.last_price or 0.0
+        subtitle = subtitle or cached_sku.subtitle or ""
 
     def _on_pick(product):
         from pyplus.services.dishes import _parse_pack_from_subtitle
@@ -1025,6 +1050,7 @@ async def _open_substitute_for_row(row: _IngRow, session, user_id: int, refresh_
         row.display_name = product.name
         row.image_url = product.image_url
         row.subtitle = product.subtitle or ""
+        row.price = product.price or 0.0
         row.discontinued = False
         pack_size, pack_unit = _parse_pack_from_subtitle(product.subtitle)
         if pack_unit and row.amount_unit == "stuks":
@@ -1046,6 +1072,7 @@ async def _open_substitute_for_row(row: _IngRow, session, user_id: int, refresh_
         sku=row.sku,
         product_name=row.display_name,
         product_image=row.image_url,
+        product_subtitle=subtitle,
         categories=cats,
         price=price,
         brand=brand,
@@ -1102,27 +1129,34 @@ def _render_ingredient_row(
                         if row.pack_size and row.pack_unit
                         else ""
                     )
+                    sub_parts: list[str] = []
                     if unit_text:
-                        ui.label(unit_text).style(
+                        sub_parts.append(unit_text)
+                    if row.price > 0:
+                        sub_parts.append(
+                            f"€\xa0{row.price:.2f}".replace(".", ",")
+                        )
+                    if sub_parts:
+                        ui.label(" · ".join(sub_parts)).style(
                             "font-size:11px;color:var(--c-text-3);overflow:hidden;"
                             "text-overflow:ellipsis;white-space:nowrap"
                         )
-                    if row.discontinued:
-                        with ui.element("div").style(
-                            "display:flex;align-items:center;gap:.375rem;margin-top:1px"
-                        ):
+                    with ui.element("div").style(
+                        "display:flex;align-items:center;gap:.375rem;margin-top:1px"
+                    ):
+                        if row.discontinued:
                             ui.label(t("status.discontinued")).classes(
                                 "sp-badge sp-badge-unavailable"
                             ).style("font-size:10px;display:inline-block")
 
-                            async def _open_sub(r=row):
-                                await _open_substitute_for_row(r, session, user_id, refresh_fn)
+                        async def _open_sub(r=row):
+                            await _open_substitute_for_row(r, session, user_id, refresh_fn)
 
-                            ui.button(
-                                t("substitute.replace_btn"),
-                                icon="sym_r_find_replace",
-                                on_click=_open_sub,
-                            ).props("flat dense no-caps size=sm color=primary")
+                        ui.button(
+                            t("substitute.replace_btn"),
+                            icon="sym_r_find_replace",
+                            on_click=_open_sub,
+                        ).props("flat dense no-caps size=sm color=primary")
 
         # Inline results — rendered as a column sibling so they never clip on mobile
         if row.relinking or not row.sku:
@@ -1235,6 +1269,7 @@ def _render_search_result(prod, row: _IngRow, session, user_id: int, refresh_fn)
         r.display_name = p.name
         r.image_url = p.image_url
         r.subtitle = p.subtitle or ""
+        r.price = p.price or 0.0
         r.relinking = False
         r.discontinued = False
         r.search_query = ""
@@ -1273,8 +1308,15 @@ def _render_search_result(prod, row: _IngRow, session, user_id: int, refresh_fn)
                 "font-size:13px;font-weight:500;overflow:hidden;"
                 "text-overflow:ellipsis;white-space:nowrap"
             )
-            if prod.subtitle:
-                ui.label(prod.subtitle).style("font-size:11px;color:var(--c-text-3)")
+            with ui.element("div").style(
+                "display:flex;align-items:center;gap:.375rem"
+            ):
+                if prod.subtitle:
+                    ui.label(prod.subtitle).style("font-size:11px;color:var(--c-text-3)")
+                if prod.price > 0:
+                    ui.label(f"€\xa0{prod.price:.2f}".replace(".", ",")).style(
+                        "font-size:11px;font-weight:600;color:var(--c-text-2)"
+                    )
         ui.element("div").style(
             f"width:6px;height:6px;border-radius:50%;background:{avail_color};flex-shrink:0"
         )

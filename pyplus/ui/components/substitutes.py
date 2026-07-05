@@ -26,6 +26,41 @@ _REASON_LABELS = {
 
 _DEBOUNCE = 0.3
 
+_NORM_UNITS = {"g": ("kg", 1000), "ml": ("l", 1000), "cl": ("l", 100)}
+
+
+def _unit_price_label(price: float, subtitle: str) -> str:
+    """Compute comparable unit price from price and subtitle, e.g. '€ 0,79 / 100 g'."""
+    if price <= 0 or not subtitle:
+        return ""
+    from pyplus.services.dishes import _parse_pack_from_subtitle
+
+    size, unit = _parse_pack_from_subtitle(subtitle)
+    if not size or not unit or size <= 0:
+        return ""
+    if unit in ("stuks", "stuk"):
+        if size == 1:
+            return ""
+        per_piece = price / size
+        return f"€\xa0{per_piece:.2f} / stuk".replace(".", ",")
+    norm_unit, factor = _NORM_UNITS.get(unit, (unit, 1))
+    size_in_norm = size / factor
+    per_norm = price / size_in_norm if size_in_norm > 0 else 0
+    if norm_unit == "kg" and per_norm > 20:
+        per_100 = price / (size / 100) if unit == "g" else price / (size * 10) if unit == "kg" else 0
+        if per_100 > 0:
+            return f"€\xa0{per_100:.2f} / 100 g".replace(".", ",")
+    if norm_unit == "l" and per_norm > 10:
+        if unit == "ml":
+            per_100 = price / (size / 100)
+        elif unit == "cl":
+            per_100 = price / (size / 10)
+        else:
+            per_100 = 0
+        if per_100 > 0:
+            return f"€\xa0{per_100:.2f} / 100 ml".replace(".", ",")
+    return f"€\xa0{per_norm:.2f} / {norm_unit}".replace(".", ",")
+
 
 def show_substitute_dialog(
     session,
@@ -33,6 +68,7 @@ def show_substitute_dialog(
     sku: str,
     product_name: str,
     product_image: str = "",
+    product_subtitle: str = "",
     categories: list[str] | None = None,
     price: float = 0.0,
     brand: str = "",
@@ -79,11 +115,20 @@ def show_substitute_dialog(
                         "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
                     )
                     with ui.element("div").style(
-                        "display:flex;align-items:center;gap:.375rem;margin-top:2px"
+                        "display:flex;align-items:center;gap:.375rem;margin-top:2px;flex-wrap:wrap"
                     ):
+                        if product_subtitle:
+                            ui.label(product_subtitle).style(
+                                "font-size:11px;color:var(--c-text-3)"
+                            )
                         if price > 0:
                             ui.label(f"€\xa0{price:.2f}".replace(".", ",")).style(
                                 "font-size:12px;color:var(--c-text-3)"
+                            )
+                        orig_unit = _unit_price_label(price, product_subtitle)
+                        if orig_unit:
+                            ui.label(orig_unit).style(
+                                "font-size:11px;color:var(--c-text-4)"
                             )
                         ui.label(t("status.unavailable")).style(
                             "font-size:11px;color:var(--c-danger);font-weight:600"
@@ -232,13 +277,18 @@ def _render_candidate_row(
                 "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
             )
             with ui.element("div").style(
-                "display:flex;align-items:center;gap:.375rem;margin-top:1px"
+                "display:flex;align-items:center;gap:.375rem;margin-top:1px;flex-wrap:wrap"
             ):
                 if product.subtitle:
                     ui.label(product.subtitle).style("font-size:11px;color:var(--c-text-3)")
                 ui.label(f"€\xa0{product.price:.2f}".replace(".", ",")).style(
                     "font-size:12px;font-weight:600;color:var(--c-text-2)"
                 )
+                cand_unit = _unit_price_label(product.price, product.subtitle)
+                if cand_unit:
+                    ui.label(cand_unit).style(
+                        "font-size:11px;color:var(--c-text-4)"
+                    )
             ui.label(t(reason_key)).style("font-size:10px;color:var(--c-text-4);font-style:italic")
 
         def _pick(p=product) -> None:

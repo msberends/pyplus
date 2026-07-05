@@ -145,11 +145,23 @@ async def find_substitutes(
 
         name_rows = []
         if len(cat_rows) < limit:
-            keywords = " ".join(sorted(source_tokens)[:3])
+            search_tokens = source_tokens - _tokenize_name(brand) if brand else source_tokens
+            if not search_tokens:
+                search_tokens = source_tokens
+            keywords = " ".join(sorted(search_tokens)[:3])
             if keywords:
                 name_rows = await repo.search_product_cache(
                     db, store_number, keywords, limit=limit * 2
                 )
+            if len(cat_rows) + len(name_rows) < limit and len(source_tokens) > 1:
+                for token in sorted(source_tokens, key=len, reverse=True)[:2]:
+                    if len(token) >= 4:
+                        extra = await repo.search_product_cache(
+                            db, store_number, token, limit=limit * 2
+                        )
+                        name_rows.extend(extra)
+                        if len(cat_rows) + len(name_rows) >= limit:
+                            break
 
         bought_skus: set[str] = set()
         if user_id is not None and settings.sub_prefer_bought:
