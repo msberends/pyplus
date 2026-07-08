@@ -1758,14 +1758,17 @@ class PlusClient:
         # Load cached apiVersions — only fills fields not already captured above
         version_cache.apply_to_session(self._session)
 
-        # Give pending _parse_cart_response futures a chance to complete.
-        # We do not await _cart_parse_task explicitly — it may block indefinitely
-        # if Playwright can't read the response body.  get_cart_api() will use
-        # _primed_cart opportunistically if it's ready, or fall back to a fresh
-        # fetch (which now works because cart_get_api_version was just captured).
-        await asyncio.sleep(0)
+        # Await the cart parse task so checkout_version is populated before
+        # get_cart_api() checks it.  Without this, checkout_version stays at 0
+        # and get_cart_api() discards the perfectly good primed cart, which can
+        # cascade into a login-loop on the auto-login path.
+        if self._cart_parse_task and not self._cart_parse_task.done():
+            try:
+                await asyncio.wait_for(self._cart_parse_task, timeout=5.0)
+            except Exception:
+                pass
         _log.info(
-            "get_session_state — asyncio.sleep(0) done; primed_cart=%s",
+            "get_session_state — cart_parse_task afgewacht; primed_cart=%s",
             self._primed_cart is not None,
         )
 

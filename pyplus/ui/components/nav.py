@@ -11,6 +11,7 @@ _NAV_ITEMS = [
     ("sym_r_sell", "/promos", t("nav.promos"), t("nav.short.promos")),
     ("sym_r_shopping_basket", "/staples", t("nav.staples"), t("nav.short.staples")),
     ("sym_r_shopping_cart", "/cart", t("nav.cart"), t("nav.short.cart")),
+    ("sym_r_robot_2", "/autopilot", t("nav.autopilot"), t("nav.short.autopilot")),
     ("sym_r_skillet", "/dishes", t("nav.dishes"), t("nav.short.dishes")),
     ("sym_r_settings", "/settings", t("nav.settings"), t("nav.short.settings")),
 ]
@@ -33,7 +34,12 @@ def create_nav_rail(active: str = "weekmenu", user_display_name: str = "", sessi
         for icon, path, label, short_label in _NAV_ITEMS:
             page_slug = path.lstrip("/")
             is_active = active == page_slug
-            classes = "sp-nav-btn" + (" active" if is_active else "")
+            cls = "sp-nav-btn"
+            if page_slug == "autopilot":
+                cls += " sp-nav-btn--autopilot"
+            if is_active:
+                cls += " active"
+            classes = cls
             with (
                 ui.element("a")
                 .props(f'href="{path}" title="{short_label.replace(chr(10), " ")}"')

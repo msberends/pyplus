@@ -125,7 +125,7 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
                 url = item.image_url or image_by_sku.get(item.sku, "")
                 if url:
                     with holder:
-                        ui.image(thumbnail_url(url, 44)).style(
+                        ui.image(thumbnail_url(url, 44, fit="pad")).style(
                             "width:100%;height:100%;object-fit:contain;border-radius:inherit"
                         ).props(f'alt="{_alt(item.product)}"')
 

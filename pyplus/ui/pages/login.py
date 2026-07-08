@@ -16,6 +16,10 @@ log = logging.getLogger(__name__)
 _MAX_CONCURRENT_LOGINS = 2
 _login_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_LOGINS)
 
+# Tracks user IDs currently being auto-logged in, so reconnect-driven page
+# reloads don't pile up duplicate Playwright sessions.
+_auto_login_in_progress: set[int] = set()
+
 
 def _mask_email(email: str) -> str:
     """Mask an email for logs: 'm***@umcg.nl'. Never log the full local part."""
@@ -34,13 +38,20 @@ async def create_login_page() -> None:
     and auto-logs in when possible; otherwise shows the login form.
     """
     user_id = app.storage.user.get("user_id")
+    auto_login_failed = app.storage.browser.pop("_auto_login_failed", False)
 
     # Reuse a still-warm server-side session (e.g. same user, second tab)
-    if user_id:
+    if user_id and not auto_login_failed:
         from pyplus.session import manager
 
         if manager.get(user_id):
             ui.navigate.to("/weekmenu")
+            return
+
+        # Another tab/reconnect already started auto-login for this user —
+        # show a waiting screen instead of spawning a second Playwright browser.
+        if user_id in _auto_login_in_progress:
+            _render_auto_login_waiting(user_id)
             return
 
         # Try remember-me auto-login
@@ -65,7 +76,40 @@ async def create_login_page() -> None:
 # ── Auto-login variant (remember-me) ──────────────────────────────────────────
 
 
+def _render_auto_login_waiting(user_id: int) -> None:
+    """Show a waiting screen when auto-login is already in progress on another connection."""
+    with ui.element("div").classes("sp-login-bg"):
+        with ui.element("div").classes("sp-login-card"):
+            with ui.element("div").classes("sp-login-logo-wrap"):
+                with (
+                    ui.element("div")
+                    .classes("sp-login-logo-mark")
+                    .style("display:flex;align-items:center;justify-content:center")
+                ):
+                    ui.icon("sym_r_storefront", size="22px").style("color:white")
+                ui.label("PyPLUS").classes("sp-login-logo-name")
+
+            ui.label("Even geduld…").classes("sp-login-heading")
+            ui.label("Automatisch inloggen is al bezig.").classes("sp-login-subheading")
+
+            with ui.column().classes("sp-login-progress").style("gap:.45rem"):
+                ui.label(t("login.progress_logging_in")).classes("sp-login-progress-label")
+                ui.linear_progress(value=None, size="3px", color="primary").props("indeterminate")
+
+    async def _poll():
+        from pyplus.session import manager
+
+        if manager.get(user_id):
+            ui.navigate.to("/weekmenu")
+        elif user_id not in _auto_login_in_progress:
+            ui.navigate.to("/login")
+
+    ui.timer(1.0, _poll)
+
+
 def _render_auto_login(email: str, password: str, name: str, user_id: int) -> None:
+    _auto_login_in_progress.add(user_id)
+
     with ui.element("div").classes("sp-login-bg"):
         with ui.element("div").classes("sp-login-card"):
             with ui.element("div").classes("sp-login-logo-wrap"):
@@ -89,17 +133,21 @@ def _render_auto_login(email: str, password: str, name: str, user_id: int) -> No
                 ui.linear_progress(value=None, size="3px", color="primary").props("indeterminate")
 
     async def _run():
-        await _do_login_core(
-            email=email,
-            password=password,
-            remember=True,
-            on_progress=lambda msg: progress_label.set_text(msg),
-            on_error=lambda _: (
-                app.storage.user.clear(),
-                ui.navigate.to("/login"),
-            ),
-            on_success=lambda: ui.navigate.to("/weekmenu"),
-        )
+        try:
+            await _do_login_core(
+                email=email,
+                password=password,
+                remember=True,
+                on_progress=lambda msg: progress_label.set_text(msg),
+                on_error=lambda _: (
+                    app.storage.user.clear(),
+                    app.storage.browser.update({"_auto_login_failed": True}),
+                    ui.navigate.to("/login"),
+                ),
+                on_success=lambda: ui.navigate.to("/weekmenu"),
+            )
+        finally:
+            _auto_login_in_progress.discard(user_id)
 
     ui.timer(0.1, _run, once=True)
 

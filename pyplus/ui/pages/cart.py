@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import logging
 
 from nicegui import app, ui
@@ -28,6 +29,9 @@ async def create_cart_page() -> None:
         create_nav_rail(active="cart", session=session)
 
         with ui.element("div").classes("sp-page-content"):
+            # Autopilot rollback banner
+            await _maybe_show_autopilot_banner(user_id, session)
+
             with ui.element("div").classes("sp-cart-two-col"):
                 # Left: cart panel (PLUS category grouping, origin chips per row)
                 with ui.element("div").classes("sp-cart-two-col__main"):
@@ -58,3 +62,48 @@ async def create_cart_page() -> None:
                         create_search_lane(session)
                     except Exception as exc:
                         log.error("Search lane crashed: %s", exc)
+
+
+async def _maybe_show_autopilot_banner(user_id: int, session) -> None:
+    has_autopilot = any(it.source and "autopilot:" in it.source for it in session.cart.items)
+    if not has_autopilot:
+        return
+
+    from pyplus.db import repo
+    from pyplus.db.engine import AsyncSessionLocal
+    from pyplus.i18n import t
+
+    today = datetime.date.today()
+    week_start = today - datetime.timedelta(days=today.weekday())
+    async with AsyncSessionLocal() as db:
+        plan = await repo.get_autopilot_plan(db, user_id, week_start)
+
+    if plan is None or plan.status != "confirmed" or not plan.cart_snapshot_json:
+        return
+
+    import json
+
+    snapshot = json.loads(plan.cart_snapshot_json)
+
+    async def _rollback() -> None:
+        for entry in snapshot:
+            await session.cart_service.remove(entry["sku"], entry["qty"])
+        async with AsyncSessionLocal() as db:
+            await repo.update_autopilot_plan_status(db, plan.id, "rolled_back")
+        ui.notify(t("autopilot.rollback_confirm", n=len(snapshot)), type="info")
+        ui.navigate.to("/cart")
+
+    with ui.element("div").style(
+        "display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;"
+        "background:#eee8f5;border:1px solid #d5cef0;"
+        "border-radius:var(--r-lg);margin-bottom:.5rem"
+    ):
+        ui.icon("sym_r_robot_2", size="18px").style("color:var(--c-accent)")
+        ui.label(f"Autopilot heeft {len(snapshot)} producten toegevoegd").style(
+            "font-size:12px;color:var(--c-text-2);flex:1"
+        )
+        ui.button(
+            t("autopilot.rollback"),
+            icon="sym_r_undo",
+            on_click=_rollback,
+        ).props("flat color=negative size=sm dense")

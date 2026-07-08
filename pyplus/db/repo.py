@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from pyplus.db.models import (
+    AutopilotPlan,
     Credentials,
     Dish,
     DishIngredient,
@@ -166,6 +167,8 @@ async def create_dish(
     starch_type: str | None = None,
     cooking_methods: str = "[]",
     is_cold: bool = False,
+    is_dinner: bool = True,
+    rating: float | None = None,
     veg_count: int | None = None,
 ) -> Dish:
     dish = Dish(
@@ -177,6 +180,8 @@ async def create_dish(
         starch_type=starch_type,
         cooking_methods=cooking_methods,
         is_cold=is_cold,
+        is_dinner=is_dinner,
+        rating=rating,
         veg_count=veg_count,
         created_at=_utcnow(),
     )
@@ -443,6 +448,30 @@ async def add_fixed_product(
     await db.commit()
     await db.refresh(fp)
     return fp
+
+
+async def update_fixed_product(db: AsyncSession, user_id: int, sku: str, **kwargs: object) -> None:
+    result = await db.execute(
+        select(FixedProduct).where(FixedProduct.user_id == user_id, FixedProduct.sku == sku)
+    )
+    row = result.scalar_one_or_none()
+    if row:
+        for k, v in kwargs.items():
+            setattr(row, k, v)
+        await db.commit()
+
+
+async def replace_fixed_product_sku(
+    db: AsyncSession, user_id: int, old_sku: str, new_sku: str, new_name: str
+) -> None:
+    result = await db.execute(
+        select(FixedProduct).where(FixedProduct.user_id == user_id, FixedProduct.sku == old_sku)
+    )
+    row = result.scalar_one_or_none()
+    if row:
+        row.sku = new_sku
+        row.display_name = new_name
+        await db.commit()
 
 
 async def remove_fixed_product(db: AsyncSession, user_id: int, sku: str) -> None:
@@ -1133,3 +1162,99 @@ async def get_weather_range(
         )
     )
     return {row.date: row.temperature_max for row in result.scalars().all()}
+
+
+# ── Autopilot plans ──────────────────────────────────────────────────────────
+
+
+async def get_autopilot_plan(
+    db: AsyncSession,
+    user_id: int,
+    week_start: datetime.date,
+) -> AutopilotPlan | None:
+    result = await db.execute(
+        select(AutopilotPlan).where(
+            AutopilotPlan.user_id == user_id,
+            AutopilotPlan.week_start == week_start,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_latest_autopilot_plan(
+    db: AsyncSession,
+    user_id: int,
+) -> AutopilotPlan | None:
+    result = await db.execute(
+        select(AutopilotPlan)
+        .where(AutopilotPlan.user_id == user_id)
+        .order_by(AutopilotPlan.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def upsert_autopilot_plan(
+    db: AsyncSession,
+    user_id: int,
+    week_start: datetime.date,
+    plan_json: str,
+    status: str = "draft",
+) -> AutopilotPlan:
+    existing = await get_autopilot_plan(db, user_id, week_start)
+    if existing:
+        existing.plan_json = plan_json
+        existing.status = status
+        existing.created_at = _utcnow()
+        existing.confirmed_at = None
+        existing.cart_snapshot_json = None
+    else:
+        existing = AutopilotPlan(
+            user_id=user_id,
+            week_start=week_start,
+            plan_json=plan_json,
+            status=status,
+            created_at=_utcnow(),
+        )
+        db.add(existing)
+    await db.commit()
+    await db.refresh(existing)
+    return existing
+
+
+async def update_autopilot_plan_status(
+    db: AsyncSession,
+    plan_id: int,
+    status: str,
+    *,
+    cart_snapshot_json: str | None = None,
+) -> None:
+    result = await db.execute(select(AutopilotPlan).where(AutopilotPlan.id == plan_id))
+    plan = result.scalar_one_or_none()
+    if plan is None:
+        return
+    plan.status = status
+    if status == "confirmed":
+        plan.confirmed_at = _utcnow()
+    if cart_snapshot_json is not None:
+        plan.cart_snapshot_json = cart_snapshot_json
+    await db.commit()
+
+
+async def expire_old_autopilot_plans(
+    db: AsyncSession,
+    user_id: int,
+    before: datetime.date,
+) -> int:
+    result = await db.execute(
+        select(AutopilotPlan).where(
+            AutopilotPlan.user_id == user_id,
+            AutopilotPlan.status == "draft",
+            AutopilotPlan.week_start < before,
+        )
+    )
+    plans = result.scalars().all()
+    for p in plans:
+        p.status = "expired"
+    await db.commit()
+    return len(plans)

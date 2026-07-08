@@ -54,6 +54,8 @@ def _price_proximity(source_price: float, candidate_price: float) -> float:
 
 
 def _passes_price_filter(candidate_price: float, source_price: float, price_range: str) -> bool:
+    if source_price <= 0:
+        return True
     if price_range == "cheaper":
         return candidate_price < source_price
     if price_range == "similar":
@@ -80,20 +82,35 @@ def score_candidate(
     name_score = _name_similarity(source_name_tokens, cand_tokens) * settings.sub_weight_name
 
     brand_score = 0.0
-    if source_brand and candidate_product.brand.lower() == source_brand.lower():
-        brand_score = settings.sub_weight_brand
-        if settings.sub_prefer_same_brand:
-            brand_score *= 2.0
+    brand_max = 0.0
+    if source_brand:
+        brand_max = settings.sub_weight_brand * (2.0 if settings.sub_prefer_same_brand else 1.0)
+        if candidate_product.brand.lower() == source_brand.lower():
+            brand_score = brand_max
 
     price_score = (
         _price_proximity(source_price, candidate_product.price) * settings.sub_weight_price
     )
 
     bought_score = 0.0
-    if is_previously_bought and settings.sub_prefer_bought:
-        bought_score = settings.sub_weight_bought
+    bought_max = 0.0
+    if settings.sub_prefer_bought:
+        bought_max = settings.sub_weight_bought
+        if is_previously_bought:
+            bought_score = bought_max
 
-    return cat_score + name_score + brand_score + price_score + bought_score
+    raw = cat_score + name_score + brand_score + price_score + bought_score
+
+    # Normalize: express as fraction of the achievable max given available signals.
+    # When source has no categories, the category weight (highest!) contributes 0
+    # to both raw and max, so scores stay meaningful.
+    cat_max = settings.sub_weight_category if source_categories else 0.0
+    achievable_max = (
+        cat_max + settings.sub_weight_name + brand_max + settings.sub_weight_price + bought_max
+    )
+    if achievable_max <= 0:
+        return 0.0
+    return (raw / achievable_max) * 10.0
 
 
 def _primary_reason(

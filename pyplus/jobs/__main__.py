@@ -38,7 +38,7 @@ _PLUS_JOBS = {
     "full_preload",
     "weekly_ntfy",
 }
-_NO_CLIENT_JOBS = {"recompute_ml", "refresh_weather"}
+_NO_CLIENT_JOBS = {"recompute_ml", "refresh_weather", "autopilot_prepare"}
 _ALL_JOBS = _PLUS_JOBS | _NO_CLIENT_JOBS
 
 

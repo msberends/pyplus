@@ -81,6 +81,7 @@ class UserSettings(BaseModel):
     ml_variatie: float = 0.5  # category spread across the week
     ml_ingredient_overlap: float = 0.0  # shared ingredients across week (waste reduction)
     ml_budget: float = 0.0  # prefer cheaper dishes
+    ml_rating_weight: float = 1.0  # multiplier strength for dish star ratings
     ml_weather_no_oven: float = 0.0  # penalise oven/airfryer on hot days
     ml_weather_cold: float = 0.0  # boost cold dishes on hot days
 
@@ -96,8 +97,8 @@ class UserSettings(BaseModel):
     ml_history_window_weeks: int = 26
     ml_trend_decay_halflife: float = 8.0
     ml_exploration_rate: float = 0.0
-    ml_temperature: float = 1.0
-    ml_selection_method: str = "greedy"
+    ml_temperature: float = 0.5
+    ml_selection_method: str = "softmax"
     ml_confidence_threshold: float = 0.0
 
     # ── Autopilot extensions ───────────────────────────────────────────────
@@ -105,6 +106,16 @@ class UserSettings(BaseModel):
     ml_autopilot_lunch: bool = False
     ml_autopilot_max_dinner: int = 7
     ml_autopilot_max_lunch: int = 5
+    ml_autopilot_staples: bool = True
+    ml_autopilot_promos: bool = True
+    ml_autopilot_fillers: bool = True
+    autopilot_schedule_day: str = "za"
+    autopilot_schedule_hour: int = 9
+    autopilot_ntfy: bool = True
+    autopilot_clear_cart: bool = False
+    autopilot_auto_confirm: bool = False
+    sub_confidence_auto: float = 7.0
+    autopilot_sub_display: int = 5
 
     # ── Weather-aware planning ────────────────────────────────────────────────
     weather_enabled: bool = False

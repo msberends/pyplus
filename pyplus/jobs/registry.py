@@ -425,6 +425,7 @@ async def recompute_ml(*, user_id: int) -> None:
             "variatie": settings.ml_variatie,
             "ingredient_overlap": settings.ml_ingredient_overlap,
             "budget": settings.ml_budget,
+            "rating": settings.ml_rating_weight,
         }
 
         # ── Build purchase history ────────────────────────────────────────
@@ -781,6 +782,107 @@ async def refresh_weather(*, user_id: int) -> None:
         await _set_status(user_id, resource, "error", str(exc)[:500], duration_seconds=elapsed)
         log.error("[weather] user=%d FAILED: %s", user_id, exc)
         raise
+
+
+# ── Autopilot prepare ─────────────────────────────────────────────────────────
+
+
+async def autopilot_prepare(*, user_id: int, **_kwargs) -> None:
+    """Generate an autopilot shopping plan and send ntfy notification."""
+    resource = "autopilot_weekly"
+    if await _is_locked(user_id, resource):
+        return
+
+    from pyplus.db import repo
+    from pyplus.db.engine import AsyncSessionLocal
+    from pyplus.ml.interface import UserSettings
+
+    async with AsyncSessionLocal() as db:
+        state = await repo.get_sync_state(db, user_id, resource)
+    if state and state.last_status == "ok" and state.last_synced_at:
+        days_since = (
+            datetime.datetime.now(datetime.UTC).replace(tzinfo=None) - state.last_synced_at
+        ).total_seconds() / 86400
+        if days_since < 6:
+            log.info("[autopilot] user=%d already ran this week — skipping", user_id)
+            return
+
+    await _set_status(user_id, resource, "in_progress")
+    try:
+        async with AsyncSessionLocal() as db:
+            settings_json = await repo.get_user_settings_json(db, user_id)
+            user = await repo.get_user_by_id(db, user_id)
+        try:
+            settings = UserSettings.model_validate_json(settings_json)
+        except Exception:
+            settings = UserSettings()
+
+        if not settings.ml_autopilot:
+            log.info("[autopilot] user=%d autopilot not enabled — skipping", user_id)
+            await _set_status(user_id, resource, "ok", "disabled")
+            return
+
+        store_number = (user.store_number if user else 0) or 0
+
+        from pyplus.services.autopilot import prepare_plan
+
+        result = await prepare_plan(user_id, store_number=store_number)
+
+        today = datetime.date.today()
+        week_start = today - datetime.timedelta(days=today.weekday())
+
+        async with AsyncSessionLocal() as db:
+            await repo.upsert_autopilot_plan(
+                db,
+                user_id,
+                week_start,
+                result.to_json(),
+            )
+            await repo.expire_old_autopilot_plans(
+                db,
+                user_id,
+                week_start - datetime.timedelta(weeks=1),
+            )
+
+        if settings.autopilot_ntfy and settings.ntfy_url and settings.ntfy_topic:
+            from pyplus.config import settings as app_settings
+            from pyplus.security.net import UnsafeUrlError, assert_safe_url
+
+            try:
+                await assert_safe_url(settings.ntfy_url)
+            except UnsafeUrlError as exc:
+                log.warning("[autopilot] user=%d unsafe ntfy_url: %s", user_id, exc)
+            else:
+                body = _build_autopilot_ntfy(result, app_settings.base_url)
+                await _push_ntfy(settings, body)
+
+        await _set_status(user_id, resource, "ok")
+        log.info(
+            "[autopilot] user=%d plan ready — %d items, %d need review",
+            user_id,
+            result.summary.total_items,
+            result.summary.needs_review_count,
+        )
+
+    except Exception as exc:
+        await _set_status(user_id, resource, "error", str(exc)[:500])
+        log.error("[autopilot] user=%d FAILED: %s", user_id, exc)
+        raise
+
+
+def _build_autopilot_ntfy(result, base_url: str) -> str:
+    s = result.summary
+    lines = [
+        "Je boodschappenplan staat klaar!",
+        f"{s.total_items} producten · €{s.estimated_cost:.2f}",
+    ]
+    if s.needs_review_count > 0:
+        lines.append(f"{s.needs_review_count} vervangproducten om te beoordelen")
+    else:
+        lines.append("Alles automatisch ingevuld")
+    if base_url:
+        lines.append(f"\n→ {base_url.rstrip('/')}/autopilot")
+    return "\n".join(lines)
 
 
 # ── Full preload ───────────────────────────────────────────────────────────────

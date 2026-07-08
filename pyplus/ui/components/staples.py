@@ -59,6 +59,8 @@ async def create_staples_lane(session) -> None:
 
     session.add_cart_listener(_on_cart)
 
+    _edit_state: dict[str, bool] = {"editing": False}
+
     with ui.element("div").classes("sp-lane"):
         # ── Header ────────────────────────────────────────────────────────
         with ui.element("div").classes("sp-lane-header"):
@@ -67,10 +69,13 @@ async def create_staples_lane(session) -> None:
             ):
                 ui.label(t("lane.staples.title")).classes("sp-lane-title")
                 with ui.element("div").style("display:flex;align-items:center;gap:.25rem"):
-                    add_btn = (
-                        ui.button(icon="sym_r_add")
-                        .props("flat round dense size=sm color=primary")
-                        .tooltip("Vaste boodschap toevoegen")
+                    edit_btn = (
+                        ui.button(
+                            t("staples.edit_list"),
+                            icon="sym_r_edit",
+                        )
+                        .props("flat dense no-caps color=primary size=sm")
+                        .style("font-size:11px;font-weight:600")
                     )
                     addall_holder = ui.element("div")
 
@@ -110,12 +115,14 @@ async def create_staples_lane(session) -> None:
 
                 promo_index = await get_promo_index(store)
 
+            editing = _edit_state["editing"]
+
             # ── "Alles toevoegen" lives in the header; rebuild it each load ──
             addall_holder.clear()
             with addall_holder:
-                if products:
+                if products and not editing:
                     ui.button(
-                        "Alles toevoegen",
+                        "Standaard toevoegen",
                         icon="sym_r_add_shopping_cart",
                         on_click=lambda: asyncio.ensure_future(
                             _add_all(products, sku_cache, session, cart_service)
@@ -130,8 +137,9 @@ async def create_staples_lane(session) -> None:
                     ui.label(load_error).style("font-size:13px;color:var(--c-text-3)")
                 return
 
-            # ── Add-product search (toggled by the header + button) ────────
-            _render_add_search(session, store, _body)
+            # ── Add-product search (toggled by the edit button) ────────
+            if editing:
+                _render_add_search(session, store, _body)
 
             if not products:
                 with ui.element("div").classes("sp-lane-placeholder"):
@@ -188,10 +196,11 @@ async def create_staples_lane(session) -> None:
                     session,
                     cart_service,
                     replenish_scores.get(fp.sku),
-                    _body,
+                    _body if editing else None,
                     promo_index.get(fp.sku),
                     purchased.get(fp.sku),
                     _qty_labels,
+                    editing=editing,
                 )
 
             @ui.refreshable
@@ -229,26 +238,17 @@ async def create_staples_lane(session) -> None:
             list_ref["fn"] = _list
             _list()
 
-        # The + button toggles the add-search visibility via module state.
-        add_btn.on("click", lambda: _toggle_add_search(_body))
+        def _toggle_edit() -> None:
+            _edit_state["editing"] = not _edit_state["editing"]
+            _body.refresh()
+
+        edit_btn.on("click", _toggle_edit)
 
         with body:
             await _body()
 
 
-# Add-search open/closed state, keyed per render via a simple flag on the closure.
-_ADD_OPEN: dict[int, bool] = {}
-
-
-def _toggle_add_search(body_refresh) -> None:
-    key = id(body_refresh)
-    _ADD_OPEN[key] = not _ADD_OPEN.get(key, False)
-    body_refresh.refresh()
-
-
 def _render_add_search(session, store: int, body_refresh) -> None:
-    if not _ADD_OPEN.get(id(body_refresh)):
-        return
 
     state = {"results": [], "searching": False}
 
@@ -277,7 +277,6 @@ def _render_add_search(session, store: int, body_refresh) -> None:
                             from pyplus.services.dishes import cache_ingredient_sku_from_product
 
                             await cache_ingredient_sku_from_product(db, session.user_id, p)
-                        _ADD_OPEN[id(body_refresh)] = False
                         ui.notify(f"{p.name} toegevoegd", type="positive", position="top")
                         body_refresh.refresh()
 
@@ -507,6 +506,7 @@ def _render_card(
     promo=None,
     purchased=None,
     qty_labels: dict | None = None,
+    editing: bool = False,
 ) -> "tuple[ui.label | None, object]":
     """Render a product as a square card. Preserves in-place stepper update pattern."""
     name = (catalogue_row.name if catalogue_row else None) or (
@@ -535,13 +535,15 @@ def _render_card(
         available = catalogue_row.is_available
     elif cached and cached.last_seen_available is not None:
         available = cached.last_seen_available
+    elif catalogue_known and catalogue_row is None:
+        available = False
     else:
         available = None
 
     from pyplus.i18n import t
     from pyplus.ui.format import plus_product_url
 
-    product_url = plus_product_url(slug, fp.sku)
+    product_url = plus_product_url(slug, fp.sku) if available is not False else ""
     is_due = replenish_score is not None and replenish_score.is_due
     card_cls = "sp-staples-card sp-staples-card--due" if is_due else "sp-staples-card"
 
@@ -568,7 +570,7 @@ def _render_card(
                 ui.element("div").classes("sp-staples-card__img").style(
                     "background:var(--c-border)"
                 )
-            if not discontinued and available is not None and not available:
+            if not discontinued and available is False:
                 ui.element("div").classes("sp-avail-dot sp-avail-dot-no").style(
                     "position:absolute;top:2px;right:2px"
                 )
@@ -595,6 +597,14 @@ def _render_card(
             ui.label(t("status.discontinued")).classes("sp-badge sp-badge-unavailable").style(
                 "font-size:10px"
             )
+            _render_replace_button(fp, name, image, subtitle, price, session, body_refresh)
+        elif available is not None and not available:
+            if subtitle:
+                ui.label(subtitle).classes("sp-staples-card__sub")
+            ui.label(t("status.unavailable")).classes("sp-badge sp-badge-unavailable").style(
+                "font-size:10px"
+            )
+            _render_replace_button(fp, name, image, subtitle, price, session, body_refresh)
         else:
             if subtitle:
                 ui.label(subtitle).classes("sp-staples-card__sub")
@@ -602,13 +612,40 @@ def _render_card(
                 ui.label(replenish_score.reason).classes("sp-staples-card__reason")
 
         # Price
-        if price > 0 and not discontinued:
+        if price > 0 and not discontinued and available is not False:
             ui.label(f"€ {price:.2f}".replace(".", ",")).classes("sp-staples-card__price")
+
+        # Min-qty ("Standaard: N") — editable in edit mode, plain text otherwise
+        if not discontinued and available is not False:
+            min_q = fp.min_qty if fp.min_qty is not None else 0
+            if editing:
+                with ui.element("div").style(
+                    "display:flex;align-items:center;gap:.25rem;justify-content:center"
+                ):
+                    ui.label(t("staples.standard") + ":").style(
+                        "font-size:11px;color:var(--c-text-3)"
+                    )
+
+                    async def _set_min(val, sku=fp.sku) -> None:
+                        v = max(0, int(val if val is not None else 0))
+                        async with AsyncSessionLocal() as db:
+                            await repo.update_fixed_product(db, session.user_id, sku, min_qty=v)
+                        fp.min_qty = v
+
+                    ui.number(value=min_q, min=0, max=99, step=1).props(
+                        "dense outlined size=sm"
+                    ).style("width:54px;font-size:11px").on(
+                        "update:model-value", lambda e: asyncio.ensure_future(_set_min(e.args))
+                    )
+            else:
+                ui.label(f"{t('staples.standard')}: {min_q}").style(
+                    "font-size:11px;color:var(--c-text-3);text-align:center"
+                )
 
         # Stepper — same in-place update pattern as _render_row
         qty_lbl = None
         refill = None
-        if not discontinued:
+        if not discontinued and available is not False:
             stepper_slot = ui.element("div").style(
                 "margin-top:auto;padding-top:.375rem;display:flex;justify-content:center;width:100%"
             )
@@ -630,6 +667,34 @@ def _render_card(
             refill = _fill_stepper
 
     return qty_lbl, refill
+
+
+def _render_replace_button(fp, name, image, subtitle, price, session, body_refresh) -> None:
+    """Render a 'Vervangen' button that opens the substitute dialog for unavailable staples."""
+    from pyplus.ui.components.substitutes import show_substitute_dialog
+
+    def _open_dialog() -> None:
+        def _on_replaced(product) -> None:
+            if body_refresh is not None:
+                body_refresh.refresh()
+
+        show_substitute_dialog(
+            session,
+            sku=fp.sku,
+            product_name=name,
+            product_image=image or "",
+            product_subtitle=subtitle or "",
+            price=price,
+            mode="staple",
+            is_unavailable=True,
+            on_select=_on_replaced,
+        )
+
+    ui.button(
+        "Vervangen",
+        icon="sym_r_swap_horiz",
+        on_click=_open_dialog,
+    ).props("flat dense no-caps size=xs color=primary").style("font-size:10px;margin-top:.25rem")
 
 
 def _render_stepper(
@@ -677,32 +742,77 @@ def _render_stepper(
     return qty_lbl
 
 
+def _show_add_all_dialog(actions: list[tuple[str, str]]) -> None:
+    """Show a summary dialog of what was added/skipped."""
+    added = [(n, d) for n, d in actions if t("staples.add_all_skipped") not in d]
+    with ui.dialog() as dlg, ui.card().style("min-width:320px;max-width:420px"):
+        ui.label(t("staples.add_all_title")).style(
+            "font-size:15px;font-weight:600;margin-bottom:.5rem"
+        )
+        if not added:
+            ui.label(t("staples.add_all_none")).style("font-size:13px;color:var(--c-text-3)")
+        else:
+            for name, desc in actions:
+                skipped = t("staples.add_all_skipped") in desc
+                with ui.element("div").style(
+                    "display:flex;justify-content:space-between;align-items:center;"
+                    "padding:.2rem 0;gap:.5rem"
+                ):
+                    ui.label(name).style(
+                        f"font-size:13px;{'color:var(--c-text-3)' if skipped else ''}"
+                    )
+                    ui.label(desc).style(
+                        f"font-size:12px;color:var(--c-text-3);white-space:nowrap;"
+                        f"{'opacity:.5' if skipped else ''}"
+                    )
+        with ui.element("div").style("display:flex;justify-content:flex-end;margin-top:.75rem"):
+            ui.button("OK", on_click=dlg.close).props("flat dense no-caps color=primary")
+    dlg.open()
+
+
 async def _add_all(
     products: list[FixedProduct],
     sku_cache: dict[str, IngredientSku],
     session,
     cart_service,
 ) -> None:
-    """Add all products not already in the cart at their default_qty."""
+    """Add staples to meet each product's min_qty, then show a summary dialog."""
     if not cart_service:
         return
 
-    cart_skus = {it.sku for it in session.cart.items}
+    cart_qty_map = {it.sku: it.quantity for it in session.cart.items}
+    actions: list[tuple[str, str]] = []
 
     for fp in products:
-        if not fp.sku or fp.sku in cart_skus:
+        if not fp.sku:
             continue
         cached = sku_cache.get(fp.sku)
-        name = cached.name if cached else fp.display_name
+        name = (cached.name if cached else None) or fp.display_name
         subtitle = cached.subtitle if cached else ""
         price = cached.last_price or 0.0 if cached else 0.0
         image = cached.image_url if cached else ""
+        min_q = fp.min_qty if fp.min_qty is not None else 0
+        if min_q < 1:
+            continue
+        current = cart_qty_map.get(fp.sku, 0)
+
+        if current >= min_q:
+            actions.append((name, t("staples.add_all_skipped")))
+            continue
+
+        to_add = max(fp.default_qty or 1, min_q - current)
         await cart_service.add(
             fp.sku,
-            fp.default_qty or 1,
+            to_add,
             product_name=name,
             product_unit=subtitle,
             product_price=price,
             product_image=image,
             source="staple",
         )
+        if current == 0:
+            actions.append((name, t("staples.add_all_added", n=to_add)))
+        else:
+            actions.append((name, t("staples.add_all_topped_up", n=current + to_add)))
+
+    _show_add_all_dialog(actions)

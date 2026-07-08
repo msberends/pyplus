@@ -94,6 +94,10 @@ async def create_settings_page() -> None:
 
                 # ── Right column ───────────────────────────────────────────
                 with ui.element("div").style("display:flex;flex-direction:column;gap:1rem"):
+                    _section_card_autopilot(
+                        t("settings.ml.autopilot"),
+                        lambda: _render_ml_autopilot(settings, _save),
+                    )
                     _section_card(
                         t("settings.ml.title"),
                         lambda: _render_ml(settings, user_id, _save),
@@ -120,6 +124,22 @@ def _section_card(title: str, body_fn) -> None:
         ui.label(title).style(
             "font-size:15px;font-weight:700;color:var(--c-text);margin-bottom:.875rem;display:block"
         )
+        body_fn()
+
+
+def _section_card_autopilot(title: str, body_fn) -> None:
+    with ui.element("div").style(
+        "background:var(--c-surface);border:1px solid #d5cef0;"
+        "border-radius:var(--r-xl);padding:1.25rem;margin-bottom:1rem;"
+        "box-shadow:inset 3px 0 0 0 var(--c-accent)"
+    ):
+        with ui.element("div").style(
+            "display:flex;align-items:center;gap:.5rem;margin-bottom:.875rem"
+        ):
+            ui.icon("sym_r_robot_2", size="20px").style("color:var(--c-accent)")
+            ui.label(title).style(
+                "font-size:15px;font-weight:700;color:var(--c-accent);display:block"
+            )
         body_fn()
 
 
@@ -255,6 +275,84 @@ def _select_setting(
             await save_fn()
 
         sel.on("update:model-value", lambda e: asyncio.ensure_future(_on()))
+
+
+# Variety presets: (selection_method, temperature, label, description)
+_VARIETY_PRESETS: dict[int, tuple[str, float | None, str, str]] = {
+    1: ("greedy",  None, "Voorspelbaar", "Elke week hetzelfde weekmenu — volledig deterministisch."),
+    2: ("softmax", 0.2,  "Stabiel",      "Bijna altijd de beste keuze, zelden een verrassing."),
+    3: ("softmax", 0.5,  "Gevarieerd",   "Goede balans: vertrouwde gerechten met wekelijkse afwisseling."),
+    4: ("softmax", 1.0,  "Avontuurlijk", "Merkbaar wisselend — elk plan ziet er anders uit."),
+    5: ("softmax", 2.0,  "Verrassend",   "Heel vrij — alle redelijk scorende gerechten komen aan bod."),
+}
+
+
+def _detect_variety_level(settings: UserSettings) -> int:
+    """Reverse-map current method+temperature to a preset level 1–5, or 0 if custom."""
+    for level, (method, temp, _, _) in _VARIETY_PRESETS.items():
+        if settings.ml_selection_method != method:
+            continue
+        if temp is None:
+            return level
+        if abs(settings.ml_temperature - temp) < 0.01:
+            return level
+    return 0  # custom / advanced
+
+
+def _render_variety_control(settings: UserSettings, save_fn) -> None:
+    """Prominent layman 1–5 variety slider — maps to method+temperature presets."""
+    actual_level = _detect_variety_level(settings)
+    display_level = actual_level if actual_level > 0 else 3
+
+    preset = _VARIETY_PRESETS[display_level]
+
+    with ui.element("div").style("padding:.75rem 0;border-top:1px solid var(--c-border)"):
+        with ui.row().style("align-items:center;justify-content:space-between;margin-bottom:.25rem"):
+            ui.label("Variatie in weekmenu").style(
+                "font-size:13px;font-weight:600;color:var(--c-text)"
+            )
+            if actual_level == 0:
+                ui.label("Aangepast").style(
+                    "font-size:10px;font-weight:600;color:var(--c-accent);"
+                    "background:var(--c-brand-tint);padding:1px 8px;border-radius:999px"
+                )
+
+        name_lbl = ui.label(preset[2]).style(
+            "font-size:12px;font-weight:700;color:var(--c-accent);display:block"
+        )
+        desc_lbl = ui.label(preset[3]).style(
+            "font-size:11px;color:var(--c-text-3);line-height:1.55;display:block;margin-bottom:.625rem"
+        )
+
+        with ui.row().style("align-items:center;gap:.5rem"):
+            ui.label("Voorspelbaar").style(
+                "font-size:10px;color:var(--c-text-4);white-space:nowrap;flex-shrink:0"
+            )
+            sld = (
+                ui.slider(min=1, max=5, step=1, value=display_level)
+                .props("color=primary snap markers")
+                .style("flex:1;max-width:220px")
+            )
+            ui.label("Verrassend").style(
+                "font-size:10px;color:var(--c-text-4);white-space:nowrap;flex-shrink:0"
+            )
+
+        def _update_display(e) -> None:
+            v = int(sld.value)
+            p = _VARIETY_PRESETS.get(v, _VARIETY_PRESETS[3])
+            name_lbl.set_text(p[2])
+            desc_lbl.set_text(p[3])
+
+        sld.on("update:model-value", _update_display)
+
+        async def _save_variety() -> None:
+            v = int(sld.value)
+            method, temp, _, _ = _VARIETY_PRESETS.get(v, _VARIETY_PRESETS[3])
+            settings.ml_selection_method = method
+            settings.ml_temperature = temp if temp is not None else 1.0
+            await save_fn()
+
+        sld.on("change", lambda e: asyncio.ensure_future(_save_variety()))
 
 
 _CART_SORT_OPTS = {
@@ -495,6 +593,8 @@ def _render_ml(settings: UserSettings, user_id: int, save_fn) -> None:
             "ml_promo_match",
         )
 
+        _render_variety_control(settings, save_fn)
+
         # ── 📊 Weegfactoren ──────────────────────────────────────────────
         _render_ml_weights(settings, save_fn)
 
@@ -506,9 +606,6 @@ def _render_ml(settings: UserSettings, user_id: int, save_fn) -> None:
 
         # ── 🔬 Geavanceerd ───────────────────────────────────────────────
         _render_ml_advanced(settings, save_fn)
-
-        # ── 🤖 Autopilot ─────────────────────────────────────────────────
-        _render_ml_autopilot(settings, save_fn)
 
     async def _on_master(e) -> None:
         settings.ml_enabled = master.value
@@ -558,7 +655,8 @@ def _render_ml_weights(settings: UserSettings, save_fn) -> None:
             "Elk signaal draagt bij aan de totaalscore van een gerecht per dagslot. "
             "De gewichten bepalen hoeveel invloed elk signaal heeft — zet een gewicht op 0% "
             "om een signaal volledig uit te schakelen. De totaalscore is een gewogen som; "
-            "hogere waarden krijgen meer voorkeur bij het plannen.",
+            "hogere waarden krijgen meer voorkeur bij het plannen. "
+            "Wijzigingen gelden pas na 'Herbereken suggesties' hieronder.",
         )
 
         def _weight(label: str, attr: str, hint: str = "") -> None:
@@ -621,6 +719,11 @@ def _render_ml_weights(settings: UserSettings, save_fn) -> None:
             t("settings.ml.budget"),
             "ml_budget",
             "Geeft voorkeur aan goedkopere gerechten op basis van ingrediëntprijzen.",
+        )
+        _weight(
+            t("settings.ml.rating_weight"),
+            "ml_rating_weight",
+            "0% = sterren worden genegeerd · 100% = 1★ telt als ×0,33, 3★ neutraal, 5★ als ×1,67.",
         )
         _weight(
             "Weer: oven/airfryer vermijden",
@@ -761,29 +864,29 @@ def _render_single_day_pref(
 
     prep_sel.on("update:model-value", lambda e: asyncio.ensure_future(_on_prep(e)))
 
-    # Blocked meat types — multi-select chips
+    # Allowed meat types — multi-select chips (empty = all allowed)
     ui.label(t("settings.ml.day_meat_blocked")).style(
         "font-size:12px;font-weight:600;color:var(--c-text-2);margin-bottom:.25rem"
     )
     _render_chip_multiselect(
         items=list(meat_types),
-        selected=set(pref.blocked_meat_types),
+        selected=set(pref.allowed_meat_types),
         label_fn=lambda m: f"{meat_emoji_fn(m)} {meat_label_fn(m)}".strip(),
         on_change=lambda sel, k=day_key: asyncio.ensure_future(
-            _update_day_list(settings, k, "blocked_meat_types", sel, save_fn)
+            _update_day_list(settings, k, "allowed_meat_types", sel, save_fn)
         ),
     )
 
-    # Blocked starch types
+    # Preferred starch types (empty = all allowed)
     ui.label(t("settings.ml.day_starch_blocked")).style(
         "font-size:12px;font-weight:600;color:var(--c-text-2);margin-top:.5rem;margin-bottom:.25rem"
     )
     _render_chip_multiselect(
         items=list(starch_types),
-        selected=set(pref.blocked_starch_types),
+        selected=set(pref.preferred_starch_types),
         label_fn=lambda s: f"{starch_emoji_fn(s)} {starch_label_fn(s)}".strip(),
         on_change=lambda sel, k=day_key: asyncio.ensure_future(
-            _update_day_list(settings, k, "blocked_starch_types", sel, save_fn)
+            _update_day_list(settings, k, "preferred_starch_types", sel, save_fn)
         ),
     )
 
@@ -960,12 +1063,9 @@ def _render_ml_advanced(settings: UserSettings, save_fn) -> None:
         .props("dense")
     ):
         _infobox(
-            "Dit zijn de interne parameters van het aanbevelingsmodel. "
-            "De standaardwaarden werken goed voor de meeste situaties. "
-            "De selectiemethode bepaalt hoe het model een gerecht kiest uit de kandidaten: "
-            "hebzuchtig pakt altijd de hoogste score, softmax maakt het probabilistisch "
-            "(temperatuur regelt de spreiding), en Thompson-steekproef gebruikt Bayesiaanse "
-            "exploratie met een Beta-verdeling.",
+            "Voor fijnregeling. De Variatie-instelling hierboven is de makkelijke weg — "
+            "hier stel je de onderliggende parameters in. Handmatige aanpassing "
+            "zet de Variatie-instelling op 'Aangepast'.",
             icon="sym_r_science",
             color="#eee8f5",
             border="#d5cef0",
@@ -1042,13 +1142,9 @@ def _render_ml_advanced(settings: UserSettings, save_fn) -> None:
 
         # Selection method
         _infobox(
-            "Hebzuchtig: kiest altijd het best scorende gerecht — deterministisch en "
-            "voorspelbaar. Softmax: kansverdeling op basis van scores — temperatuur τ "
-            "bepaalt de entropie (τ→0 wordt hebzuchtig, τ→∞ wordt uniform). "
-            "Epsilon-hebzuchtig: met kans ε een willekeurig gerecht, anders de beste. "
-            "Thompson-steekproef: Bayesiaanse exploratie — trekt per kandidaat uit een "
-            "Beta(α,β)-verdeling gebaseerd op de score, kiest de hoogste sample. "
-            "Balanceert van nature exploratie en exploitatie.",
+            "Selectiemethode: 'altijd de beste score' is deterministisch (Variatie 1), "
+            "'op basis van kansen' voegt toeval toe — temperatuur bepaalt hoeveel "
+            "(laag ≈ Variatie 2–3, hoog ≈ 4–5). De andere methoden zijn voor experimenteel gebruik.",
             icon="sym_r_casino",
             color="#eee8f5",
             border="#d5cef0",
@@ -1163,84 +1259,263 @@ def _adv_slider(
 
 
 def _render_ml_autopilot(settings: UserSettings, save_fn) -> None:
-    """Autopilot section with per-meal toggles and slot limits."""
-    with ui.element("div").style(
-        "padding:.75rem;background:#eee8f5;border-radius:var(--r-md);"
-        "border:1px solid #d5cef0;margin-top:.625rem"
-    ):
-        _infobox(
-            "Autopilot laat het model automatisch lege slots invullen — "
-            "je mandje wordt pas écht gevuld nadat je bevestigt op PLUS.nl. "
-            "Schakel avondeten en extra apart in en begrens het aantal slots dat "
-            "automatisch wordt gevuld. Alle hierboven ingestelde regels, "
-            "dagvoorkeuren en weekdoelen worden gerespecteerd.",
-            icon="sym_r_smart_toy",
-            color="#eee8f5",
-            border="#d5cef0",
-            text_color="var(--c-accent)",
+    """Autopilot settings — structured by feature area."""
+    if not settings.ml_enabled:
+        ui.label("Schakel eerst Slimme suggesties in.").style(
+            "font-size:12px;color:var(--c-text-3)"
+        )
+        return
+
+    _infobox(
+        "Autopilot stelt automatisch een boodschappenplan samen dat je "
+        "bekijkt en bevestigt op de Autopilot-pagina. Alle regels, dagvoorkeuren "
+        "en weekdoelen uit Slimme suggesties worden gerespecteerd.",
+        icon="sym_r_robot_2",
+        color="#eee8f5",
+        border="#d5cef0",
+        text_color="var(--c-accent)",
+    )
+
+    _ap_subhead = (
+        "font-size:11px;font-weight:700;color:var(--c-accent);letter-spacing:.06em;"
+        "text-transform:uppercase;margin-top:.75rem;display:block"
+    )
+
+    # ── Weekmenu ─────────────────────────────────────────────────────
+    ui.label("Weekmenu").style(_ap_subhead)
+
+    _ap_toggle(
+        settings,
+        "ml_autopilot_dinner",
+        "Avondeten automatisch plannen",
+        "Vult lege avondeten-slots in op basis van je voorkeuren.",
+        save_fn,
+        derived="ml_autopilot",
+    )
+    _ap_toggle(
+        settings,
+        "ml_autopilot_lunch",
+        "Extra maaltijden automatisch plannen",
+        "Vult lege extra-slots in.",
+        save_fn,
+        derived="ml_autopilot",
+    )
+
+    with ui.row().style("gap:.75rem;margin-top:.25rem;padding-left:.25rem"):
+        with ui.element("div"):
+            ui.label("Max. avondeten").style("font-size:11px;color:var(--c-text-3)")
+            max_d = (
+                ui.number(value=settings.ml_autopilot_max_dinner, min=0, max=7)
+                .props("outlined dense")
+                .style("max-width:72px")
+            )
+
+            async def _save_max_d() -> None:
+                settings.ml_autopilot_max_dinner = int(max_d.value or 0)
+                await save_fn()
+
+            max_d.on("change", lambda e: asyncio.ensure_future(_save_max_d()))
+
+        with ui.element("div"):
+            ui.label("Max. extra").style("font-size:11px;color:var(--c-text-3)")
+            max_l = (
+                ui.number(value=settings.ml_autopilot_max_lunch, min=0, max=5)
+                .props("outlined dense")
+                .style("max-width:72px")
+            )
+
+            async def _save_max_l() -> None:
+                settings.ml_autopilot_max_lunch = int(max_l.value or 0)
+                await save_fn()
+
+            max_l.on("change", lambda e: asyncio.ensure_future(_save_max_l()))
+
+    # ── Aanbiedingen & bezorging ─────────────────────────────────────
+    ui.label("Aanbiedingen & bezorging").style(_ap_subhead)
+
+    _ap_toggle(
+        settings,
+        "ml_autopilot_promos",
+        "Actie-alternatieven voorstellen",
+        "Stelt goedkopere alternatieven voor als een vergelijkbaar product in de aanbieding is.",
+        save_fn,
+    )
+    _ap_toggle(
+        settings,
+        "ml_autopilot_fillers",
+        "Gratis-bezorgdrempel aanvullen",
+        "Voegt vaste boodschappen toe om de gratis-bezorgdrempel te halen.",
+        save_fn,
+    )
+
+    # ── Vaste boodschappen ───────────────────────────────────────────
+    ui.label("Vaste boodschappen").style(_ap_subhead)
+
+    _ap_toggle(
+        settings,
+        "ml_autopilot_staples",
+        "Vaste boodschappen aanvullen",
+        "Voegt alle vaste boodschappen met een standaard-aantal ≥ 1 toe aan het plan.",
+        save_fn,
+    )
+
+    # ── Vervangproducten ─────────────────────────────────────────────
+    ui.label("Vervangproducten").style(_ap_subhead)
+
+    with ui.element("div").style("padding:.375rem 0 .25rem;border-top:1px solid var(--c-border)"):
+        ui.label("Automatische vervanging tot score").style(
+            "font-size:13px;font-weight:600;color:var(--c-text)"
+        )
+        ui.label(
+            "Producten met een hogere score dan deze drempel worden automatisch "
+            "vervangen. Lagere scores worden ter beoordeling aangeboden."
+        ).style("font-size:11px;color:var(--c-text-3);line-height:1.5;margin-bottom:.25rem")
+        with ui.row().style("align-items:center;gap:.5rem"):
+            thr_label = ui.label(f"{settings.sub_confidence_auto:.1f}").style(
+                "font-size:12px;font-weight:600;color:var(--c-text-2);min-width:24px"
+            )
+            thr = (
+                ui.slider(value=settings.sub_confidence_auto, min=3.0, max=10.0, step=0.5)
+                .props("color=deep-purple")
+                .style("flex:1;max-width:220px")
+            )
+            thr.on(
+                "update:model-value",
+                lambda e: thr_label.set_text(f"{float(thr.value):.1f}"),
+            )
+
+            async def _save_thr() -> None:
+                settings.sub_confidence_auto = thr.value
+                await save_fn()
+
+            thr.on("change", lambda e: asyncio.ensure_future(_save_thr()))
+        with ui.element("div").style(
+            "display:flex;gap:.5rem;margin-top:.25rem;font-size:10px;"
+            "color:var(--c-text-4);line-height:1.4"
+        ):
+            ui.label(
+                "3–5 = soepel (meer automatisch, maar soms minder passend) · "
+                "6–7 = gebalanceerd · 8–10 = streng (bijna alles handmatig beoordelen)"
+            )
+
+    with ui.element("div").style("padding:.375rem 0 .25rem;border-top:1px solid var(--c-border)"):
+        ui.label("Alternatieven tonen").style("font-size:13px;font-weight:600;color:var(--c-text)")
+        ui.label("Hoeveel vervangopties per product worden getoond op de Autopilot-pagina.").style(
+            "font-size:11px;color:var(--c-text-3);line-height:1.5;margin-bottom:.25rem"
+        )
+        sub_disp_label = ui.label(str(settings.autopilot_sub_display)).style(
+            "font-size:12px;font-weight:600;color:var(--c-text-2)"
+        )
+        sub_disp = (
+            ui.slider(value=settings.autopilot_sub_display, min=3, max=12, step=1)
+            .props("color=deep-purple")
+            .style("max-width:220px")
+        )
+        sub_disp.on(
+            "update:model-value",
+            lambda e: sub_disp_label.set_text(str(int(sub_disp.value))),
         )
 
-        with ui.row().style("align-items:flex-start;gap:.625rem;padding:.375rem 0"):
-            ap_dinner = ui.switch(value=settings.ml_autopilot_dinner).props("color=warning size=sm")
-            with ui.element("div"):
-                ui.label(t("settings.ml.autopilot_dinner")).style(
-                    "font-size:13px;font-weight:600;color:var(--c-accent)"
-                )
-
-        async def _on_ap_dinner(e) -> None:
-            settings.ml_autopilot_dinner = ap_dinner.value
-            settings.ml_autopilot = settings.ml_autopilot_dinner or settings.ml_autopilot_lunch
+        async def _save_sub_disp() -> None:
+            settings.autopilot_sub_display = int(sub_disp.value)
             await save_fn()
 
-        ap_dinner.on("update:model-value", lambda e: asyncio.ensure_future(_on_ap_dinner(e)))
+        sub_disp.on("change", lambda e: asyncio.ensure_future(_save_sub_disp()))
 
-        with ui.row().style("align-items:flex-start;gap:.625rem;padding:.375rem 0"):
-            ap_lunch = ui.switch(value=settings.ml_autopilot_lunch).props("color=warning size=sm")
-            with ui.element("div"):
-                ui.label(t("settings.ml.autopilot_lunch")).style(
-                    "font-size:13px;font-weight:600;color:var(--c-accent)"
-                )
+    # ── Planning ─────────────────────────────────────────────────────
+    ui.label("Planning").style(_ap_subhead)
 
-        async def _on_ap_lunch(e) -> None:
-            settings.ml_autopilot_lunch = ap_lunch.value
-            settings.ml_autopilot = settings.ml_autopilot_dinner or settings.ml_autopilot_lunch
-            await save_fn()
+    _DAY_OPTIONS = {
+        "ma": "Maandag",
+        "di": "Dinsdag",
+        "wo": "Woensdag",
+        "do": "Donderdag",
+        "vr": "Vrijdag",
+        "za": "Zaterdag",
+        "zo": "Zondag",
+    }
+    with ui.row().style("gap:.75rem;padding:.375rem 0"):
+        with ui.element("div"):
+            ui.label("Dag").style("font-size:11px;color:var(--c-text-3)")
+            day_sel = (
+                ui.select(options=_DAY_OPTIONS, value=settings.autopilot_schedule_day)
+                .props("outlined dense options-dense")
+                .style("max-width:130px")
+            )
 
-        ap_lunch.on("update:model-value", lambda e: asyncio.ensure_future(_on_ap_lunch(e)))
+            async def _save_day() -> None:
+                settings.autopilot_schedule_day = day_sel.value
+                await save_fn()
 
-        # Max slots
-        with ui.row().style("gap:.75rem;margin-top:.375rem"):
-            with ui.element("div"):
-                ui.label(t("settings.ml.autopilot_max_dinner")).style(
-                    "font-size:11px;color:var(--c-accent)"
-                )
-                max_d = (
-                    ui.number(value=settings.ml_autopilot_max_dinner, min=1, max=7)
-                    .props("outlined dense")
-                    .style("max-width:80px")
-                )
+            day_sel.on("update:model-value", lambda e: asyncio.ensure_future(_save_day()))
 
-                async def _save_max_d() -> None:
-                    settings.ml_autopilot_max_dinner = int(max_d.value or 7)
-                    await save_fn()
+        with ui.element("div"):
+            ui.label("Tijdstip").style("font-size:11px;color:var(--c-text-3)")
+            hour_in = (
+                ui.number(value=settings.autopilot_schedule_hour, min=0, max=23)
+                .props("outlined dense suffix=uur")
+                .style("max-width:90px")
+            )
 
-                max_d.on("change", lambda e: asyncio.ensure_future(_save_max_d()))
+            async def _save_hour() -> None:
+                settings.autopilot_schedule_hour = int(hour_in.value or 9)
+                await save_fn()
 
-            with ui.element("div"):
-                ui.label(t("settings.ml.autopilot_max_lunch")).style(
-                    "font-size:11px;color:var(--c-accent)"
-                )
-                max_l = (
-                    ui.number(value=settings.ml_autopilot_max_lunch, min=1, max=5)
-                    .props("outlined dense")
-                    .style("max-width:80px")
-                )
+            hour_in.on("change", lambda e: asyncio.ensure_future(_save_hour()))
 
-                async def _save_max_l() -> None:
-                    settings.ml_autopilot_max_lunch = int(max_l.value or 5)
-                    await save_fn()
+    _ap_toggle(
+        settings,
+        "autopilot_ntfy",
+        "Pushmelding sturen als plan klaar is",
+        "Stuurt een melding via ntfy zodra het boodschappenplan is samengesteld.",
+        save_fn,
+    )
 
-                max_l.on("change", lambda e: asyncio.ensure_future(_save_max_l()))
+    # ── Overig ───────────────────────────────────────────────────────
+    ui.label("Overig").style(_ap_subhead)
+
+    _ap_toggle(
+        settings,
+        "autopilot_clear_cart",
+        "Winkelwagen legen voor autopilot",
+        "Verwijdert alle producten uit je winkelwagen voordat autopilot begint.",
+        save_fn,
+        danger=True,
+    )
+
+
+def _ap_toggle(
+    settings: UserSettings,
+    attr: str,
+    label: str,
+    hint: str,
+    save_fn,
+    *,
+    derived: str = "",
+    danger: bool = False,
+) -> None:
+    """Autopilot toggle row with purple accent text."""
+    with ui.row().style(
+        "align-items:flex-start;gap:.625rem;padding:.375rem 0;border-top:1px solid var(--c-border)"
+    ):
+        color = "negative" if danger else "deep-purple"
+        sw = ui.switch(value=getattr(settings, attr)).props(f"color={color} size=sm")
+        with ui.element("div").style("flex:1"):
+            ui.label(label).style("font-size:13px;font-weight:600;color:var(--c-text)")
+            if hint:
+                ui.label(hint).style("font-size:11px;color:var(--c-text-3);line-height:1.5")
+
+    async def _on_change(a=attr, s=sw) -> None:
+        setattr(settings, a, bool(s.value))
+        if derived:
+            setattr(
+                settings,
+                derived,
+                settings.ml_autopilot_dinner or settings.ml_autopilot_lunch,
+            )
+        await save_fn()
+
+    sw.on("update:model-value", lambda e: asyncio.ensure_future(_on_change()))
 
 
 # ── Weather ──────────────────────────────────────────────────────────────────

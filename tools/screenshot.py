@@ -31,6 +31,7 @@ PAGES = {
     "promos": "/promos",
     "staples": "/staples",
     "cart": "/cart",
+    "autopilot": "/autopilot",
     "dishes": "/dishes",
     "settings": "/settings",
     "cockpit": "/cockpit",

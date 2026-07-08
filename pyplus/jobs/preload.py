@@ -139,6 +139,24 @@ async def _reap_idle_sessions() -> None:
         log.error("[scheduler] session reaper failed: %s", exc)
 
 
+async def _run_autopilot_all_users() -> None:
+    """APScheduler entry point: autopilot plan generation for every user with autopilot enabled."""
+    from pyplus.db import repo
+    from pyplus.db.engine import AsyncSessionLocal
+    from pyplus.jobs.registry import autopilot_prepare
+
+    async with AsyncSessionLocal() as db:
+        users = await repo.get_users_with_credentials(db)
+
+    for user in users:
+        if user.store_number is None:
+            continue
+        try:
+            await autopilot_prepare(user_id=user.id)
+        except Exception as exc:
+            log.error("[scheduler] autopilot for user=%d failed: %s", user.id, exc)
+
+
 async def _run_weather_all_users() -> None:
     """APScheduler entry point: daily weather fetch for every user with weather enabled."""
     from pyplus.db import repo
@@ -222,10 +240,19 @@ def start_scheduler() -> None:
         misfire_grace_time=3600,
     )
 
+    # Autopilot plan generation — Saturday 09:00 (after the nightly preload warmed all caches)
+    _scheduler.add_job(
+        _run_autopilot_all_users,
+        CronTrigger(day_of_week="sat", hour=9, minute=0),
+        id="autopilot_saturday",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
     _scheduler.start()
     log.info(
         "APScheduler started — full_preload + weather at 02:30, "
-        "catalogue Fri–Mon at 02:15, weekly_ntfy Thursdays at 07:00 Amsterdam"
+        "catalogue Fri–Mon at 02:15, weekly_ntfy Thu 07:00, autopilot Sat 09:00 Amsterdam"
     )
 
 

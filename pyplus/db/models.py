@@ -147,6 +147,8 @@ class Dish(Base):
         Text, default="[]"
     )  # JSON list from COOKING_METHODS
     is_cold: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_dinner: Mapped[bool] = mapped_column(Boolean, default=True)
+    rating: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     veg_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 0–3
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=_utcnow)
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -214,6 +216,7 @@ class FixedProduct(Base):
     sku: Mapped[str] = mapped_column(String(100), nullable=False)
     display_name: Mapped[str] = mapped_column(String(300), nullable=False)
     default_qty: Mapped[int] = mapped_column(Integer, default=1)
+    min_qty: Mapped[int] = mapped_column(Integer, default=0, server_default="1")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
     user: Mapped["User"] = relationship(back_populates="fixed_products")
@@ -385,6 +388,29 @@ class MlArtifact(Base):
     input_hash: Mapped[str] = mapped_column(String(64), default="")
 
     user: Mapped["User"] = relationship(back_populates="ml_artifacts")
+
+
+# ── Autopilot plans ──────────────────────────────────────────────────────────
+
+
+class AutopilotPlan(Base):
+    __tablename__ = "autopilot_plans"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "week_start",
+            name="uq_autopilot_user_week_active",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    week_start: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+    plan_json: Mapped[str] = mapped_column(Text, nullable=False)
+    cart_snapshot_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=_utcnow)
+    confirmed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
 
 
 # ── Weather cache ─────────────────────────────────────────────────────────────

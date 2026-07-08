@@ -56,6 +56,8 @@ def _dish(dish_id, name):
     d = MagicMock()
     d.id = dish_id
     d.name = name
+    d.is_dinner = True
+    d.rating = None
     return d
 
 

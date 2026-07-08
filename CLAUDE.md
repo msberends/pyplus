@@ -30,8 +30,9 @@ needs real credentials — it is **not** part of the suite; never put personal d
 
 ## Screenshots
 
-The app runs as a systemd service — never kill or restart it. For UI work, take screenshots to
-verify changes visually.
+The app runs as a systemd service — never kill it or start it with nohup. To restart after code
+changes, run `sudo service pyplus restart` (passwordless sudoers rule in place). For UI work, take
+screenshots to verify changes visually.
 
 **Tool:** `tools/screenshot.py` — headless Playwright, auto-login, session cached to
 `.screenshot_session.json` (gitignored). Credentials and app URL come from `.screenshot.env`

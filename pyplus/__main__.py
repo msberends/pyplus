@@ -62,6 +62,13 @@ async def cart_page() -> None:
     await create_cart_page()
 
 
+@ui.page("/autopilot")
+async def autopilot_page() -> None:
+    from pyplus.ui.pages.autopilot import create_autopilot_page
+
+    await create_autopilot_page()
+
+
 @ui.page("/dishes")
 async def dishes_page() -> None:
     from pyplus.ui.pages.dishes import create_dishes_page

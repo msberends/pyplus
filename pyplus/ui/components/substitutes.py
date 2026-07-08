@@ -47,7 +47,9 @@ def _unit_price_label(price: float, subtitle: str) -> str:
     size_in_norm = size / factor
     per_norm = price / size_in_norm if size_in_norm > 0 else 0
     if norm_unit == "kg" and per_norm > 20:
-        per_100 = price / (size / 100) if unit == "g" else price / (size * 10) if unit == "kg" else 0
+        per_100 = (
+            price / (size / 100) if unit == "g" else price / (size * 10) if unit == "kg" else 0
+        )
         if per_100 > 0:
             return f"€\xa0{per_100:.2f} / 100 g".replace(".", ",")
     if norm_unit == "l" and per_norm > 10:
@@ -73,41 +75,35 @@ def show_substitute_dialog(
     price: float = 0.0,
     brand: str = "",
     mode: str = "relink",
+    is_unavailable: bool = True,
     on_select: Callable[["Product"], None] | None = None,
 ) -> None:
     """Open the substitute finder dialog.
 
     mode="relink"  — updates DishIngredient.sku permanently (dishes page)
     mode="cart"    — calls on_select(product) so the caller can swap for this cart-add
+    mode="staple"  — replaces the FixedProduct SKU and updates ingredient cache
     """
     categories = categories or []
     chosen: list[Product] = []
 
-    with ui.dialog(value=True) as dlg:
-        with ui.card().style(
-            "min-width:320px;max-width:460px;width:100%;padding:0;overflow:hidden"
-        ):
+    with ui.dialog(value=True).classes("sp-substitute-dialog") as dlg:
+        with ui.card().classes("sp-sub-card"):
             # ── Header ──────────────────────────────────────────────
-            with ui.element("div").style(
-                "display:flex;align-items:center;justify-content:space-between;"
-                "padding:.875rem 1rem;border-bottom:1px solid var(--c-border)"
-            ):
+            with ui.element("div").classes("sp-sub-header"):
                 ui.label(t("substitute.dialog_title")).style(
-                    "font-size:16px;font-weight:700;color:var(--c-text)"
+                    "font-size:17px;font-weight:700;color:var(--c-text);letter-spacing:-.2px"
                 )
                 ui.button(icon="sym_r_close", on_click=dlg.close).props(
                     "flat round dense size=sm color=grey"
                 )
 
-            # ── Original product summary ────────────────────────────
-            with ui.element("div").style(
-                "display:flex;align-items:center;gap:.625rem;"
-                "padding:.75rem 1rem;border-bottom:1px solid var(--c-border);"
-                "background:var(--c-surface-2)"
-            ):
+            # ── Original product ────────────────────────────────────
+            with ui.element("div").classes("sp-sub-original"):
                 if product_image:
-                    ui.image(thumbnail_url(product_image, 40)).style(
-                        "width:40px;height:40px;border-radius:var(--r-sm);flex-shrink:0"
+                    ui.image(thumbnail_url(product_image, 44)).style(
+                        "width:44px;height:44px;border-radius:var(--r-sm);flex-shrink:0;"
+                        "object-fit:contain;background:white"
                     ).props(f'alt="{_alt(product_name)}"')
                 with ui.element("div").style("min-width:0;flex:1"):
                     ui.label(product_name).style(
@@ -118,24 +114,22 @@ def show_substitute_dialog(
                         "display:flex;align-items:center;gap:.375rem;margin-top:2px;flex-wrap:wrap"
                     ):
                         if product_subtitle:
-                            ui.label(product_subtitle).style(
-                                "font-size:11px;color:var(--c-text-3)"
-                            )
+                            ui.label(product_subtitle).style("font-size:11px;color:var(--c-text-3)")
                         if price > 0:
                             ui.label(f"€\xa0{price:.2f}".replace(".", ",")).style(
                                 "font-size:12px;color:var(--c-text-3)"
                             )
                         orig_unit = _unit_price_label(price, product_subtitle)
                         if orig_unit:
-                            ui.label(orig_unit).style(
-                                "font-size:11px;color:var(--c-text-4)"
-                            )
+                            ui.label(orig_unit).style("font-size:11px;color:var(--c-text-4)")
+                    if is_unavailable:
                         ui.label(t("status.unavailable")).style(
-                            "font-size:11px;color:var(--c-danger);font-weight:600"
+                            "font-size:10px;font-weight:700;color:var(--c-danger);"
+                            "margin-top:3px;letter-spacing:.02em"
                         )
 
             # ── Search bar ──────────────────────────────────────────
-            with ui.element("div").style("padding:.625rem 1rem 0"):
+            with ui.element("div").classes("sp-sub-search"):
                 search_input = (
                     ui.input(placeholder=t("substitute.search_placeholder"))
                     .props("outlined dense clearable")
@@ -143,9 +137,7 @@ def show_substitute_dialog(
                 )
 
             # ── Scrollable results area ─────────────────────────────
-            with ui.element("div").style(
-                "padding:.5rem 1rem;max-height:50vh;overflow-y:auto;min-height:120px"
-            ):
+            with ui.element("div").classes("sp-sub-results"):
                 spinner_row = ui.element("div").style(
                     "display:flex;align-items:center;gap:.5rem;padding:.75rem 0"
                 )
@@ -158,9 +150,14 @@ def show_substitute_dialog(
                     if candidates is None:
                         return
                     if not candidates:
-                        ui.label(t("substitute.no_results")).style(
-                            "font-size:13px;color:var(--c-text-3);padding:.5rem 0"
-                        )
+                        with ui.element("div").style(
+                            "display:flex;flex-direction:column;align-items:center;"
+                            "padding:1.5rem 0;gap:.375rem"
+                        ):
+                            ui.label("🔍").style("font-size:1.5rem;opacity:.3")
+                            ui.label(t("substitute.no_results")).style(
+                                "font-size:13px;color:var(--c-text-3)"
+                            )
                         return
                     header = (
                         t("substitute.suggestions_header")
@@ -168,20 +165,14 @@ def show_substitute_dialog(
                         else f"{len(candidates)} resultaten"
                     )
                     ui.label(header).style(
-                        "font-size:11px;font-weight:700;color:var(--c-text-3);"
-                        "text-transform:uppercase;letter-spacing:.04em;margin-bottom:.25rem"
+                        "font-size:11px;font-weight:700;color:var(--c-text-4);"
+                        "text-transform:uppercase;letter-spacing:.05em;"
+                        "margin-bottom:.5rem;margin-top:.25rem"
                     )
                     for cand in candidates:
                         _render_candidate_row(cand, chosen, dlg, mode, on_select, session, sku)
 
                 _results_list()
-
-            # ── Footer ──────────────────────────────────────────────
-            with ui.element("div").style(
-                "display:flex;justify-content:flex-end;gap:.5rem;"
-                "padding:.75rem 1rem;border-top:1px solid var(--c-border)"
-            ):
-                ui.button(t("action.cancel"), on_click=dlg.close).props("flat rounded no-caps")
 
     # ── Load suggestions async ──────────────────────────────────────
     async def _load_suggestions() -> None:
@@ -257,25 +248,36 @@ def _render_candidate_row(
     product = cand.product
     reason_key = _REASON_LABELS.get(cand.match_reason, "substitute.reason_name")
 
-    with ui.element("div").style(
-        "display:flex;align-items:center;gap:.5rem;padding:.375rem 0;"
-        "border-bottom:1px solid var(--c-border)"
-    ):
+    with ui.element("div").classes("sp-sub-candidate"):
         if product.image_url:
-            ui.image(thumbnail_url(product.image_url, 36)).style(
-                "width:36px;height:36px;border-radius:var(--r-sm);flex-shrink:0"
+            ui.image(thumbnail_url(product.image_url, 40)).style(
+                "width:40px;height:40px;border-radius:var(--r-sm);flex-shrink:0;"
+                "object-fit:contain;background:white"
             ).props(f'alt="{_alt(product.name)}"')
         else:
             ui.element("div").style(
-                "width:36px;height:36px;border-radius:var(--r-sm);"
+                "width:40px;height:40px;border-radius:var(--r-sm);"
                 "background:var(--c-border);flex-shrink:0"
             )
 
         with ui.element("div").style("min-width:0;flex:1"):
-            ui.label(product.name).style(
-                "font-size:13px;font-weight:500;color:var(--c-text);"
-                "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-            )
+            with ui.element("div").style("display:flex;align-items:center;gap:.375rem"):
+                ui.label(product.name).style(
+                    "font-size:13px;font-weight:500;color:var(--c-text);"
+                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0"
+                )
+                if cand.score > 0:
+                    score_pct = min(100, int(cand.score * 10))
+                    _sc = (
+                        "var(--c-brand)"
+                        if score_pct >= 70
+                        else "#f59e0b"
+                        if score_pct >= 40
+                        else "#ef4444"
+                    )
+                    ui.label(f"{score_pct}%").style(
+                        f"font-size:10px;font-weight:700;color:{_sc};flex-shrink:0"
+                    )
             with ui.element("div").style(
                 "display:flex;align-items:center;gap:.375rem;margin-top:1px;flex-wrap:wrap"
             ):
@@ -286,10 +288,10 @@ def _render_candidate_row(
                 )
                 cand_unit = _unit_price_label(product.price, product.subtitle)
                 if cand_unit:
-                    ui.label(cand_unit).style(
-                        "font-size:11px;color:var(--c-text-4)"
-                    )
-            ui.label(t(reason_key)).style("font-size:10px;color:var(--c-text-4);font-style:italic")
+                    ui.label(cand_unit).style("font-size:11px;color:var(--c-text-4)")
+            ui.label(t(reason_key)).style(
+                "font-size:10px;color:var(--c-text-4);font-style:italic;margin-top:1px"
+            )
 
         def _pick(p=product) -> None:
             chosen.clear()
@@ -297,12 +299,36 @@ def _render_candidate_row(
             if mode == "cart" and on_select:
                 on_select(p)
                 dlg.close()
+            elif mode == "staple":
+                asyncio.ensure_future(_do_replace_staple(session, original_sku, p, dlg, on_select))
             elif mode == "relink":
                 asyncio.ensure_future(_do_relink(session, original_sku, p, dlg))
 
         ui.button(t("substitute.select"), on_click=_pick).props(
             "unelevated rounded dense no-caps size=sm color=primary"
-        ).style("flex-shrink:0")
+        ).style("flex-shrink:0;font-size:12px")
+
+
+async def _do_replace_staple(session, original_sku: str, product, dlg, on_select=None) -> None:
+    """Replace a staple product's SKU with the selected substitute."""
+    from pyplus.db import repo
+    from pyplus.db.engine import AsyncSessionLocal
+    from pyplus.services.dishes import cache_ingredient_sku_from_product
+
+    try:
+        async with AsyncSessionLocal() as db:
+            await cache_ingredient_sku_from_product(db, session.user_id, product)
+            await repo.replace_fixed_product_sku(
+                db, session.user_id, original_sku, product.sku, product.name
+            )
+            await repo.relink_ingredient_sku(db, session.user_id, original_sku, product.sku)
+        dlg.close()
+        ui.notify(f"{product.name} ingesteld als vervanging", type="positive")
+        if on_select:
+            on_select(product)
+    except Exception as exc:
+        log.error("Staple replace failed: %s", exc)
+        ui.notify(t("status.error"), type="negative")
 
 
 async def _do_relink(session, original_sku: str, product, dlg) -> None:

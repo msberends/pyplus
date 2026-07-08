@@ -420,16 +420,69 @@ def _render_dish_grid_sync(state: _PageState, filters, session, reload_fn) -> No
             _render_dish_card(dish, state.dish_data.get(dish.id), session, reload_fn)
 
 
+def _render_star_display(rating: float) -> None:
+    with ui.element("div").style("display:flex;gap:1px;flex-shrink:0;align-items:center"):
+        for i in range(1, 6):
+            if rating >= i:
+                icon = "star"
+                color = "#f59e0b"
+            elif rating >= i - 0.5:
+                icon = "star_half"
+                color = "#f59e0b"
+            else:
+                icon = "star_border"
+                color = "var(--c-border-strong)"
+            ui.icon(icon, size="14px").style(f"color:{color}")
+
+
+def _render_star_input(value: float, on_change) -> None:
+    with (
+        ui.element("div")
+        .classes("sp-star-input")
+        .style("display:flex;gap:2px;align-items:center;cursor:pointer")
+    ):
+        for i in range(1, 6):
+            half_val = i - 0.5
+            full_val = float(i)
+            with ui.element("div").style("position:relative;width:22px;height:22px;cursor:pointer"):
+                if value >= full_val:
+                    icon = "star"
+                    color = "#f59e0b"
+                elif value >= half_val:
+                    icon = "star_half"
+                    color = "#f59e0b"
+                else:
+                    icon = "star_border"
+                    color = "var(--c-border-strong)"
+                ui.icon(icon, size="22px").style(
+                    f"color:{color};position:absolute;top:0;left:0;pointer-events:none"
+                )
+                ui.element("div").style(
+                    "position:absolute;top:0;left:0;width:50%;height:100%;z-index:1"
+                ).on("click", lambda e, v=half_val: on_change(v))
+                ui.element("div").style(
+                    "position:absolute;top:0;right:0;width:50%;height:100%;z-index:1"
+                ).on("click", lambda e, v=full_val: on_change(v))
+        if value and value > 0:
+            with (
+                ui.element("div")
+                .style(
+                    "width:16px;height:16px;cursor:pointer;display:flex;"
+                    "align-items:center;justify-content:center;margin-left:2px"
+                )
+                .on("click", lambda e: on_change(None))
+                .tooltip("Waardering wissen")
+            ):
+                ui.icon("sym_r_close", size="12px").style("color:var(--c-text-4)")
+
+
 def _render_dish_card(dish, data: _DishCardData | None, session, reload_fn) -> None:
     from pyplus.ui.format import (
         cooking_emoji,
-        cooking_label,
         meat_emoji,
-        meat_label,
         parse_cooking_methods,
         prep_time_label,
         starch_emoji,
-        starch_label,
         veg_emoji,
     )
 
@@ -438,16 +491,23 @@ def _render_dish_card(dish, data: _DishCardData | None, session, reload_fn) -> N
     total = len(d.ingredients)
     show_meta = session.settings.show_dish_metadata
 
+    has_issue = bool(d.discontinued or d.unavail > 0)
+
     with (
         ui.element("div")
         .classes("sp-dish-card")
         .style("opacity:.6" if dish.archived else "")
         .on("click", lambda di=dish: _open_editor(user_id, session, di.id, reload_fn))
     ):
-        ui.label(dish.name).classes("sp-dish-card-name")
+        # Title row + rating
+        with ui.element("div").style(
+            "display:flex;align-items:flex-start;justify-content:space-between;gap:.375rem"
+        ):
+            ui.label(dish.name).classes("sp-dish-card-name").style("flex:1;min-width:0")
+            if dish.rating and dish.rating > 0:
+                _render_star_display(dish.rating)
 
         if show_meta:
-            # Row 1: dish classification — emoji only, no labels
             prop_parts: list[str] = []
             me = meat_emoji(dish.meat_type)
             if me:
@@ -461,51 +521,34 @@ def _render_dish_card(dish, data: _DishCardData | None, session, reload_fn) -> N
             prep = prep_time_label(dish.prep_minutes)
             if prep:
                 prop_parts.append(f"⏱ {prep}")
+            cooking_methods = parse_cooking_methods(dish)
+            for m in cooking_methods:
+                ce = cooking_emoji(m)
+                if ce:
+                    prop_parts.append(ce)
+            if dish.is_cold:
+                prop_parts.append("❄️")
             if prop_parts:
                 ui.label(" · ".join(prop_parts)).style(
                     "font-size:11px;color:var(--c-text-3);margin-top:2px"
                 )
 
-            # Row 2: cooking methods as small chips
-            cooking_methods = parse_cooking_methods(dish)
-            if cooking_methods or dish.is_cold:
-                with ui.element("div").style(
-                    "display:flex;gap:.25rem;flex-wrap:wrap;margin-top:3px"
-                ):
-                    for m in cooking_methods:
-                        ce = cooking_emoji(m)
-                        cl = cooking_label(m)
-                        if ce:
-                            ui.label(f"{ce} {cl}").style(
-                                "font-size:10px;padding:1px 6px;border-radius:10px;"
-                                "background:var(--c-surface-2);color:var(--c-text-3);"
-                                "white-space:nowrap"
-                            )
-                    if dish.is_cold:
-                        ui.label("❄️ Koud").style(
-                            "font-size:10px;padding:1px 6px;border-radius:10px;"
-                            "background:var(--c-surface-2);color:var(--c-text-3);"
-                            "white-space:nowrap"
-                        )
-
-        with ui.element("div").style("display:flex;align-items:center;gap:.5rem;margin-top:4px"):
+        # Bottom line: count + price + availability
+        with ui.element("div").style(
+            "display:flex;align-items:center;gap:.375rem;margin-top:auto;padding-top:4px"
+        ):
             parts = [f"{total} ingrediënt{'en' if total != 1 else ''}"]
             if d.total_price > 0:
                 parts.append(f"· ≈ €\xa0{d.total_price:.2f}".replace(".", ","))
-            ui.label(" ".join(parts)).style(
-                "font-size:11px;color:var(--c-text-4)"
-            )
-            if total > 0:
-                if d.discontinued:
-                    ui.label(t("dishes.discontinued_count", n=len(d.discontinued))).classes(
-                        "sp-badge sp-badge-unavailable"
-                    ).style("font-size:10px")
-                elif d.unavail > 0:
-                    ui.label(t("dishes.partial_unavail", n=d.unavail)).classes(
-                        "sp-badge sp-badge-unavailable"
-                    ).style("font-size:10px")
-                elif d.unknown == total:
-                    pass
+            ui.label(" ".join(parts)).style("font-size:11px;color:var(--c-text-4)")
+            if total > 0 and has_issue:
+                n = len(d.discontinued) if d.discontinued else d.unavail
+                label_key = (
+                    "dishes.discontinued_count" if d.discontinued else "dishes.partial_unavail"
+                )
+                ui.label(t(label_key, n=n)).classes("sp-badge sp-badge-unavailable").style(
+                    "font-size:10px"
+                )
 
 
 # ── CRUD helpers ───────────────────────────────────────────────────────────────
@@ -578,6 +621,8 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
         except Exception:
             cooking_val = []
         cold_val = dish.is_cold
+        dinner_val = dish.is_dinner
+        rating_val = dish.rating
     else:
         dish = None
         raw_ings = []
@@ -589,6 +634,8 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
         veg_val = None
         cooking_val = []
         cold_val = False
+        dinner_val = True
+        rating_val = None
 
     meta = {
         "prep_minutes": prep_val,
@@ -597,6 +644,8 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
         "veg_count": veg_val,
         "cooking_methods": list(cooking_val),
         "is_cold": cold_val,
+        "is_dinner": dinner_val,
+        "rating": rating_val,
     }
 
     rows: list[_IngRow] = []
@@ -637,21 +686,22 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
     # ── Dialog ────────────────────────────────────────────────────────
     with ui.dialog(value=True).props("persistent").classes("sp-editor-dialog") as dlg:
         with ui.card().style(
-            "width:680px;max-width:95vw;max-height:90vh;padding:0;"
+            "width:640px;max-width:95vw;max-height:90vh;padding:0;"
             "display:flex;flex-direction:column;overflow:hidden"
         ):
             # Header
             with ui.element("div").style(
                 "display:flex;align-items:center;justify-content:space-between;"
-                "padding:1rem 1.25rem .875rem;border-bottom:1px solid var(--c-border);"
+                "padding:.875rem 1.25rem;border-bottom:1px solid var(--c-border);"
                 "flex-shrink:0;gap:.5rem"
             ):
                 with ui.element("div").style(
-                    "display:flex;align-items:center;gap:.25rem;min-width:0"
+                    "display:flex;align-items:center;gap:.375rem;min-width:0"
                 ):
                     title = t("dishes.edit") if dish else t("dishes.new")
                     ui.label(title).style(
-                        "font-size:17px;font-weight:700;color:var(--c-text);white-space:nowrap"
+                        "font-size:17px;font-weight:700;color:var(--c-text);"
+                        "white-space:nowrap;letter-spacing:-.2px"
                     )
                     if dish:
                         with ui.button(icon="sym_r_more_vert").props("flat dense round size=sm"):
@@ -676,12 +726,12 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
                                 )
 
                 with ui.element("div").style(
-                    "display:flex;align-items:center;gap:.25rem;flex-shrink:0"
+                    "display:flex;align-items:center;gap:.5rem;flex-shrink:0"
                 ):
                     ui.button(
                         t("action.cancel"),
                         on_click=dlg.close,
-                    ).props("flat rounded no-caps color=grey")
+                    ).props("flat rounded no-caps color=grey").style("font-size:13px")
 
                     async def _save() -> None:
                         await _save_dish(
@@ -699,14 +749,16 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
                     ui.button(
                         t("action.save"),
                         on_click=_save,
-                    ).props("unelevated rounded no-caps color=primary")
+                    ).props("unelevated rounded no-caps color=primary").style(
+                        "font-size:13px;font-weight:600;min-width:80px"
+                    )
 
             # Scrollable body
-            with ui.element("div").style("flex:1;overflow-y:auto;padding:1.25rem"):
+            with ui.element("div").style("flex:1;overflow-y:auto;padding:1.25rem 1.25rem .75rem"):
                 name_input = (
                     ui.input(label=t("dishes.name_label"), value=name_val)
-                    .props("outlined")
-                    .style("width:100%;margin-bottom:.875rem")
+                    .props("outlined dense")
+                    .style("width:100%;margin-bottom:.625rem")
                 )
 
                 notes_input = (
@@ -714,42 +766,46 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
                         label=t("dishes.prep_notes_label"),
                         value=notes_val,
                     )
-                    .props("outlined autogrow")
-                    .style("width:100%;margin-bottom:1rem")
+                    .props("outlined dense autogrow")
+                    .style("width:100%;margin-bottom:.125rem")
                 )
                 ui.label(t("dishes.prep_notes_hint")).style(
-                    "font-size:11px;color:var(--c-text-4);margin-top:-.625rem;margin-bottom:1rem"
+                    "font-size:11px;color:var(--c-text-4);margin-bottom:.75rem"
                 )
 
                 _render_meta_fields(meta)
 
+                # Ingredients section header
                 with ui.element("div").style(
-                    "display:flex;align-items:center;justify-content:space-between;"
-                    "margin-bottom:.625rem"
+                    "display:flex;align-items:baseline;justify-content:space-between;"
+                    "margin-bottom:.5rem;margin-top:.25rem"
                 ):
                     ui.label(t("dishes.ingredients")).style(
                         "font-size:14px;font-weight:600;color:var(--c-text)"
                     )
 
-                @ui.refreshable
-                def _total_price_label() -> None:
-                    total = sum(r.price for r in rows if r.price > 0 and not r.optional)
-                    if total > 0:
-                        ui.label(
-                            f"Totaal ongeveer €\xa0{total:.2f}".replace(".", ",")
-                        ).style(
-                            "font-size:11px;color:var(--c-text-4)"
-                        )
+                    @ui.refreshable
+                    def _total_price_label() -> None:
+                        total = sum(r.price for r in rows if r.price > 0 and not r.optional)
+                        if total > 0:
+                            ui.label(f"≈ €\xa0{total:.2f}".replace(".", ",")).style(
+                                "font-size:12px;color:var(--c-text-4);font-weight:500"
+                            )
 
-                _total_price_label()
+                    _total_price_label()
 
                 @ui.refreshable
                 def _ingredient_list() -> None:
                     _total_price_label.refresh()
                     if not rows:
-                        ui.label("Nog geen ingrediënten.").style(
-                            "font-size:13px;color:var(--c-text-4);padding:.5rem 0"
-                        )
+                        with ui.element("div").style(
+                            "display:flex;flex-direction:column;align-items:center;"
+                            "padding:1.5rem 0;gap:.25rem"
+                        ):
+                            ui.label("🛒").style("font-size:1.5rem;opacity:.3")
+                            ui.label("Nog geen ingrediënten.").style(
+                                "font-size:13px;color:var(--c-text-4)"
+                            )
                         return
                     for idx, row in enumerate(rows):
                         _render_ingredient_row(row, idx, rows, session, user_id, _ingredient_list)
@@ -758,17 +814,18 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
 
             # Pinned footer
             with ui.element("div").style(
-                "display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;flex-shrink:0;"
-                "padding:.75rem 1.25rem;border-top:1px solid var(--c-border);background:var(--c-surface)"
+                "display:flex;gap:.25rem;align-items:center;flex-shrink:0;"
+                "padding:.625rem 1.25rem;border-top:1px solid var(--c-border);"
+                "background:var(--c-surface)"
             ):
                 ui.button(
                     f"+ {t('dishes.add_ingredient')}",
                     on_click=lambda: _add_new_row(rows, _ingredient_list),
-                ).props("flat no-caps color=primary").style("font-size:13px")
+                ).props("flat no-caps color=primary dense").style("font-size:12px")
                 ui.button(
                     f"+ {t('dishes.add_flexible')}",
                     on_click=lambda: _add_flexible_row(rows, _ingredient_list),
-                ).props("flat no-caps color=secondary").style("font-size:13px").tooltip(
+                ).props("flat no-caps color=secondary dense").style("font-size:12px").tooltip(
                     t("dishes.flexible_hint")
                 )
 
@@ -862,7 +919,9 @@ def _render_meta_fields(meta: dict) -> None:
             .props("outlined dense options-dense")
             .style("width:100%")
         )
-        starch_sel.on("update:model-value", lambda e, s=starch_sel: meta.update(starch_type=s.value))
+        starch_sel.on(
+            "update:model-value", lambda e, s=starch_sel: meta.update(starch_type=s.value)
+        )
 
         veg_sel = (
             ui.select(veg_opts, value=meta["veg_count"], label=t("dishes.veg_label"))
@@ -871,16 +930,22 @@ def _render_meta_fields(meta: dict) -> None:
         )
         veg_sel.on("update:model-value", lambda e, s=veg_sel: meta.update(veg_count=s.value))
 
-    ui.label(t("dishes.cooking_methods_label")).style(
-        "font-size:12px;font-weight:600;color:var(--c-text-2);margin-bottom:.25rem"
-    )
-    with ui.element("div").style("display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:.75rem"):
+    with ui.element("div").style(
+        "display:flex;align-items:center;gap:.25rem .75rem;flex-wrap:wrap;margin-bottom:.75rem"
+    ):
+        ui.label(t("dishes.cooking_methods_label")).style(
+            "font-size:12px;font-weight:600;color:var(--c-text-2);margin-right:.25rem"
+        )
         for method in COOKING_METHODS:
             checked = method in meta.get("cooking_methods", [])
-            cb = ui.checkbox(
-                f"{cooking_emoji(method)} {cooking_label(method)}",
-                value=checked,
-            ).props("dense")
+            cb = (
+                ui.checkbox(
+                    f"{cooking_emoji(method)} {cooking_label(method)}",
+                    value=checked,
+                )
+                .props("dense")
+                .style("margin-right:-.25rem")
+            )
 
             def _on_cooking(e, m=method, c=cb) -> None:
                 methods = meta.get("cooking_methods", [])
@@ -892,15 +957,43 @@ def _render_meta_fields(meta: dict) -> None:
 
             cb.on("update:model-value", _on_cooking)
 
-    cold_cb = (
-        ui.checkbox(f"❄️ {t('dishes.is_cold_label')}", value=meta.get("is_cold", False))
-        .props("dense")
-        .style("margin-bottom:1rem")
-    )
-    cold_cb.on(
-        "update:model-value",
-        lambda e: meta.update(is_cold=bool(cold_cb.value)),
-    )
+        cold_cb = (
+            ui.checkbox(f"❄️ {t('dishes.is_cold_label')}", value=meta.get("is_cold", False))
+            .props("dense")
+            .style("margin-right:-.25rem")
+        )
+        cold_cb.on(
+            "update:model-value",
+            lambda e: meta.update(is_cold=bool(cold_cb.value)),
+        )
+
+        dinner_cb = (
+            ui.checkbox(
+                f"🍽️ {t('dishes.is_dinner_label')}",
+                value=meta.get("is_dinner", True),
+            )
+            .props("dense")
+            .style("margin-right:-.25rem")
+        )
+        dinner_cb.on(
+            "update:model-value",
+            lambda e: meta.update(is_dinner=bool(dinner_cb.value)),
+        )
+
+    with ui.element("div").style("display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem"):
+        ui.label(t("dishes.rating_label")).style(
+            "font-size:12px;font-weight:600;color:var(--c-text-2)"
+        )
+
+        @ui.refreshable
+        def _rating_input():
+            def _on_rating(val):
+                meta["rating"] = val
+                _rating_input.refresh()
+
+            _render_star_input(meta.get("rating") or 0, _on_rating)
+
+        _rating_input()
 
 
 def _add_new_row(rows: list[_IngRow], refresh_fn) -> None:
@@ -949,17 +1042,14 @@ def _render_flexible_row(row: _IngRow, idx: int, rows: list, refresh_fn) -> None
         ui.element("div")
         .classes("sp-ing-row")
         .style(
-            "padding:.625rem .75rem;border:1px dashed var(--c-brand);"
-            "border-radius:var(--r-md);margin-bottom:.5rem;background:var(--c-brand-tint)"
+            "padding:.5rem .625rem;border:1px dashed var(--c-brand);"
+            "border-radius:var(--r-md);margin-bottom:.375rem;background:var(--c-brand-tint)"
         )
     ):
-        # Top line: icon + label
-        with ui.element("div").style(
-            "display:flex;align-items:center;gap:.5rem;min-width:0;overflow:hidden"
-        ):
-            ui.icon("sym_r_tune", size="20px").style("color:var(--c-brand-dark);flex-shrink:0")
+        with ui.element("div").style("display:flex;align-items:center;gap:.5rem;min-width:0"):
+            ui.icon("sym_r_tune", size="18px").style("color:var(--c-brand-dark);flex-shrink:0")
             with ui.element("div").style(
-                "flex:1;min-width:0;overflow:hidden;display:flex;flex-direction:column;gap:2px"
+                "flex:1;min-width:0;overflow:hidden;display:flex;flex-direction:column;gap:1px"
             ):
                 ui.label(t("dishes.flexible_badge")).style(
                     "font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;"
@@ -974,7 +1064,10 @@ def _render_flexible_row(row: _IngRow, idx: int, rows: list, refresh_fn) -> None
                     "blur", lambda e, r=row: setattr(r, "display_name", label_input.value or "")
                 )
 
-        # Bottom line: amount + unit + buttons
+            ui.button(
+                icon="sym_r_delete", on_click=lambda i=idx: _remove_row(rows, i, refresh_fn)
+            ).props("flat dense round size=sm color=negative")
+
         with (
             ui.element("div")
             .classes("sp-ing-controls")
@@ -983,7 +1076,7 @@ def _render_flexible_row(row: _IngRow, idx: int, rows: list, refresh_fn) -> None
             amount_input = (
                 ui.input(value=_fmt_amount(row.amount))
                 .props("outlined dense")
-                .style("width:56px;flex-shrink:0")
+                .style("width:52px;flex-shrink:0")
             )
 
             def _amount_change(e, r=row):
@@ -996,26 +1089,23 @@ def _render_flexible_row(row: _IngRow, idx: int, rows: list, refresh_fn) -> None
             unit_select = (
                 ui.select(_UNITS, value=row.amount_unit if row.amount_unit in _UNITS else _UNITS[0])
                 .props("outlined dense options-dense")
-                .style("width:72px;flex-shrink:0")
+                .style("width:90px;flex-shrink:0")
             )
             unit_select.on(
                 "update:model-value", lambda e, r=row: setattr(r, "amount_unit", e.value)
             )
 
-            with ui.element("div").style("display:flex;gap:2px;flex-shrink:0;margin-left:auto"):
+            with ui.element("div").style("display:flex;gap:1px;flex-shrink:0;margin-left:auto"):
                 if idx > 0:
                     ui.button(
                         icon="sym_r_arrow_upward",
                         on_click=lambda i=idx: _move_row(rows, i, -1, refresh_fn),
-                    ).props("flat dense size=sm")
+                    ).props("flat dense round size=sm")
                 if idx < len(rows) - 1:
                     ui.button(
                         icon="sym_r_arrow_downward",
                         on_click=lambda i=idx: _move_row(rows, i, +1, refresh_fn),
-                    ).props("flat dense size=sm")
-                ui.button(
-                    icon="sym_r_delete", on_click=lambda i=idx: _remove_row(rows, i, refresh_fn)
-                ).props("flat dense size=sm color=negative")
+                    ).props("flat dense round size=sm")
 
 
 def _fmt_amount(amount: float) -> str:
@@ -1077,6 +1167,7 @@ async def _open_substitute_for_row(row: _IngRow, session, user_id: int, refresh_
         price=price,
         brand=brand,
         mode="cart",
+        is_unavailable=row.discontinued,
         on_select=_on_pick,
     )
 
@@ -1091,22 +1182,22 @@ def _render_ingredient_row(
         ui.element("div")
         .classes("sp-ing-row")
         .style(
-            "padding:.625rem .75rem;border:1px solid var(--c-border);"
-            "border-radius:var(--r-md);margin-bottom:.5rem;"
+            "padding:.5rem .625rem;border:1px solid var(--c-border);"
+            "border-radius:var(--r-md);margin-bottom:.375rem;"
             "background:var(--c-surface)"
         )
     ):
-        # Top row: [image] [name/search] — always on first line
+        # Top row: [image] [name/search] [action buttons]
         with ui.element("div").style("display:flex;align-items:center;gap:.5rem;min-width:0"):
             if row.image_url and not row.relinking:
                 ui.image(row.image_url).style(
-                    "width:40px;height:40px;border-radius:var(--r-sm);"
-                    "object-fit:contain;background:var(--c-border);flex-shrink:0"
+                    "width:36px;height:36px;border-radius:var(--r-sm);"
+                    "object-fit:contain;background:white;flex-shrink:0"
                 )
             else:
                 ui.element("div").style(
-                    "width:40px;height:40px;border-radius:var(--r-sm);"
-                    "background:var(--c-border);flex-shrink:0"
+                    "width:36px;height:36px;border-radius:var(--r-sm);"
+                    "background:var(--c-surface-2);flex-shrink:0"
                 )
 
             if row.relinking or not row.sku:
@@ -1124,39 +1215,52 @@ def _render_ingredient_row(
                         "font-size:13px;font-weight:500;overflow:hidden;"
                         "text-overflow:ellipsis;white-space:nowrap"
                     )
+                    sub_parts: list[str] = []
                     unit_text = row.subtitle or (
                         f"Per {row.pack_size:g} {row.pack_unit}"
                         if row.pack_size and row.pack_unit
                         else ""
                     )
-                    sub_parts: list[str] = []
                     if unit_text:
                         sub_parts.append(unit_text)
                     if row.price > 0:
-                        sub_parts.append(
-                            f"€\xa0{row.price:.2f}".replace(".", ",")
-                        )
+                        sub_parts.append(f"€\xa0{row.price:.2f}".replace(".", ","))
                     if sub_parts:
                         ui.label(" · ".join(sub_parts)).style(
                             "font-size:11px;color:var(--c-text-3);overflow:hidden;"
                             "text-overflow:ellipsis;white-space:nowrap"
                         )
-                    with ui.element("div").style(
-                        "display:flex;align-items:center;gap:.375rem;margin-top:1px"
-                    ):
-                        if row.discontinued:
-                            ui.label(t("status.discontinued")).classes(
-                                "sp-badge sp-badge-unavailable"
-                            ).style("font-size:10px;display:inline-block")
 
-                        async def _open_sub(r=row):
-                            await _open_substitute_for_row(r, session, user_id, refresh_fn)
+            # Action buttons — right-aligned
+            with ui.element("div").style("display:flex;gap:1px;flex-shrink:0;align-items:center"):
+                if row.sku and not row.relinking:
+                    if row.discontinued:
+                        ui.label(t("status.discontinued")).classes(
+                            "sp-badge sp-badge-unavailable"
+                        ).style("font-size:10px;margin-right:.25rem")
 
-                        ui.button(
-                            t("substitute.replace_btn"),
-                            icon="sym_r_find_replace",
-                            on_click=_open_sub,
-                        ).props("flat dense no-caps size=sm color=primary")
+                    async def _open_sub(r=row):
+                        await _open_substitute_for_row(r, session, user_id, refresh_fn)
+
+                    ui.button(
+                        icon="sym_r_find_replace",
+                        on_click=_open_sub,
+                    ).props("flat dense round size=sm color=primary").tooltip(
+                        t("substitute.replace_btn")
+                    )
+                    ui.button(
+                        icon="sym_r_edit",
+                        on_click=lambda r=row: (
+                            setattr(r, "relinking", True),
+                            setattr(r, "search_results", []),
+                            refresh_fn.refresh(),
+                        ),
+                    ).props("flat dense round size=sm").tooltip(t("dishes.relink"))
+
+                ui.button(
+                    icon="sym_r_delete",
+                    on_click=lambda i=idx: _remove_row(rows, i, refresh_fn),
+                ).props("flat dense round size=sm color=negative")
 
         # Inline results — rendered as a column sibling so they never clip on mobile
         if row.relinking or not row.sku:
@@ -1167,17 +1271,15 @@ def _render_ingredient_row(
                 with box:
                     if r.searching:
                         with ui.element("div").style(
-                            "background:var(--c-surface);border:1px solid var(--c-border);"
-                            "border-radius:var(--r-md);padding:.5rem .75rem"
+                            "background:var(--c-surface-2);"
+                            "border-radius:var(--r-md);padding:.5rem .75rem;margin-top:.25rem"
                         ):
-                            ui.label("Zoeken…").style(
-                                "font-size:12px;color:var(--c-text-3)"
-                            )
+                            ui.label("Zoeken…").style("font-size:12px;color:var(--c-text-3)")
                     elif r.search_results:
                         with ui.element("div").style(
                             "background:var(--c-surface);border:1px solid var(--c-border);"
-                            "border-radius:var(--r-md);box-shadow:var(--shadow-md);"
-                            "max-height:50vh;overflow-y:auto"
+                            "border-radius:var(--r-md);margin-top:.25rem;"
+                            "max-height:45vh;overflow-y:auto"
                         ):
                             for prod in r.search_results[:8]:
                                 _render_search_result(prod, r, session, user_id, refresh_fn)
@@ -1201,7 +1303,7 @@ def _render_ingredient_row(
             search_field.on("update:model-value", _on_search)
             _draw_results()
 
-        # Controls row: [amount] [unit] [optional] [buttons]
+        # Controls row: [amount] [unit] [optional] [move buttons]
         with (
             ui.element("div")
             .classes("sp-ing-controls")
@@ -1211,7 +1313,7 @@ def _render_ingredient_row(
             amount_input = (
                 ui.input(value=amount_str[0])
                 .props("outlined dense")
-                .style("width:56px;flex-shrink:0")
+                .style("width:52px;flex-shrink:0")
             )
 
             def _amount_change(e, r=row):
@@ -1224,7 +1326,7 @@ def _render_ingredient_row(
             amount_input.on("keydown.enter", _amount_change)
 
             ui.label(row.amount_unit or "").style(
-                "font-size:12px;color:var(--c-text-3);flex-shrink:0;min-width:34px"
+                "font-size:12px;color:var(--c-text-3);flex-shrink:0;min-width:30px"
             )
 
             opt_check = ui.checkbox(t("dishes.optional"), value=row.optional).props("dense")
@@ -1234,33 +1336,18 @@ def _render_ingredient_row(
                 lambda e, r=row: setattr(r, "optional", bool(e.value)),
             )
 
-            with ui.element("div").style("display:flex;gap:2px;flex-shrink:0;margin-left:auto"):
+            with ui.element("div").style("display:flex;gap:1px;flex-shrink:0;margin-left:auto"):
                 if idx > 0:
                     ui.button(
                         icon="sym_r_arrow_upward",
                         on_click=lambda i=idx: _move_row(rows, i, -1, refresh_fn),
-                    ).props("flat dense size=sm")
+                    ).props("flat dense round size=sm")
 
                 if idx < len(rows) - 1:
                     ui.button(
                         icon="sym_r_arrow_downward",
                         on_click=lambda i=idx: _move_row(rows, i, +1, refresh_fn),
-                    ).props("flat dense size=sm")
-
-                if row.sku and not row.relinking:
-                    ui.button(
-                        icon="sym_r_edit",
-                        on_click=lambda r=row: (
-                            setattr(r, "relinking", True),
-                            setattr(r, "search_results", []),
-                            refresh_fn.refresh(),
-                        ),
-                    ).props("flat dense size=sm color=primary").tooltip(t("dishes.relink"))
-
-                ui.button(
-                    icon="sym_r_delete",
-                    on_click=lambda i=idx: _remove_row(rows, i, refresh_fn),
-                ).props("flat dense size=sm color=negative")
+                    ).props("flat dense round size=sm")
 
 
 def _render_search_result(prod, row: _IngRow, session, user_id: int, refresh_fn) -> None:
@@ -1288,29 +1375,18 @@ def _render_search_result(prod, row: _IngRow, session, user_id: int, refresh_fn)
         refresh_fn.refresh()
 
     avail_color = "var(--c-brand-dark)" if prod.is_available else "var(--c-danger)"
-    with (
-        ui.element("div")
-        .style(
-            "display:flex;align-items:center;gap:.5rem;"
-            "padding:.375rem .75rem;cursor:pointer;transition:background .1s"
-        )
-        .on("click", _pick)
-        .on("mouseenter", lambda el: el.style("background:var(--c-surface-2)"))
-        .on("mouseleave", lambda el: el.style("background:none"))
-    ):
+    with ui.element("div").classes("sp-search-result").on("click", _pick):
         if prod.image_url:
             ui.image(prod.image_url).style(
                 "width:32px;height:32px;object-fit:contain;"
-                "border-radius:4px;background:var(--c-border);flex-shrink:0"
+                "border-radius:var(--r-xs);background:white;flex-shrink:0"
             )
         with ui.element("div").style("flex:1;min-width:0"):
             ui.label(prod.name).style(
                 "font-size:13px;font-weight:500;overflow:hidden;"
                 "text-overflow:ellipsis;white-space:nowrap"
             )
-            with ui.element("div").style(
-                "display:flex;align-items:center;gap:.375rem"
-            ):
+            with ui.element("div").style("display:flex;align-items:center;gap:.375rem"):
                 if prod.subtitle:
                     ui.label(prod.subtitle).style("font-size:11px;color:var(--c-text-3)")
                 if prod.price > 0:
@@ -1373,6 +1449,8 @@ async def _save_dish(
                 starch_type=meta.get("starch_type"),
                 cooking_methods=cooking_json,
                 is_cold=bool(meta.get("is_cold", False)),
+                is_dinner=bool(meta.get("is_dinner", True)),
+                rating=meta.get("rating"),
                 veg_count=meta.get("veg_count"),
             )
         else:
@@ -1387,6 +1465,8 @@ async def _save_dish(
                 starch_type=meta.get("starch_type"),
                 cooking_methods=cooking_json,
                 is_cold=bool(meta.get("is_cold", False)),
+                is_dinner=bool(meta.get("is_dinner", True)),
+                rating=meta.get("rating"),
                 veg_count=meta.get("veg_count"),
             )
 
