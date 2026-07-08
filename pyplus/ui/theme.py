@@ -844,6 +844,8 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 72px;
+  min-width: 0;
+  overflow: hidden;
 }
 .sp-dish-card:hover {
   border-color: var(--c-border-strong);

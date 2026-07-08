@@ -276,6 +276,16 @@ async def _load_weather_temps(
     return result
 
 
+def _staple_is_due(fp, today: datetime.date) -> bool:
+    """Check if a staple is due based on its every_n_weeks cadence."""
+    if fp.every_n_weeks <= 1:
+        return True
+    if fp.last_added_at is None:
+        return True
+    days_since = (today - fp.last_added_at).days
+    return days_since >= fp.every_n_weeks * 7 - 1
+
+
 async def _fill_staples(
     user_id: int,
     store: int,
@@ -287,6 +297,7 @@ async def _fill_staples(
     from pyplus.db.engine import AsyncSessionLocal
 
     already = already_planned or {}
+    today = datetime.date.today()
 
     async with AsyncSessionLocal() as db:
         fps = await repo.get_fixed_products(db, user_id)
@@ -294,6 +305,10 @@ async def _fill_staples(
     for fp in fps:
         if fp.min_qty < 1:
             continue
+
+        if not _staple_is_due(fp, today):
+            continue
+
         existing = already.get(fp.sku, 0)
         needed = fp.min_qty - existing
         if needed < 1:

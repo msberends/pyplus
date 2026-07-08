@@ -67,7 +67,7 @@ class MlKind(str, enum.Enum):
 # on Dish.meat_type; the UI maps them to icons via pyplus.i18n.
 MEAT_TYPES = ("vega", "kip", "rund", "varken", "vis", "gecombineerd")
 PREP_TIME_BUCKETS = (20, 40, 60, 120)  # minutes — upper bound of each bucket
-STARCH_TYPES = ("aardappels", "pasta", "rijst", "noedels", "deeg", "geen_anders")
+STARCH_TYPES = ("aardappels", "pasta", "rijst", "noedels", "deeg", "wraps", "geen_anders")
 COOKING_METHODS = ("kookplaat", "oven", "magnetron", "airfryer")
 
 
@@ -217,6 +217,8 @@ class FixedProduct(Base):
     display_name: Mapped[str] = mapped_column(String(300), nullable=False)
     default_qty: Mapped[int] = mapped_column(Integer, default=1)
     min_qty: Mapped[int] = mapped_column(Integer, default=0, server_default="1")
+    every_n_weeks: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    last_added_at: Mapped[Optional[datetime.date]] = mapped_column(Date, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
     user: Mapped["User"] = relationship(back_populates="fixed_products")

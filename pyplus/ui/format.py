@@ -97,6 +97,7 @@ _STARCH_EMOJI = {
     "rijst": "🍚",
     "noedels": "🍜",
     "deeg": "🥟",
+    "wraps": "🌯",
     "geen_anders": "➖",
 }
 _STARCH_LABEL = {
@@ -105,6 +106,7 @@ _STARCH_LABEL = {
     "rijst": "Rijst",
     "noedels": "Noedels",
     "deeg": "Deeg",
+    "wraps": "Wraps",
     "geen_anders": "Geen/anders",
 }
 

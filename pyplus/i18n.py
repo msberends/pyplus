@@ -58,7 +58,11 @@ _STRINGS: dict[str, str] = {
     "staples.add_all_topped_up": "aangevuld naar {n}",
     "staples.add_all_added": "{n} toegevoegd",
     "staples.add_all_skipped": "overgeslagen (al voldoende)",
+    "staples.add_all_not_due": "overgeslagen (nog niet aan de beurt)",
     "staples.add_all_none": "Alles stond al in je mandje.",
+    "staples.frequency_weekly": "wekelijks",
+    "staples.frequency_biweekly": "elke 2 weken",
+    "staples.frequency_monthly": "elke 4 weken",
     # ── Weekmenu page ─────────────────────────────────────────────────────────
     "weekmenu.add_ingredients": "Ingrediënten toevoegen",
     "weekmenu.edit_dish": "Gerecht bewerken",

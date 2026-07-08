@@ -279,11 +279,21 @@ def _select_setting(
 
 # Variety presets: (selection_method, temperature, label, description)
 _VARIETY_PRESETS: dict[int, tuple[str, float | None, str, str]] = {
-    1: ("greedy",  None, "Voorspelbaar", "Elke week hetzelfde weekmenu — volledig deterministisch."),
-    2: ("softmax", 0.2,  "Stabiel",      "Bijna altijd de beste keuze, zelden een verrassing."),
-    3: ("softmax", 0.5,  "Gevarieerd",   "Goede balans: vertrouwde gerechten met wekelijkse afwisseling."),
-    4: ("softmax", 1.0,  "Avontuurlijk", "Merkbaar wisselend — elk plan ziet er anders uit."),
-    5: ("softmax", 2.0,  "Verrassend",   "Heel vrij — alle redelijk scorende gerechten komen aan bod."),
+    1: ("greedy", None, "Voorspelbaar", "Elke week hetzelfde weekmenu — volledig deterministisch."),
+    2: ("softmax", 0.2, "Stabiel", "Bijna altijd de beste keuze, zelden een verrassing."),
+    3: (
+        "softmax",
+        0.5,
+        "Gevarieerd",
+        "Goede balans: vertrouwde gerechten met wekelijkse afwisseling.",
+    ),
+    4: ("softmax", 1.0, "Avontuurlijk", "Merkbaar wisselend — elk plan ziet er anders uit."),
+    5: (
+        "softmax",
+        2.0,
+        "Verrassend",
+        "Heel vrij — alle redelijk scorende gerechten komen aan bod.",
+    ),
 }
 
 
@@ -307,7 +317,9 @@ def _render_variety_control(settings: UserSettings, save_fn) -> None:
     preset = _VARIETY_PRESETS[display_level]
 
     with ui.element("div").style("padding:.75rem 0;border-top:1px solid var(--c-border)"):
-        with ui.row().style("align-items:center;justify-content:space-between;margin-bottom:.25rem"):
+        with ui.row().style(
+            "align-items:center;justify-content:space-between;margin-bottom:.25rem"
+        ):
             ui.label("Variatie in weekmenu").style(
                 "font-size:13px;font-weight:600;color:var(--c-text)"
             )

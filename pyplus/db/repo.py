@@ -424,7 +424,12 @@ async def get_fixed_products(db: AsyncSession, user_id: int) -> list[FixedProduc
 
 
 async def add_fixed_product(
-    db: AsyncSession, user_id: int, sku: str, display_name: str, default_qty: int = 1
+    db: AsyncSession,
+    user_id: int,
+    sku: str,
+    display_name: str,
+    default_qty: int = 1,
+    every_n_weeks: int = 1,
 ) -> FixedProduct | None:
     """Add a staple product. No-op (returns existing) if the sku is already a staple."""
     if not sku:
@@ -442,6 +447,7 @@ async def add_fixed_product(
         sku=sku,
         display_name=display_name,
         default_qty=default_qty,
+        every_n_weeks=every_n_weeks,
         sort_order=len(current),
     )
     db.add(fp)
@@ -459,6 +465,23 @@ async def update_fixed_product(db: AsyncSession, user_id: int, sku: str, **kwarg
         for k, v in kwargs.items():
             setattr(row, k, v)
         await db.commit()
+
+
+async def stamp_fixed_products_added(
+    db: AsyncSession,
+    user_id: int,
+    skus: list[str],
+    date: datetime.date | None = None,
+) -> None:
+    if not skus:
+        return
+    stamp = date or datetime.date.today()
+    result = await db.execute(
+        select(FixedProduct).where(FixedProduct.user_id == user_id, FixedProduct.sku.in_(skus))
+    )
+    for fp in result.scalars().all():
+        fp.last_added_at = stamp
+    await db.commit()
 
 
 async def replace_fixed_product_sku(

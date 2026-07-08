@@ -201,6 +201,7 @@ async def _render_draft(plan, result, session, user_id: int, body, settings=None
     @ui.refreshable
     def _draft_content():
         if not result.items:
+
             async def _expire():
                 from pyplus.db import repo
                 from pyplus.db.engine import AsyncSessionLocal
@@ -410,6 +411,10 @@ def _render_action_bar_top(plan, result, session, user_id: int, settings, refres
                     "confirmed",
                     cart_snapshot_json=json.dumps(cart_snapshot, ensure_ascii=False),
                 )
+                staple_skus = [
+                    i.sku for i in result.items if i.source == "autopilot:staple" and i.sku
+                ]
+                await repo.stamp_fixed_products_added(db, user_id, staple_skus)
 
             added = len(cart_snapshot)
             cost = sum(i.price * i.qty for i in result.items if not i.needs_review)

@@ -729,9 +729,9 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
                     "display:flex;align-items:center;gap:.5rem;flex-shrink:0"
                 ):
                     ui.button(
-                        t("action.cancel"),
+                        icon="sym_r_close",
                         on_click=dlg.close,
-                    ).props("flat rounded no-caps color=grey").style("font-size:13px")
+                    ).props("flat round color=grey")
 
                     async def _save() -> None:
                         await _save_dish(
@@ -754,7 +754,7 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
                     )
 
             # Scrollable body
-            with ui.element("div").style("flex:1;overflow-y:auto;padding:1.25rem 1.25rem .75rem"):
+            with ui.element("div").style("flex:1;overflow-y:auto;overflow-x:hidden;min-width:0;width:100%;padding:1.25rem 1.25rem .75rem"):
                 name_input = (
                     ui.input(label=t("dishes.name_label"), value=name_val)
                     .props("outlined dense")
@@ -858,20 +858,11 @@ def _infer_starch_type(name: str, ingredients: list[_IngRow]) -> str | None:
         return "rijst"
     if any(w in combined for w in ("noedel", "noodle", "mie", "ramen", "udon", "soba")):
         return "noedels"
+    if any(w in combined for w in ("wrap", "tortilla", "taco", "pita", "naan", "flatbread")):
+        return "wraps"
     if any(
         w in combined
-        for w in (
-            "deeg",
-            "bladerdeeg",
-            "filodeeg",
-            "pizza",
-            "brood",
-            "wrap",
-            "tortilla",
-            "taco",
-            "naan",
-            "pita",
-        )
+        for w in ("deeg", "bladerdeeg", "filodeeg", "pizza", "brood")
     ):
         return "deeg"
     return None

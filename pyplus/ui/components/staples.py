@@ -8,6 +8,7 @@ product not yet in the cart at its default_qty in one shot.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 
 from nicegui import ui
@@ -20,6 +21,22 @@ from pyplus.ui.format import alt_text as _alt
 from pyplus.ui.format import thumbnail_url
 
 log = logging.getLogger(__name__)
+
+
+async def _suggest_frequency(user_id: int, sku: str) -> int:
+    """Suggest every_n_weeks for a new staple based on order history cadence."""
+    from pyplus.services.history import build_purchase_history
+
+    records = await build_purchase_history(user_id)
+    for r in records:
+        if r.sku == sku and r.frequency is not None:
+            interval_days = 7.0 / r.frequency
+            if interval_days <= 8:
+                return 1
+            if interval_days <= 18:
+                return 2
+            return 4
+    return 1
 
 
 async def create_staples_lane(session) -> None:
@@ -272,8 +289,15 @@ def _render_add_search(session, store: int, body_refresh) -> None:
                 for prod in state["results"][:8]:
 
                     async def _pick(p=prod) -> None:
+                        freq = await _suggest_frequency(session.user_id, p.sku)
                         async with AsyncSessionLocal() as db:
-                            await repo.add_fixed_product(db, session.user_id, p.sku, p.name)
+                            await repo.add_fixed_product(
+                                db,
+                                session.user_id,
+                                p.sku,
+                                p.name,
+                                every_n_weeks=freq,
+                            )
                             from pyplus.services.dishes import cache_ingredient_sku_from_product
 
                             await cache_ingredient_sku_from_product(db, session.user_id, p)
@@ -642,6 +666,18 @@ def _render_card(
                     "font-size:11px;color:var(--c-text-3);text-align:center"
                 )
 
+            # Frequency (every_n_weeks) — toggle in edit mode, label otherwise
+            enw = fp.every_n_weeks or 1
+            if editing:
+                _render_frequency_toggle(fp, enw, session)
+            elif enw > 1:
+                freq_label = (
+                    t("staples.frequency_biweekly") if enw == 2 else t("staples.frequency_monthly")
+                )
+                ui.label(freq_label).style(
+                    "font-size:10px;color:var(--c-text-3);text-align:center;opacity:.7"
+                )
+
         # Stepper — same in-place update pattern as _render_row
         qty_lbl = None
         refill = None
@@ -667,6 +703,43 @@ def _render_card(
             refill = _fill_stepper
 
     return qty_lbl, refill
+
+
+def _render_frequency_toggle(fp, current_value: int, session) -> None:
+    """Render a 1w/2w/4w segmented button group for editing purchase frequency."""
+    options = [
+        (1, "1w"),
+        (2, "2w"),
+        (4, "4w"),
+    ]
+    with ui.element("div").style("display:flex;justify-content:center;gap:0;margin-top:2px"):
+        for value, label in options:
+            active = current_value == value
+
+            async def _set(v=value, s=fp.sku) -> None:
+                async with AsyncSessionLocal() as db:
+                    await repo.update_fixed_product(
+                        db,
+                        session.user_id,
+                        s,
+                        every_n_weeks=v,
+                    )
+                fp.every_n_weeks = v
+
+            btn = ui.button(label, on_click=_set).props("dense unelevated no-caps size=xs")
+            btn.style(
+                "font-size:10px;min-width:28px;padding:1px 4px;border-radius:0;"
+                "font-weight:600;"
+                + (
+                    "background:var(--c-accent);color:white;"
+                    if active
+                    else "background:transparent;color:var(--c-text-3);"
+                )
+            )
+            if value == 1:
+                btn.style("border-radius:4px 0 0 4px;")
+            elif value == 4:
+                btn.style("border-radius:0 4px 4px 0;")
 
 
 def _render_replace_button(fp, name, image, subtitle, price, session, body_refresh) -> None:
@@ -780,8 +853,12 @@ async def _add_all(
     if not cart_service:
         return
 
+    from pyplus.services.autopilot import _staple_is_due
+
     cart_qty_map = {it.sku: it.quantity for it in session.cart.items}
     actions: list[tuple[str, str]] = []
+    today = datetime.date.today()
+    added_skus: list[str] = []
 
     for fp in products:
         if not fp.sku:
@@ -794,6 +871,11 @@ async def _add_all(
         min_q = fp.min_qty if fp.min_qty is not None else 0
         if min_q < 1:
             continue
+
+        if not _staple_is_due(fp, today):
+            actions.append((name, t("staples.add_all_not_due")))
+            continue
+
         current = cart_qty_map.get(fp.sku, 0)
 
         if current >= min_q:
@@ -810,9 +892,14 @@ async def _add_all(
             product_image=image,
             source="staple",
         )
+        added_skus.append(fp.sku)
         if current == 0:
             actions.append((name, t("staples.add_all_added", n=to_add)))
         else:
             actions.append((name, t("staples.add_all_topped_up", n=current + to_add)))
+
+    if added_skus:
+        async with AsyncSessionLocal() as db:
+            await repo.stamp_fixed_products_added(db, session.user_id, added_skus, today)
 
     _show_add_all_dialog(actions)
