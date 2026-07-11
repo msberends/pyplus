@@ -442,10 +442,10 @@ def _render_star_display(rating: float) -> None:
         for i in range(1, 6):
             if rating >= i:
                 icon = "star"
-                color = "#f59e0b"
+                color = "var(--c-warning)"
             elif rating >= i - 0.5:
                 icon = "star_half"
-                color = "#f59e0b"
+                color = "var(--c-warning)"
             else:
                 icon = "star_border"
                 color = "var(--c-border-strong)"
@@ -464,10 +464,10 @@ def _render_star_input(value: float, on_change) -> None:
             with ui.element("div").style("position:relative;width:22px;height:22px;cursor:pointer"):
                 if value >= full_val:
                     icon = "star"
-                    color = "#f59e0b"
+                    color = "var(--c-warning)"
                 elif value >= half_val:
                     icon = "star_half"
-                    color = "#f59e0b"
+                    color = "var(--c-warning)"
                 else:
                     icon = "star_border"
                     color = "var(--c-border-strong)"
@@ -524,7 +524,7 @@ def _render_dish_card(dish, data: _DishCardData | None, session, reload_fn) -> N
                 ui.label(dish.name).classes("sp-dish-card-name")
                 if dish.group_name and dish.group_name != dish.name:
                     ui.label(f"Groep: {dish.group_name}").style(
-                        "font-size:10px;color:var(--c-text-4);margin-top:1px;"
+                        "font-size:10px;color:var(--c-brand);margin-top:1px;"
                         "white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
                     )
             if dish.rating and dish.rating > 0:

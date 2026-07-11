@@ -271,9 +271,9 @@ def _render_candidate_row(
                     _sc = (
                         "var(--c-brand)"
                         if score_pct >= 70
-                        else "#f59e0b"
+                        else "var(--c-warning)"
                         if score_pct >= 40
-                        else "#ef4444"
+                        else "var(--c-danger-red)"
                     )
                     ui.label(f"{score_pct}%").style(
                         f"font-size:10px;font-weight:700;color:{_sc};flex-shrink:0"

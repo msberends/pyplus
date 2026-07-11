@@ -492,6 +492,12 @@ def plan_week(
         (slot, did) for slot, did in current_slots.items() if did is not None
     ]
 
+    used_groups: set[str] = set()
+    for did in used_ids:
+        meta = artifact.dish_meta.get(did)
+        if meta and meta.group_name:
+            used_groups.add(meta.group_name)
+
     weather_temps = weather_temps or {}
     hot_threshold = settings.weather_hot_threshold if settings else 25.0
     w_no_oven = settings.ml_weather_no_oven if settings else 0.0
@@ -530,6 +536,11 @@ def plan_week(
                 continue
 
             available = [did for did in dish_ids if did not in used_ids]
+            available = [
+                did
+                for did in available
+                if (artifact.dish_meta.get(did) or DishMeta()).group_name not in used_groups
+            ]
             if not available:
                 break
 
@@ -572,6 +583,9 @@ def plan_week(
             result[slot] = best_id
             used_ids.add(best_id)
             assigned.append((slot, best_id))
+            best_meta = artifact.dish_meta.get(best_id)
+            if best_meta and best_meta.group_name:
+                used_groups.add(best_meta.group_name)
 
     _fill(_DINNER_SLOTS[:n_dinner])
     _fill(_LUNCH_SLOTS[:n_lunch])

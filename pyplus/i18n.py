@@ -401,6 +401,11 @@ _STRINGS: dict[str, str] = {
     "autopilot.review_hint": "Kies een alternatief of verwijder",
     "autopilot.pick_alternative": "Kies een alternatief",
     "autopilot.accept": "Kiezen",
+    "autopilot.confirm_title": "Toevoegen aan winkelwagen?",
+    "autopilot.confirm_body": "{n} producten ({cost}) worden toegevoegd aan je PLUS-winkelwagen.",
+    "autopilot.delete_confirm_title": "Plan verwijderen?",
+    "autopilot.delete_confirm_body": "Het huidige plan wordt verwijderd. Je kunt daarna een nieuw plan genereren.",
+    "autopilot.regenerate_error": "Plan kon niet worden gegenereerd. Probeer het later opnieuw.",
     # ── Autopilot settings ───────────────────────────────────────────────────
     "settings.autopilot.schedule_day": "Autopilot-dag",
     "settings.autopilot.schedule_hour": "Autopilot-tijdstip",

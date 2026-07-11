@@ -248,7 +248,7 @@ async def _render_draft(plan, result, session, user_id: int, body, settings=None
 def _render_infobox() -> None:
     with ui.element("div").style(
         "display:flex;align-items:flex-start;gap:.5rem;padding:.625rem .75rem;"
-        "background:#eee8f5;border-radius:var(--r-md);border:1px solid #d5cef0;"
+        "background:var(--c-accent-tint);border-radius:var(--r-md);border:1px solid var(--c-accent-border);"
         "margin-bottom:.75rem"
     ):
         ui.icon(_ICON, size="16px").style("color:var(--c-accent);flex-shrink:0;margin-top:1px")
@@ -370,7 +370,7 @@ def _render_weekmenu_overview(menu_items: list) -> None:
 def _render_action_bar_top(plan, result, session, user_id: int, settings, refresh_fn) -> None:
     with ui.element("div").style(
         "display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.75rem"
-    ):
+    ) as action_bar:
         clear_cart = settings and getattr(settings, "autopilot_clear_cart", False)
 
         async def _do_confirm() -> None:
@@ -424,11 +424,21 @@ def _render_action_bar_top(plan, result, session, user_id: int, settings, refres
             )
             ui.navigate.to("/autopilot")
 
-        async def _confirm() -> None:
+        def _confirm() -> None:
+            n = sum(i.qty for i in result.items if not i.needs_review)
+            cost = _eur(sum(i.price * i.qty for i in result.items if not i.needs_review))
+            confirm_body = t("autopilot.confirm_body", n=n, cost=cost)
             if clear_cart:
-                _show_clear_confirm_dialog(_do_confirm)
-            else:
-                await _do_confirm()
+                confirm_body += (
+                    "\n\nDe instelling 'Winkelwagen legen voor autopilot' staat aan. "
+                    "Je huidige winkelwagen wordt eerst geleegd."
+                )
+            _show_confirm_dialog(
+                t("autopilot.confirm_title"),
+                confirm_body,
+                _do_confirm,
+                confirm_label=t("autopilot.confirm"),
+            )
 
         ui.button(
             t("autopilot.confirm"),
@@ -438,17 +448,31 @@ def _render_action_bar_top(plan, result, session, user_id: int, settings, refres
             "font-size:12px;font-weight:600"
         )
 
-        async def _regenerate() -> None:
-            from pyplus.db import repo
-            from pyplus.db.engine import AsyncSessionLocal
-            from pyplus.services.autopilot import prepare_plan
+        regen_spinner = ui.element("div").style("display:none")
 
-            new_result = await prepare_plan(user_id, store_number=session.store_number)
-            today = datetime.date.today()
-            ws = today + datetime.timedelta(days=(7 - today.weekday()))
-            async with AsyncSessionLocal() as db:
-                await repo.upsert_autopilot_plan(db, user_id, ws, new_result.to_json())
-            ui.navigate.to("/autopilot")
+        async def _regenerate() -> None:
+            action_bar.style(
+                "display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-bottom:.75rem;"
+                "pointer-events:none;opacity:.5"
+            )
+            regen_spinner.style("display:flex;align-items:center;gap:.5rem")
+            with regen_spinner:
+                ui.spinner(size="sm", color="deep-purple")
+                ui.label(t("autopilot.generating")).style("font-size:13px;color:var(--c-text-3)")
+            try:
+                from pyplus.db import repo
+                from pyplus.db.engine import AsyncSessionLocal
+                from pyplus.services.autopilot import prepare_plan
+
+                new_result = await prepare_plan(user_id, store_number=session.store_number)
+                today = datetime.date.today()
+                ws = today + datetime.timedelta(days=(7 - today.weekday()))
+                async with AsyncSessionLocal() as db:
+                    await repo.upsert_autopilot_plan(db, user_id, ws, new_result.to_json())
+            except Exception:
+                log.exception("Regenerate plan failed")
+                ui.notify(t("autopilot.regenerate_error"), type="negative")
+            ui.run_javascript("window.location.href = '/autopilot'")
 
         ui.button(
             t("autopilot.regenerate"),
@@ -456,7 +480,7 @@ def _render_action_bar_top(plan, result, session, user_id: int, settings, refres
             on_click=_regenerate,
         ).props("flat dense no-caps size=sm").style("font-size:12px;font-weight:600")
 
-        async def _delete() -> None:
+        async def _do_delete() -> None:
             from pyplus.db import repo
             from pyplus.db.engine import AsyncSessionLocal
 
@@ -464,21 +488,30 @@ def _render_action_bar_top(plan, result, session, user_id: int, settings, refres
                 await repo.update_autopilot_plan_status(db, plan.id, "expired")
             ui.navigate.to("/autopilot")
 
+        def _delete() -> None:
+            _show_confirm_dialog(
+                t("autopilot.delete_confirm_title"),
+                t("autopilot.delete_confirm_body"),
+                _do_delete,
+                confirm_color="negative",
+            )
+
         ui.button(
             t("autopilot.delete_plan"),
             on_click=_delete,
         ).props("flat dense no-caps color=negative size=sm").style("font-size:12px;font-weight:600")
 
 
-def _show_clear_confirm_dialog(on_confirm) -> None:
+def _show_confirm_dialog(
+    title: str,
+    body: str,
+    on_confirm,
+    confirm_label: str | None = None,
+    confirm_color: str = "deep-purple",
+) -> None:
     with ui.dialog(value=True) as dlg, ui.card().style("min-width:320px;max-width:420px"):
-        ui.label(t("cart.clear_confirm_title")).style(
-            "font-size:15px;font-weight:600;margin-bottom:.5rem"
-        )
-        ui.label(
-            "De instelling 'Winkelwagen legen voor autopilot' staat aan. "
-            "Je huidige winkelwagen wordt geleegd voordat de producten worden toegevoegd."
-        ).style("font-size:13px;color:var(--c-text-3)")
+        ui.label(title).style("font-size:15px;font-weight:600;margin-bottom:.5rem")
+        ui.label(body).style("font-size:13px;color:var(--c-text-3);white-space:pre-line")
         with ui.element("div").style(
             "display:flex;justify-content:flex-end;gap:.5rem;margin-top:.75rem"
         ):
@@ -488,8 +521,8 @@ def _show_clear_confirm_dialog(on_confirm) -> None:
                 dlg.close()
                 await on_confirm()
 
-            ui.button(t("action.confirm"), on_click=_ok).props(
-                "unelevated dense no-caps color=deep-purple"
+            ui.button(confirm_label or t("action.confirm"), on_click=_ok).props(
+                f"unelevated dense no-caps color={confirm_color}"
             )
 
 
@@ -514,40 +547,40 @@ def _render_summary_bar(summary) -> None:
             _stat_pill(
                 "sym_r_sell",
                 f"{summary.promo_swaps} actie-wisselingen",
-                bg="#fff3e0",
-                fg="#92400e",
+                bg="var(--c-warning-tint-2)",
+                fg="var(--c-warning-text)",
             )
         if summary.promo_savings > 0:
             _stat_pill(
                 "sym_r_savings",
                 f"bespaar {_eur(summary.promo_savings)}",
-                bg="#e8f5e9",
-                fg="#2e7d32",
+                bg="var(--c-positive-tint)",
+                fg="var(--c-positive-text)",
             )
         if summary.needs_review_count > 0:
             _stat_pill(
                 "sym_r_rate_review",
                 t("autopilot.review_needed", n=summary.needs_review_count),
-                bg="#fffbeb",
-                fg="#f57c00",
+                bg="var(--c-warning-tint)",
+                fg="var(--c-warning-icon)",
             )
         elif summary.total_items > 0:
             _stat_pill(
                 "sym_r_check_circle",
                 t("autopilot.all_ready"),
-                bg="#eee8f5",
+                bg="var(--c-accent-tint)",
                 fg="var(--c-accent)",
             )
         if summary.free_delivery_met:
             _stat_pill(
                 "sym_r_local_shipping",
                 "Gratis bezorging inbegrepen",
-                bg="#eee8f5",
+                bg="var(--c-accent-tint)",
                 fg="var(--c-accent)",
             )
 
 
-def _stat_pill(icon: str, text: str, bg: str = "#f5f4f1", fg: str = "var(--c-text-2)") -> None:
+def _stat_pill(icon: str, text: str, bg: str = "var(--c-bg)", fg: str = "var(--c-text-2)") -> None:
     with ui.element("div").style(
         f"display:inline-flex;align-items:center;gap:.25rem;padding:2px 8px;"
         f"background:{bg};border-radius:99px;font-size:11px;font-weight:600;color:{fg}"
@@ -698,13 +731,15 @@ def _render_promo_section(items: list, plan, result, refresh_fn) -> None:
         with (
             ui.element("div")
             .classes("sp-ap-section__header")
-            .style("background:#fff3e0;border-bottom-color:#f5d6a0")
+            .style(
+                "background:var(--c-warning-tint-2);border-bottom-color:var(--c-warning-border-2)"
+            )
         ):
-            ui.icon("sym_r_sell", size="18px").style("color:#92400e")
+            ui.icon("sym_r_sell", size="18px").style("color:var(--c-warning-text)")
             ui.label(
                 f"{t('autopilot.section.promo_swaps')} · {len(items)} wisselingen"
                 f" · bespaar {_eur(total_savings)}"
-            ).style("font-size:13px;font-weight:600;color:#92400e;flex:1")
+            ).style("font-size:13px;font-weight:600;color:var(--c-warning-text);flex:1")
         with ui.element("div").style(
             "padding:.25rem .625rem .625rem;display:flex;flex-direction:column;gap:.5rem"
         ):
@@ -835,7 +870,7 @@ def _remove_item(item, plan, result, refresh_fn) -> None:
 def _render_review_section(items: list, plan, result, session, user_id: int, refresh_fn) -> None:
     with ui.element("div").classes("sp-ap-review"):
         with ui.element("div").classes("sp-ap-review__header"):
-            ui.icon("sym_r_rate_review", size="18px").style("color:#f57c00")
+            ui.icon("sym_r_rate_review", size="18px").style("color:var(--c-warning-icon)")
             ui.label(f"{t('autopilot.section.substitutes')} ({len(items)})").style(
                 "font-size:14px;font-weight:600;color:var(--c-text);flex:1"
             )
@@ -894,7 +929,11 @@ def _render_substitute_card(parent_item, opt: dict, plan, result, refresh_fn) ->
     subtitle = opt.get("subtitle", "")
 
     _score_color = (
-        "var(--c-brand)" if score_pct >= 70 else "#f59e0b" if score_pct >= 40 else "#ef4444"
+        "var(--c-brand)"
+        if score_pct >= 70
+        else "var(--c-warning)"
+        if score_pct >= 40
+        else "var(--c-danger-red)"
     )
 
     with (

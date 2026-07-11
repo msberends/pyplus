@@ -338,7 +338,7 @@ def _slot_card(slot, day_label, date_str, temp, state, options, session, refresh
 
                 hot = session.settings.weather_hot_threshold
                 temp_rounded = math.floor(temp + 0.5)
-                t_color = "#d97706" if temp_rounded >= hot else "var(--c-text-4)"
+                t_color = "var(--c-warning-dark)" if temp_rounded >= hot else "var(--c-text-4)"
                 ui.label(f"{temp_rounded}°").style(
                     f"font-size:11px;font-weight:700;color:{t_color};flex-shrink:0"
                 )
@@ -1270,14 +1270,14 @@ def render_ical_subscription_body(user_id: int) -> None:
     if token is None:
         with ui.element("div").style(
             "display:flex;align-items:flex-start;gap:.5rem;padding:.625rem .75rem;"
-            "background:#fffbeb;border-radius:var(--r-md);border:1px solid #fde68a"
+            "background:var(--c-warning-tint);border-radius:var(--r-md);border:1px solid var(--c-warning-border)"
         ):
             ui.icon("sym_r_warning", size="16px").style(
-                "color:#92400e;flex-shrink:0;margin-top:1px"
+                "color:var(--c-warning-text);flex-shrink:0;margin-top:1px"
             )
             ui.label(
                 "Geen PYPLUS_SECRET_KEY ingesteld. Stel deze in om abonneer-links te activeren."
-            ).style("font-size:13px;color:#92400e;line-height:1.5")
+            ).style("font-size:13px;color:var(--c-warning-text);line-height:1.5")
         return
 
     ui.label("Deze URL toevoegen aan je agenda-app:").style(

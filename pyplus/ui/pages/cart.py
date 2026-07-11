@@ -96,7 +96,7 @@ async def _maybe_show_autopilot_banner(user_id: int, session) -> None:
 
     with ui.element("div").style(
         "display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;"
-        "background:#eee8f5;border:1px solid #d5cef0;"
+        "background:var(--c-accent-tint);border:1px solid var(--c-accent-border);"
         "border-radius:var(--r-lg);margin-bottom:.5rem"
     ):
         ui.icon("sym_r_robot_2", size="18px").style("color:var(--c-accent)")

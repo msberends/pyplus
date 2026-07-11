@@ -10,32 +10,111 @@ _GOOGLE_FONTS = (
     '<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">'
 )
 
-# ── Design tokens + component styles ──────────────────────────────────────────
+# ── Colour palette — single source of truth for every hex value ───────────────
+# Change a value here and it propagates to both the CSS custom properties and
+# the Quasar JS theme set in apply_theme().
+_P: dict[str, str] = {
+    # PLUS brand
+    "brand":            "#80bd1d",  # green-light — accent, positive
+    "brand_dark":       "#227647",  # green-dark — buttons, focus
+    "brand_tint":       "#f0f7e6",
+    "brand_tint_2":     "#dff0c0",
+    "brand_text":       "#1a5e22",  # dark green text on brand-tint bg
+    # Danger
+    "danger":           "#e3131d",  # PLUS red — destructive only
+    "danger_tint":      "#fff0f0",
+    "danger_red":       "#ef4444",  # generic red-500 (non-PLUS contexts)
+    "danger_text":      "#b91c1c",  # red-700 text on danger-tint bg
+    # Accent (PLUS purple)
+    "accent":           "#554da7",
+    "accent_tint":      "#eee8f5",  # lightest purple bg
+    "accent_tint_2":    "#e8e3f5",  # slightly deeper
+    "accent_tint_3":    "#ebe5f2",  # mid
+    "accent_tint_4":    "#f0ebf7",  # palest
+    "accent_border":    "#d5cef0",
+    "accent_surface":   "#faf8fd",  # barely-there purple surface
+    # Warning (amber/orange)
+    "warning":          "#f59e0b",  # amber-500
+    "warning_dark":     "#d97706",  # amber-600
+    "warning_icon":     "#f57c00",  # orange-700 icon on amber bg
+    "warning_text":     "#92400e",  # amber-800 text on amber bg
+    "warning_tint":     "#fffbeb",  # amber-50 bg
+    "warning_tint_2":   "#fff3e0",  # orange-50 bg variant
+    "warning_border":   "#fde68a",  # amber-200 border
+    "warning_border_2": "#f5d6a0",  # amber border alt
+    # Info (blue)
+    "info_tint":        "#e8f0fe",
+    "info_text":        "#1a56b0",
+    # Positive (non-PLUS success green)
+    "positive_tint":    "#e8f5e9",
+    "positive_text":    "#2e7d32",
+    # Neutrals — warm stone
+    "bg":               "#f5f4f1",
+    "surface":          "#ffffff",
+    "surface_2":        "#faf9f7",
+    "border":           "#e6e4df",
+    "border_strong":    "#d1cfc9",
+    # Text — warm neutrals, WCAG AA compliant
+    "text":             "#111810",
+    "text_2":           "#3d3d38",
+    "text_3":           "#5c5c56",  # ~6.0:1
+    "text_4":           "#7a7a73",  # ~4.8:1 — lightest that passes AA
+    # Quasar-only (no CSS custom-property equivalent needed)
+    "q_positive":       "#16a34a",
+    "q_info":           "#3b82f6",
+}
+
+
+def _colors_css() -> str:
+    """Generate the :root colour-token block from _P."""
+    p = _P
+    return f"""\
+:root {{
+  --c-brand:           {p["brand"]};
+  --c-brand-dark:      {p["brand_dark"]};
+  --c-brand-tint:      {p["brand_tint"]};
+  --c-brand-tint-2:    {p["brand_tint_2"]};
+  --c-brand-text:      {p["brand_text"]};
+  --c-danger:          {p["danger"]};
+  --c-danger-tint:     {p["danger_tint"]};
+  --c-danger-red:      {p["danger_red"]};
+  --c-danger-text:     {p["danger_text"]};
+  --c-accent:          {p["accent"]};
+  --c-accent-tint:     {p["accent_tint"]};
+  --c-accent-tint-2:   {p["accent_tint_2"]};
+  --c-accent-tint-3:   {p["accent_tint_3"]};
+  --c-accent-tint-4:   {p["accent_tint_4"]};
+  --c-accent-border:   {p["accent_border"]};
+  --c-accent-surface:  {p["accent_surface"]};
+  --c-warning:         {p["warning"]};
+  --c-warning-dark:    {p["warning_dark"]};
+  --c-warning-icon:    {p["warning_icon"]};
+  --c-warning-text:    {p["warning_text"]};
+  --c-warning-tint:    {p["warning_tint"]};
+  --c-warning-tint-2:  {p["warning_tint_2"]};
+  --c-warning-border:  {p["warning_border"]};
+  --c-warning-border-2:{p["warning_border_2"]};
+  --c-info-tint:       {p["info_tint"]};
+  --c-info-text:       {p["info_text"]};
+  --c-positive-tint:   {p["positive_tint"]};
+  --c-positive-text:   {p["positive_text"]};
+  --c-bg:              {p["bg"]};
+  --c-surface:         {p["surface"]};
+  --c-surface-2:       {p["surface_2"]};
+  --c-border:          {p["border"]};
+  --c-border-strong:   {p["border_strong"]};
+  --c-text:            {p["text"]};
+  --c-text-2:          {p["text_2"]};
+  --c-text-3:          {p["text_3"]};
+  --c-text-4:          {p["text_4"]};
+}}
+"""
+
+
+# ── Component styles (no hex literals — all colours via var()) ─────────────────
 _CSS = """
-/* ─── Design tokens ─────────────────────────────────────────────────────── */
+/* ─── Non-colour design tokens ───────────────────────────────────────────── */
 :root {
-  /* Brand — use green-dark for interactive elements (sufficient contrast) */
-  --c-brand:          #80bd1d;   /* PLUS green-light — accent, positive */
-  --c-brand-dark:     #227647;   /* PLUS green-dark — buttons, focus */
-  --c-brand-tint:     #f0f7e6;
-  --c-brand-tint-2:   #dff0c0;
-  --c-danger:         #e3131d;   /* PLUS red — destructive only */
-  --c-danger-tint:    #fff0f0;
-  --c-accent:         #554da7;   /* PLUS purple — highlight */
-
-  /* Neutrals — warm stone */
-  --c-bg:             #f5f4f1;
-  --c-surface:        #ffffff;
-  --c-surface-2:      #faf9f7;
-  --c-border:         #e6e4df;
-  --c-border-strong:  #d1cfc9;
-
-  /* Text — warm neutrals, WCAG AA compliant */
-  --c-text:    #111810;
-  --c-text-2:  #3d3d38;
-  --c-text-3:  #5c5c56;   /* ~6.0:1 */
-  --c-text-4:  #7a7a73;   /* ~4.8:1 — lightest text that still passes AA */
-
   /* Shadows — eliminated; depth comes from borders */
   --shadow-xs: none;
   --shadow-sm: none;
@@ -283,9 +362,9 @@ body {
   font-weight: var(--w-semibold);
   letter-spacing: .02em;
 }
-.sp-badge-available  { background: var(--c-brand-tint);  color: #1a5e22; }
-.sp-badge-unavailable{ background: var(--c-danger-tint); color: #b91c1c; }
-.sp-badge-stale      { background: #fffbeb;               color: #92400e; }
+.sp-badge-available  { background: var(--c-brand-tint);  color: var(--c-brand-text); }
+.sp-badge-unavailable{ background: var(--c-danger-tint); color: var(--c-danger-text); }
+.sp-badge-stale      { background: var(--c-warning-tint); color: var(--c-warning-text); }
 
 /* ─── Product card ───────────────────────────────────────────────────────── */
 .sp-product-card {
@@ -524,7 +603,7 @@ body {
   gap: .375rem;
   margin-bottom: .5rem;
   padding: .4rem .625rem;
-  background: #eee8f5;
+  background: var(--c-accent-tint);
   border-radius: var(--r-md);
   font-size: var(--t-sm);
   color: var(--c-accent);
@@ -622,7 +701,7 @@ body {
 }
 .sp-nav-btn--autopilot:hover { color: var(--c-accent); }
 .sp-nav-btn--autopilot.active {
-  background: #eee8f5;
+  background: var(--c-accent-tint);
   color: var(--c-accent);
   box-shadow: inset 3px 0 0 0 var(--c-accent);
 }
@@ -740,14 +819,14 @@ body {
   white-space: nowrap;
   line-height: 1.5;
 }
-.sp-origin-chip--menu       { background: var(--c-brand-tint);  color: #1a5e22; }
-.sp-origin-chip--staple     { background: #e8f0fe;               color: #1a56b0; }
-.sp-origin-chip--promotion  { background: #fff8e1;               color: #92400e; }
+.sp-origin-chip--menu       { background: var(--c-brand-tint);   color: var(--c-brand-text); }
+.sp-origin-chip--staple     { background: var(--c-info-tint);    color: var(--c-info-text); }
+.sp-origin-chip--promotion  { background: var(--c-warning-tint); color: var(--c-warning-text); }
 .sp-origin-chip--search     { background: var(--c-surface-2); color: var(--c-text-3); border: 1px solid var(--c-border); }
-.sp-origin-chip--autopilot\\:menu   { background: #eee8f5; color: var(--c-accent); }
-.sp-origin-chip--autopilot\\:staple { background: #e8e3f5; color: var(--c-accent); }
-.sp-origin-chip--autopilot\\:promo  { background: #f0ebf7; color: var(--c-accent); }
-.sp-origin-chip--autopilot\\:filler { background: #ebe5f2; color: var(--c-accent); }
+.sp-origin-chip--autopilot\\:menu   { background: var(--c-accent-tint);   color: var(--c-accent); }
+.sp-origin-chip--autopilot\\:staple { background: var(--c-accent-tint-2); color: var(--c-accent); }
+.sp-origin-chip--autopilot\\:promo  { background: var(--c-accent-tint-4); color: var(--c-accent); }
+.sp-origin-chip--autopilot\\:filler { background: var(--c-accent-tint-3); color: var(--c-accent); }
 
 /* Cart item row */
 .sp-cart-item {
@@ -767,7 +846,7 @@ body {
   padding-right: .5rem;
 }
 .sp-cart-item.sp-cart-item-fd {
-  background: #eee8f5;
+  background: var(--c-accent-tint);
   border-radius: var(--r-sm);
   border-bottom-color: transparent;
   box-shadow: inset 3px 0 0 0 var(--c-accent);
@@ -1067,7 +1146,7 @@ body {
   align-items: center;
   gap: .5rem;
   padding: .625rem .75rem;
-  background: #faf8fd;
+  background: var(--c-accent-surface);
   border-bottom: 1px solid var(--c-border);
 }
 .sp-ap-grid {
@@ -1090,7 +1169,7 @@ body {
 }
 .sp-ap-card:hover { border-color: var(--c-border-strong); }
 .sp-ap-card--sub { cursor: pointer; }
-.sp-ap-card--sub:hover { border-color: var(--c-accent); background: #faf8fd; }
+.sp-ap-card--sub:hover { border-color: var(--c-accent); background: var(--c-accent-surface); }
 .sp-ap-card__img {
   width: 64px; height: 64px;
   object-fit: contain;
@@ -1166,7 +1245,7 @@ body {
 }
 
 .sp-ap-review {
-  border: 2px solid #f59e0b;
+  border: 2px solid var(--c-warning);
   border-radius: var(--r-lg);
   overflow: hidden;
   margin-bottom: .75rem;
@@ -1176,8 +1255,8 @@ body {
   align-items: center;
   gap: .5rem;
   padding: .625rem .75rem;
-  background: #fffbeb;
-  border-bottom: 1px solid #f59e0b;
+  background: var(--c-warning-tint);
+  border-bottom: 1px solid var(--c-warning);
 }
 .sp-ap-review-card {
   padding: .75rem;
@@ -1198,7 +1277,7 @@ body {
 }
 .sp-ap-sub-card:hover {
   border-color: var(--c-accent);
-  background: #faf8fd;
+  background: var(--c-accent-surface);
 }
 
 /* ─── Deals lane ─────────────────────────────────────────────────────────── */
@@ -1628,13 +1707,14 @@ def apply_theme() -> None:
     """Inject Inter font, design tokens, and all component CSS into the current page."""
     ui.add_head_html(_GOOGLE_FONTS, shared=True)
     ui.add_head_html(_COLLAPSE_JS, shared=True)
-    ui.add_css(_CSS, shared=True)  # shared=True → injected once for all pages
+    ui.add_css(_colors_css(), shared=True)
+    ui.add_css(_CSS, shared=True)
     ui.colors(
-        primary="#227647",  # PLUS green-dark — main interactive colour
-        secondary="#80bd1d",  # PLUS green-light — accent
-        accent="#554da7",  # PLUS purple
-        negative="#e3131d",  # PLUS red
-        positive="#16a34a",
-        info="#3b82f6",
-        warning="#d97706",
+        primary=_P["brand_dark"],
+        secondary=_P["brand"],
+        accent=_P["accent"],
+        negative=_P["danger"],
+        positive=_P["q_positive"],
+        info=_P["q_info"],
+        warning=_P["warning_dark"],
     )

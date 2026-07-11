@@ -130,7 +130,7 @@ def _section_card(title: str, body_fn) -> None:
 
 def _section_card_autopilot(title: str, body_fn) -> None:
     with ui.element("div").style(
-        "background:var(--c-surface);border:1px solid #d5cef0;"
+        "background:var(--c-surface);border:1px solid var(--c-accent-border);"
         "border-radius:var(--r-xl);padding:1.25rem;margin-bottom:1rem;"
         "box-shadow:inset 3px 0 0 0 var(--c-accent)"
     ):
@@ -794,8 +794,8 @@ def _render_ml_day_preferences(settings: UserSettings, save_fn) -> None:
                     "De extra-slots delen dezelfde regels — ze worden niet "
                     "individueel ingesteld.",
                     icon="sym_r_skillet",
-                    color="#eee8f5",
-                    border="#d5cef0",
+                    color="var(--c-accent-tint)",
+                    border="var(--c-accent-border)",
                     text_color="var(--c-accent)",
                 )
                 _render_single_day_pref(
@@ -1131,8 +1131,8 @@ def _render_ml_advanced(settings: UserSettings, save_fn) -> None:
             "hier stel je de onderliggende parameters in. Handmatige aanpassing "
             "zet de Variatie-instelling op 'Aangepast'.",
             icon="sym_r_science",
-            color="#eee8f5",
-            border="#d5cef0",
+            color="var(--c-accent-tint)",
+            border="var(--c-accent-border)",
             text_color="var(--c-accent)",
         )
 
@@ -1210,8 +1210,8 @@ def _render_ml_advanced(settings: UserSettings, save_fn) -> None:
             "'op basis van kansen' voegt toeval toe — temperatuur bepaalt hoeveel "
             "(laag ≈ Variatie 2–3, hoog ≈ 4–5). De andere methoden zijn voor experimenteel gebruik.",
             icon="sym_r_casino",
-            color="#eee8f5",
-            border="#d5cef0",
+            color="var(--c-accent-tint)",
+            border="var(--c-accent-border)",
             text_color="var(--c-accent)",
         )
 
@@ -1335,8 +1335,8 @@ def _render_ml_autopilot(settings: UserSettings, save_fn) -> None:
         "bekijkt en bevestigt op de Autopilot-pagina. Alle regels, dagvoorkeuren "
         "en weekdoelen uit Slimme suggesties worden gerespecteerd.",
         icon="sym_r_robot_2",
-        color="#eee8f5",
-        border="#d5cef0",
+        color="var(--c-accent-tint)",
+        border="var(--c-accent-border)",
         text_color="var(--c-accent)",
     )
 
@@ -1752,8 +1752,8 @@ def _render_weather(settings: UserSettings, save_fn) -> None:
         "Stel de gewichten in bij Weegfactoren → 'Weer: oven/airfryer vermijden' "
         "en 'Weer: voorkeur koud' om het effect op suggesties te bepalen.",
         icon="sym_r_tune",
-        color="#eee8f5",
-        border="#d5cef0",
+        color="var(--c-accent-tint)",
+        border="var(--c-accent-border)",
         text_color="var(--c-accent)",
     )
 
@@ -1957,7 +1957,7 @@ def _status_dot_colour(status: str | None) -> str:
     if status == "ok":
         return "var(--c-brand)"
     if status == "in_progress":
-        return "var(--c-warning, #d97706)"
+        return "var(--c-warning-dark)"
     if status == "error":
         return "var(--c-danger)"
     return "var(--c-border)"
