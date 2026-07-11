@@ -83,8 +83,9 @@ async def main():
 asyncio.run(main())
 ```
 
-If the session is expired, run the desktop tool first (`uv run python tools/screenshot.py weekmenu`)
-to trigger a fresh login and save the session.
+After a service restart the app's remember-me auto-login kicks in (~20s). The desktop tool
+(`uv run python tools/screenshot.py weekmenu`) waits for it automatically and refreshes the session
+file, so always run it first if the session may be stale.
 
 **Assessing screenshots:** read the `.png` files with the Read tool — they are rendered visually.
 Check: content visible (not blank/clipped), nav bar present, grids lay out correctly, no horizontal

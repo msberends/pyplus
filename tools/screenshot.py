@@ -88,17 +88,30 @@ async def _take_screenshots(pages: list[str]) -> None:
         if SESSION_FILE.exists():
             await page.goto(f"{base_url}/weekmenu", wait_until="networkidle")
             if "/login" in page.url or "/weekmenu" not in page.url:
-                print("Session expired — logging in again…")
-                SESSION_FILE.unlink(missing_ok=True)
-                await context.close()
-                context = await browser.new_context(
-                    viewport={"width": 1400, "height": 900},
-                    locale="nl-NL",
-                )
-                page = await context.new_page()
-                await _login(page, base_url, env)
-                await context.storage_state(path=str(SESSION_FILE))
-                print(f"Session saved to {SESSION_FILE.name}")
+                # If the email field is visible it's the manual login form — no auto-login.
+                # Otherwise the app's remember-me auto-login is running; wait up to 20s.
+                has_form = await page.get_by_label("E-mailadres", exact=False).count() > 0
+                if not has_form:
+                    print("Auto-login in progress — waiting up to 20s…")
+                    try:
+                        await page.wait_for_url(f"{base_url}/weekmenu", timeout=20_000)
+                        await page.wait_for_timeout(PAGE_SETTLE_MS)
+                        await context.storage_state(path=str(SESSION_FILE))
+                        print("Auto-login succeeded.")
+                    except Exception:
+                        has_form = True  # fall through to manual login
+                if has_form:
+                    print("Session expired — logging in again…")
+                    SESSION_FILE.unlink(missing_ok=True)
+                    await context.close()
+                    context = await browser.new_context(
+                        viewport={"width": 1400, "height": 900},
+                        locale="nl-NL",
+                    )
+                    page = await context.new_page()
+                    await _login(page, base_url, env)
+                    await context.storage_state(path=str(SESSION_FILE))
+                    print(f"Session saved to {SESSION_FILE.name}")
             else:
                 print("Session still valid.")
         else:

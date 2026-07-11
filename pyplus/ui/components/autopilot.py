@@ -17,6 +17,38 @@ log = logging.getLogger(__name__)
 
 _ICON = "sym_r_robot_2"
 
+_NORM_UNITS = {"g": ("kg", 1000), "ml": ("l", 1000), "cl": ("l", 100)}
+
+
+def _unit_price_label(price: float, subtitle: str) -> str:
+    if price <= 0 or not subtitle:
+        return ""
+    from pyplus.services.dishes import _parse_pack_from_subtitle
+
+    size, unit = _parse_pack_from_subtitle(subtitle)
+    if not size or not unit or size <= 0:
+        return ""
+
+    def fmt(v: float) -> str:
+        return f"€ {v:.2f}".replace(".", ",")
+
+    if unit in ("stuks", "stuk"):
+        if size == 1:
+            return ""
+        return f"{fmt(price / size)} / stuk"
+    norm_unit, factor = _NORM_UNITS.get(unit, (unit, 1))
+    size_norm = size / factor
+    per_norm = price / size_norm if size_norm > 0 else 0
+    if norm_unit == "kg" and per_norm > 20:
+        per_100 = price / (size / 100) if unit == "g" else 0
+        if per_100 > 0:
+            return f"{fmt(per_100)} / 100 g"
+    if norm_unit == "l" and per_norm > 10:
+        per_100 = price / (size / 100) if unit == "ml" else price / (size / 10) if unit == "cl" else 0
+        if per_100 > 0:
+            return f"{fmt(per_100)} / 100 ml"
+    return f"{fmt(per_norm)} / {norm_unit}"
+
 
 def _eur(amount: float) -> str:
     """Format amount as Dutch euro string: '€ 1,23'."""
@@ -184,7 +216,12 @@ async def _render_draft(plan, result, session, user_id: int, body, settings=None
         from pyplus.db.engine import AsyncSessionLocal
         from pyplus.services.categories import parse_categories, top_category
 
-        all_skus = [i.sku for i in result.items if i.sku]
+        all_skus = list(
+            dict.fromkeys(
+                [i.sku for i in result.items if i.sku]
+                + [i.original_sku for i in result.items if i.original_sku]
+            )
+        )
         if all_skus:
             async with AsyncSessionLocal() as db:
                 product_cache = await repo.get_product_cache_by_skus(db, store, all_skus)
@@ -748,8 +785,12 @@ def _render_promo_section(items: list, plan, result, refresh_fn) -> None:
 
 
 def _render_promo_swap_card(item, plan, result, refresh_fn) -> None:
-    pc = getattr(plan, "_product_cache", {}).get(item.sku)
+    cache = getattr(plan, "_product_cache", {})
+    pc = cache.get(item.sku)
     subtitle = (pc.subtitle if pc else None) or ""
+    orig_pc = cache.get(item.original_sku) if item.original_sku else None
+    orig_subtitle = (orig_pc.subtitle if orig_pc else None) or ""
+    orig_price = item.price + (item.promo_savings / max(item.qty, 1)) if item.promo_savings > 0 else 0.0
 
     with ui.element("div").style(
         "display:flex;align-items:center;gap:.625rem;padding:.625rem .75rem;"
@@ -772,8 +813,10 @@ def _render_promo_swap_card(item, plan, result, refresh_fn) -> None:
                     f'<span style="font-size:11px;color:var(--c-text-3)">'
                     f"Vervangt <b>{escape(item.original_name)}</b></span>"
                 )
+                if orig_subtitle:
+                    ui.label(orig_subtitle).style("font-size:10px;color:var(--c-text-4)")
             with ui.element("div").style(
-                "display:flex;gap:.5rem;align-items:center;margin-top:2px"
+                "display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:2px"
             ):
                 ui.label(_eur(item.price)).style(
                     "font-size:12px;font-weight:600;color:var(--c-text)"
@@ -782,8 +825,22 @@ def _render_promo_swap_card(item, plan, result, refresh_fn) -> None:
                     ui.label(f"bespaar {_eur(item.promo_savings)}").style(
                         "font-size:11px;font-weight:700;color:var(--c-accent)"
                     )
+            new_unit = _unit_price_label(item.price, subtitle)
+            orig_unit = _unit_price_label(orig_price, orig_subtitle) if orig_price > 0 else ""
+            if new_unit or orig_unit:
+                with ui.element("div").style(
+                    "display:flex;gap:.375rem;align-items:center;flex-wrap:wrap;margin-top:1px"
+                ):
+                    if orig_unit:
+                        ui.label(f"was {orig_unit}").style(
+                            "font-size:10px;color:var(--c-text-4);text-decoration:line-through"
+                        )
+                    if new_unit:
+                        ui.label(f"nu {new_unit}").style(
+                            "font-size:10px;font-weight:600;color:var(--c-accent)"
+                        )
 
-        with ui.element("div").style("display:flex;gap:.375rem;flex-shrink:0"):
+        with ui.element("div").style("display:flex;flex-direction:column;gap:.25rem;flex-shrink:0"):
             ui.button(
                 "Akkoord",
                 on_click=lambda i=item: _accept_promo_swap(i, plan, result, refresh_fn),

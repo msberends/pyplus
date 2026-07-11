@@ -585,6 +585,15 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
             with ui.element("div").style(
                 "display:flex;gap:.375rem;align-items:center;margin-top:.5rem"
             ):
+                async def _refresh_cart() -> None:
+                    await session.refresh_cart()
+
+                ui.button(
+                    icon="sym_r_refresh",
+                    on_click=_refresh_cart,
+                ).props("flat round color=grey-6 size=sm").style(
+                    "flex-shrink:0"
+                ).tooltip(t("cart.refresh"))
                 ui.button(
                     t("cart.clear"),
                     icon="sym_r_delete",
@@ -594,12 +603,10 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
                 )
                 ui.button(
                     t("cart.checkout"),
-                    on_click=lambda: ui.navigate.to(
-                        "https://www.plus.nl/winkelwagen", new_tab=True
-                    ),
-                ).props("unelevated rounded color=primary no-caps").style(
-                    "flex:1;font-size:13px;font-weight:600;height:44px"
-                )
+                ).props(
+                    'unelevated rounded color=primary no-caps'
+                    ' href="https://www.plus.nl/winkelwagen" target="_blank"'
+                ).style("flex:1;font-size:13px;font-weight:600;height:44px")
 
             # ── Export row ─────────────────────────────────────────────
             with ui.element("div").style(

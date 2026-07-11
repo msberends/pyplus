@@ -99,6 +99,7 @@ _STRINGS: dict[str, str] = {
     "cart.title": "Winkelwagen",
     "cart.empty": "Je winkelwagen is leeg",
     "cart.checkout": "Bestellen",
+    "cart.refresh": "Vernieuwen",
     "cart.clear": "Leegmaken",
     "cart.clear_confirm_title": "Winkelwagen leegmaken?",
     "cart.clear_confirm_body": "Alle producten worden uit je winkelwagen verwijderd.",
