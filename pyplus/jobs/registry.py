@@ -519,8 +519,8 @@ _NTFY_SCORE_THRESHOLD = 1.0  # minimum relevance score to include in alert
 _NTFY_MAX_PROMOS = 5  # max product names in the message body
 
 
-def _build_ntfy_message(relevant_with_scores: list, base_url: str = "") -> str:
-    """Build the Dutch ntfy message body from a scored promo list."""
+def _build_ntfy_message(relevant_with_scores: list, base_url: str = "") -> tuple[str, str]:
+    """Return (body, click_url) for the weekly promo ntfy push."""
     count = len(relevant_with_scores)
     top = relevant_with_scores[:_NTFY_MAX_PROMOS]
     names = [p.name or p.sku for p, _ in top]
@@ -535,12 +535,13 @@ def _build_ntfy_message(relevant_with_scores: list, base_url: str = "") -> str:
         if count > _NTFY_MAX_PROMOS:
             body += f"\n… en {count - _NTFY_MAX_PROMOS} meer"
 
-    if base_url:
-        body += f"\n\n→ {base_url}/weekmenu"
-    return body
+    click_url = f"{base_url.rstrip('/')}/weekmenu" if base_url else ""
+    return body, click_url
 
 
-async def _push_ntfy(settings, body: str) -> None:
+async def _push_ntfy(
+    settings, body: str, *, title: str = "PyPLUS aanbieding", click_url: str = ""
+) -> None:
     """POST body to the user's configured ntfy endpoint. Raises on HTTP ≥ 400."""
     import base64
 
@@ -549,9 +550,11 @@ async def _push_ntfy(settings, body: str) -> None:
     from pyplus.security.secrets import decrypt
 
     headers: dict[str, str] = {
-        "Title": "PyPLUS aanbieding",
+        "Title": title,
         "Content-Type": "text/plain; charset=utf-8",
     }
+    if click_url:
+        headers["Click"] = click_url
     if settings.ntfy_username:
         pw = decrypt(settings.ntfy_password_enc) if settings.ntfy_password_enc else ""
         token = base64.b64encode(f"{settings.ntfy_username}:{pw}".encode()).decode()
@@ -706,8 +709,8 @@ async def weekly_ntfy(*, user_id: int, client=None, store_number: int = 0) -> No
             await _set_status(user_id, resource, "error", "unsafe_url")
             return
 
-        body = _build_ntfy_message(relevant, base_url=app_settings.base_url)
-        await _push_ntfy(settings, body)
+        body, click_url = _build_ntfy_message(relevant, base_url=app_settings.base_url)
+        await _push_ntfy(settings, body, click_url=click_url)
 
         await _set_status(user_id, resource, "ok")
         log.info("[ntfy] user=%d pushed alert — %d relevant promos", user_id, len(relevant))
@@ -829,7 +832,7 @@ async def autopilot_prepare(*, user_id: int, **_kwargs) -> None:
         result = await prepare_plan(user_id, store_number=store_number)
 
         today = datetime.date.today()
-        week_start = today - datetime.timedelta(days=today.weekday())
+        week_start = today + datetime.timedelta(days=(7 - today.weekday()))
 
         async with AsyncSessionLocal() as db:
             await repo.upsert_autopilot_plan(
@@ -853,8 +856,13 @@ async def autopilot_prepare(*, user_id: int, **_kwargs) -> None:
             except UnsafeUrlError as exc:
                 log.warning("[autopilot] user=%d unsafe ntfy_url: %s", user_id, exc)
             else:
-                body = _build_autopilot_ntfy(result, app_settings.base_url)
-                await _push_ntfy(settings, body)
+                body, click_url = _build_autopilot_ntfy(result, app_settings.base_url)
+                await _push_ntfy(
+                    settings,
+                    body,
+                    title="PyPLUS boodschappenplan",
+                    click_url=click_url,
+                )
 
         await _set_status(user_id, resource, "ok")
         log.info(
@@ -870,19 +878,20 @@ async def autopilot_prepare(*, user_id: int, **_kwargs) -> None:
         raise
 
 
-def _build_autopilot_ntfy(result, base_url: str) -> str:
+def _build_autopilot_ntfy(result, base_url: str) -> tuple[str, str]:
+    """Return (body, click_url) for the autopilot ntfy push."""
     s = result.summary
+    cost = f"€ {s.estimated_cost:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     lines = [
         "Je boodschappenplan staat klaar!",
-        f"{s.total_items} producten · €{s.estimated_cost:.2f}",
+        f"{s.total_items} producten · {cost}",
     ]
     if s.needs_review_count > 0:
         lines.append(f"{s.needs_review_count} vervangproducten om te beoordelen")
     else:
         lines.append("Alles automatisch ingevuld")
-    if base_url:
-        lines.append(f"\n→ {base_url.rstrip('/')}/autopilot")
-    return "\n".join(lines)
+    click_url = f"{base_url.rstrip('/')}/autopilot" if base_url else ""
+    return "\n".join(lines), click_url
 
 
 # ── Full preload ───────────────────────────────────────────────────────────────

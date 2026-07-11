@@ -184,7 +184,7 @@ async def _fill_weekmenu(
 ) -> dict[str, int]:
     from pyplus.db import repo
     from pyplus.db.engine import AsyncSessionLocal
-    from pyplus.ml.artifacts import load_artifact
+    from pyplus.ml.artifacts import load_artifact, recompute_recommender
     from pyplus.ml.recommender import RecommenderArtifact, plan_week
 
     today = datetime.date.today()
@@ -205,6 +205,7 @@ async def _fill_weekmenu(
 
     new_assignments: dict[str, int] = {}
     if settings.ml_autopilot_dinner or settings.ml_autopilot_lunch:
+        await recompute_recommender(user_id)
         artifact = await load_artifact(user_id, "recommender")
         if isinstance(artifact, RecommenderArtifact):
             n_dinner = settings.ml_autopilot_max_dinner if settings.ml_autopilot_dinner else 0

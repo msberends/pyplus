@@ -189,6 +189,7 @@ _STRINGS: dict[str, str] = {
     "settings.ml.day_starch_pref": "Voorkeur koolhydraten",
     "settings.ml.day_starch_blocked": "Koolhydraten",
     "settings.ml.day_no_limit": "Geen limiet",
+    "settings.ml.day_unhealthy": "Ongezond eten",
     "settings.ml.lunch_combined": "Extra (alle slots)",
     # ── Week constraints ──────────────────────────────────────────────────
     "settings.ml.week_goals": "Weekdoelen",
@@ -210,8 +211,8 @@ _STRINGS: dict[str, str] = {
     "settings.ml.advanced_hint": (
         "Instellingen voor fijnregeling — pas aan als je weet wat je doet."
     ),
-    "settings.ml.cooldown": "Herhalings-cooldown",
-    "settings.ml.cooldown_hint": "Minimaal aantal weken voordat een gerecht opnieuw wordt voorgesteld.",
+    "settings.ml.cooldown": "Herhaalinterval (standaard)",
+    "settings.ml.cooldown_hint": "Standaard minimaal aantal weken voor herhaling. Per gerecht aan te passen via Gerechten beheren.",
     "settings.ml.novelty": "Novelty fraction",
     "settings.ml.novelty_hint": "Streefaandeel gerechten die je nog nooit hebt klaargemaakt.",
     "settings.ml.history_window": "Geschiedenisvenster",
@@ -257,8 +258,13 @@ _STRINGS: dict[str, str] = {
     "cooking.airfryer": "Airfryer",
     "dishes.cooking_methods_label": "Bereiding",
     "dishes.is_cold_label": "Is koud",
+    "dishes.is_unhealthy_label": "Ongezond",
     "dishes.is_dinner_label": "Avondeten",
     "dishes.rating_label": "Waardering",
+    "dishes.group_label": "Groep",
+    "dishes.group_hint": "Gerechten in dezelfde groep delen de herhalings-cooldown.",
+    "dishes.cooldown_label": "Herhaalinterval",
+    "dishes.cooldown_hint": "Min. weken voor herhaling. Leeg = standaard ({n} wk).",
     # ── Weather ───────────────────────────────────────────────────────────────
     "settings.weather.title": "Weer",
     "settings.weather.enabled": "Weer meenemen in suggesties",

@@ -151,6 +151,16 @@ async def get_dishes(db: AsyncSession, user_id: int, include_archived: bool = Fa
     return list(result.scalars().all())
 
 
+async def get_dish_group_names(db: AsyncSession, user_id: int) -> list[str]:
+    result = await db.execute(
+        select(Dish.group_name)
+        .where(Dish.user_id == user_id, Dish.group_name.isnot(None), Dish.archived == False)  # noqa: E712
+        .distinct()
+        .order_by(Dish.group_name)
+    )
+    return [row[0] for row in result.all()]
+
+
 async def get_dish(db: AsyncSession, user_id: int, dish_id: int) -> Dish | None:
     result = await db.execute(select(Dish).where(Dish.id == dish_id, Dish.user_id == user_id))
     return result.scalar_one_or_none()
@@ -167,9 +177,12 @@ async def create_dish(
     starch_type: str | None = None,
     cooking_methods: str = "[]",
     is_cold: bool = False,
+    is_unhealthy: bool = False,
     is_dinner: bool = True,
     rating: float | None = None,
     veg_count: int | None = None,
+    group_name: str | None = None,
+    cooldown_weeks: int | None = None,
 ) -> Dish:
     dish = Dish(
         user_id=user_id,
@@ -180,9 +193,12 @@ async def create_dish(
         starch_type=starch_type,
         cooking_methods=cooking_methods,
         is_cold=is_cold,
+        is_unhealthy=is_unhealthy,
         is_dinner=is_dinner,
         rating=rating,
         veg_count=veg_count,
+        group_name=group_name or name,
+        cooldown_weeks=cooldown_weeks,
         created_at=_utcnow(),
     )
     db.add(dish)
@@ -222,7 +238,10 @@ async def duplicate_dish(db: AsyncSession, user_id: int, dish_id: int) -> Dish |
         starch_type=src.starch_type,
         cooking_methods=src.cooking_methods,
         is_cold=src.is_cold,
+        is_unhealthy=src.is_unhealthy,
         veg_count=src.veg_count,
+        group_name=src.group_name,
+        cooldown_weeks=src.cooldown_weeks,
     )
     for ing in ingredients:
         db.add(

@@ -42,11 +42,14 @@ class DishMeta:
     veg_count: int | None = None
     cooking_methods: list[str] = field(default_factory=list)
     is_cold: bool = False
+    is_unhealthy: bool = False
     is_dinner: bool = True
     rating: float | None = None
     ingredient_skus: frozenset[str] = field(default_factory=frozenset)
     estimated_cost: float | None = None
     last_cooked_weeks_ago: float | None = None
+    group_name: str | None = None
+    cooldown_weeks: int | None = None
 
 
 @dataclass
@@ -59,6 +62,7 @@ class RecommenderArtifact:
     )
     dish_meta: dict[int, DishMeta] = field(default_factory=dict)
     never_cooked_ids: set[int] = field(default_factory=set)
+    group_recency: dict[str, float] = field(default_factory=dict)
 
 
 def compute_all_scores(
@@ -131,10 +135,13 @@ def compute_all_scores(
             veg_count=getattr(dish, "veg_count", None),
             cooking_methods=cm_list,
             is_cold=bool(getattr(dish, "is_cold", False)),
+            is_unhealthy=bool(getattr(dish, "is_unhealthy", False)),
             is_dinner=bool(getattr(dish, "is_dinner", True)),
             rating=getattr(dish, "rating", None),
             ingredient_skus=frozenset(dish_skus),
             estimated_cost=dish_costs.get(dish.id),
+            group_name=getattr(dish, "group_name", None) or dish.name,
+            cooldown_weeks=getattr(dish, "cooldown_weeks", None),
         )
 
         if placements:
@@ -196,6 +203,15 @@ def compute_all_scores(
         artifact.dish_meta[dish.id] = meta
 
     artifact.never_cooked_ids = never_cooked
+
+    group_recency: dict[str, float] = {}
+    for meta in artifact.dish_meta.values():
+        gn = meta.group_name or ""
+        if meta.last_cooked_weeks_ago is not None:
+            if gn not in group_recency or meta.last_cooked_weeks_ago < group_recency[gn]:
+                group_recency[gn] = meta.last_cooked_weeks_ago
+    artifact.group_recency = group_recency
+
     return artifact
 
 
@@ -220,11 +236,10 @@ def _slot_has_preferences(slot: str, settings: UserSettings | None) -> bool:
     pref = DayPreference.model_validate(settings.day_preferences.get(slot, {}))
     return bool(
         not pref.enabled
-        or pref.allowed_meat_types
-        or pref.blocked_meat_types
-        or pref.preferred_starch_types
-        or pref.blocked_starch_types
+        or pref.meat_types
+        or pref.starch_types
         or pref.max_prep_minutes is not None
+        or pref.unhealthy is not None
     )
 
 
@@ -262,25 +277,38 @@ def _filter_candidates_for_slot(
                 continue
 
         mt = (meta.meat_type or "").lower()
-        if mt and pref.blocked_meat_types and mt in [x.lower() for x in pref.blocked_meat_types]:
-            continue
-        if pref.allowed_meat_types:
-            if not mt or mt not in [x.lower() for x in pref.allowed_meat_types]:
+        if pref.meat_types:
+            enforce_mt = {k for k, v in pref.meat_types.items() if v == "enforce"}
+            disallow_mt = {k for k, v in pref.meat_types.items() if v == "disallow"}
+            if mt and mt in disallow_mt:
+                continue
+            if enforce_mt and (not mt or mt not in enforce_mt):
                 continue
 
         st = (meta.starch_type or "").lower()
-        if (
-            st
-            and pref.blocked_starch_types
-            and st in [x.lower() for x in pref.blocked_starch_types]
-        ):
-            continue
-        if pref.preferred_starch_types:
-            if not st or st not in [x.lower() for x in pref.preferred_starch_types]:
+        if pref.starch_types:
+            enforce_st = {k for k, v in pref.starch_types.items() if v == "enforce"}
+            disallow_st = {k for k, v in pref.starch_types.items() if v == "disallow"}
+            if st and st in disallow_st:
+                continue
+            if enforce_st and (not st or st not in enforce_st):
                 continue
 
-        if settings.ml_repeat_cooldown_weeks > 0 and meta.last_cooked_weeks_ago is not None:
-            if meta.last_cooked_weeks_ago < settings.ml_repeat_cooldown_weeks:
+        if pref.unhealthy == "disallow" and meta.is_unhealthy:
+            continue
+        if pref.unhealthy == "enforce" and not meta.is_unhealthy:
+            continue
+
+        effective_cooldown = (
+            meta.cooldown_weeks
+            if meta.cooldown_weeks is not None
+            else settings.ml_repeat_cooldown_weeks
+        )
+        if effective_cooldown > 0:
+            gn = meta.group_name or str(did)
+            group_recency = getattr(artifact, "group_recency", {})
+            group_last_cooked = group_recency.get(gn)
+            if group_last_cooked is not None and group_last_cooked < effective_cooldown:
                 continue
 
         if settings.ml_confidence_threshold > 0:

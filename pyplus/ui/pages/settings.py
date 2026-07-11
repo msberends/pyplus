@@ -30,6 +30,7 @@ async def create_settings_page() -> None:
     user_id = app.storage.user.get("user_id")
     session = manager.get(user_id) if user_id else None
     if session is None:
+        app.storage.browser["_login_next"] = "/settings"
         ui.navigate.to("/login")
         return
 
@@ -659,7 +660,7 @@ def _render_ml(settings: UserSettings, user_id: int, save_fn) -> None:
 def _render_ml_weights(settings: UserSettings, save_fn) -> None:
     """Signal weight sliders inside a collapsible expansion."""
     with (
-        ui.expansion("Weegfactoren", icon="sym_r_tune", value=True)
+        ui.expansion("Weegfactoren", icon="sym_r_tune", value=False)
         .style("border-top:1px solid var(--c-border);margin-top:.625rem")
         .props("dense")
     ):
@@ -812,10 +813,30 @@ def _render_ml_day_preferences(settings: UserSettings, save_fn) -> None:
 
 
 def _get_day_pref(settings: UserSettings, key: str) -> DayPreference:
-    """Load or initialise a DayPreference from settings.day_preferences."""
+    """Load or initialise a DayPreference, migrating old field names on first read."""
     raw = settings.day_preferences.get(key, {})
     if isinstance(raw, DayPreference):
         return raw
+    if isinstance(raw, dict):
+        raw = dict(raw)  # don't mutate the stored value
+        mt: dict = {}
+        for x in raw.pop("allowed_meat_types", []):
+            mt[x] = "enforce"
+        for x in raw.pop("blocked_meat_types", []):
+            mt.setdefault(x, "disallow")
+        if mt:
+            raw["meat_types"] = mt
+        st: dict = {}
+        for x in raw.pop("preferred_starch_types", []):
+            st[x] = "enforce"
+        for x in raw.pop("blocked_starch_types", []):
+            st.setdefault(x, "disallow")
+        if st:
+            raw["starch_types"] = st
+        if raw.pop("no_unhealthy", False):
+            raw["unhealthy"] = "disallow"
+        elif raw.pop("only_unhealthy", False):
+            raw["unhealthy"] = "enforce"
     return DayPreference.model_validate(raw)
 
 
@@ -876,70 +897,101 @@ def _render_single_day_pref(
 
     prep_sel.on("update:model-value", lambda e: asyncio.ensure_future(_on_prep(e)))
 
-    # Allowed meat types — multi-select chips (empty = all allowed)
+    # Meat types — tri-state chips
     ui.label(t("settings.ml.day_meat_blocked")).style(
         "font-size:12px;font-weight:600;color:var(--c-text-2);margin-bottom:.25rem"
     )
-    _render_chip_multiselect(
+    _render_tristate_chips(
         items=list(meat_types),
-        selected=set(pref.allowed_meat_types),
+        constraints=dict(pref.meat_types),
         label_fn=lambda m: f"{meat_emoji_fn(m)} {meat_label_fn(m)}".strip(),
-        on_change=lambda sel, k=day_key: asyncio.ensure_future(
-            _update_day_list(settings, k, "allowed_meat_types", sel, save_fn)
+        on_change=lambda new, k=day_key: asyncio.ensure_future(
+            _update_day_constraint(settings, k, "meat_types", new, save_fn)
         ),
     )
 
-    # Preferred starch types (empty = all allowed)
+    # Starch types — tri-state chips
     ui.label(t("settings.ml.day_starch_blocked")).style(
         "font-size:12px;font-weight:600;color:var(--c-text-2);margin-top:.5rem;margin-bottom:.25rem"
     )
-    _render_chip_multiselect(
+    _render_tristate_chips(
         items=list(starch_types),
-        selected=set(pref.preferred_starch_types),
+        constraints=dict(pref.starch_types),
         label_fn=lambda s: f"{starch_emoji_fn(s)} {starch_label_fn(s)}".strip(),
-        on_change=lambda sel, k=day_key: asyncio.ensure_future(
-            _update_day_list(settings, k, "preferred_starch_types", sel, save_fn)
+        on_change=lambda new, k=day_key: asyncio.ensure_future(
+            _update_day_constraint(settings, k, "starch_types", new, save_fn)
+        ),
+    )
+
+    # Unhealthy — single tri-state chip
+    ui.label(t("settings.ml.day_unhealthy")).style(
+        "font-size:12px;font-weight:600;color:var(--c-text-2);margin-top:.5rem;margin-bottom:.25rem"
+    )
+    _render_tristate_chips(
+        items=["ongezond"],
+        constraints={"ongezond": pref.unhealthy} if pref.unhealthy else {},
+        label_fn=lambda _: "🍔 Ongezond",
+        on_change=lambda new, k=day_key: asyncio.ensure_future(
+            _update_day_constraint(settings, k, "unhealthy", new.get("ongezond"), save_fn)
         ),
     )
 
 
-async def _update_day_list(
-    settings: UserSettings, day_key: str, field: str, selected: set[str], save_fn
+async def _update_day_constraint(
+    settings: UserSettings, day_key: str, field: str, value, save_fn
 ) -> None:
     pref = _get_day_pref(settings, day_key)
-    setattr(pref, field, list(selected))
+    setattr(pref, field, value)
     _save_day_pref(settings, day_key, pref)
     await save_fn()
 
 
-def _render_chip_multiselect(
+def _render_tristate_chips(
     items: list[str],
-    selected: set[str],
+    constraints: dict,
     label_fn,
     on_change,
 ) -> None:
-    """Horizontal row of toggleable chips for multi-selection."""
-    with ui.element("div").style("display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.25rem"):
-        for item in items:
-            is_on = item in selected
-            chip = (
-                ui.chip(
-                    label_fn(item),
-                    selectable=True,
-                    selected=is_on,
-                )
-                .props(f"{'color=primary' if is_on else 'outline'} size=sm clickable")
-                .style("font-size:11px")
-            )
+    """Tri-state chips: neutral (grey) → enforce (green ✓) → disallow (red ✗) → neutral.
 
-            def _toggle(e, it=item, c=chip) -> None:
-                if it in selected:
-                    selected.discard(it)
+    Uses a refreshable inner function so the chip fully re-renders on each click —
+    NiceGUI's selectable chip only has two native states, so we control appearance
+    ourselves via refresh rather than relying on update:selected.
+    """
+
+    @ui.refreshable
+    def _draw() -> None:
+        with ui.element("div").style(
+            "display:flex;flex-wrap:wrap;gap:.375rem;margin-bottom:.25rem"
+        ):
+            for item in items:
+                mode = constraints.get(item)
+                if mode == "enforce":
+                    color, suffix = "positive", " ✓"
+                elif mode == "disallow":
+                    color, suffix = "negative", " ✗"
                 else:
-                    selected.add(it)
-                on_change(selected)
+                    color, suffix = "outline", ""
+                chip = (
+                    ui.chip(label_fn(item) + suffix)
+                    .props(f"color={color} size=sm clickable")
+                    .style("font-size:11px;cursor:pointer")
+                )
 
-            chip.on("update:selected", _toggle)
+                def _cycle(_e, it=item) -> None:
+                    cur = constraints.get(it)
+                    if cur is None:
+                        constraints[it] = "enforce"
+                    elif cur == "enforce":
+                        constraints[it] = "disallow"
+                    else:
+                        del constraints[it]
+                    on_change(dict(constraints))
+                    _draw.refresh()
+
+                chip.on("click", _cycle)
+
+    _draw()
 
 
 def _render_ml_week_constraints(settings: UserSettings, save_fn) -> None:

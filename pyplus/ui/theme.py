@@ -862,7 +862,7 @@ body {
 }
 .sp-meta-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: .5rem;
   margin-bottom: .75rem;
 }
@@ -934,7 +934,7 @@ body {
 @media (max-width: 640px) {
   .sp-filters-desktop { display: none !important; }
   .sp-filters-mobile { display: flex !important; }
-  .sp-meta-grid { grid-template-columns: repeat(2, 1fr); }
+  .sp-meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sp-ing-controls { padding-left: 0; }
   .sp-dish-grid { grid-template-columns: 1fr; }
 }

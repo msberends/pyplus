@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -38,10 +39,9 @@ class DayPreference(BaseModel):
 
     enabled: bool = True
     max_prep_minutes: int | None = None
-    allowed_meat_types: list[str] = []
-    blocked_meat_types: list[str] = []
-    preferred_starch_types: list[str] = []
-    blocked_starch_types: list[str] = []
+    meat_types: dict[str, Literal["enforce", "disallow"]] = {}
+    starch_types: dict[str, Literal["enforce", "disallow"]] = {}
+    unhealthy: Literal["enforce", "disallow"] | None = None
 
 
 class WeekConstraints(BaseModel):

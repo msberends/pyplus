@@ -1213,9 +1213,10 @@ async def _plan_week(session, state: "_MealsState", refresh_fn) -> None:
     try:
         from pyplus.db import repo
         from pyplus.db.engine import AsyncSessionLocal
-        from pyplus.ml.artifacts import load_artifact
+        from pyplus.ml.artifacts import load_artifact, recompute_recommender
         from pyplus.ml.recommender import plan_week
 
+        await recompute_recommender(session.user_id)
         artifact = await load_artifact(session.user_id, "recommender")
         if artifact is None:
             ui.notify(

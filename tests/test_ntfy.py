@@ -45,7 +45,7 @@ def _make_db_ctx():
 
 
 def test_message_singular():
-    msg = _build_ntfy_message([_promo("Melk Houdbaar", "melk")])
+    msg, _ = _build_ntfy_message([_promo("Melk Houdbaar", "melk")])
     assert "1 product" in msg
     assert "Melk Houdbaar" in msg
     assert "volgende week" in msg
@@ -54,7 +54,7 @@ def test_message_singular():
 
 def test_message_plural():
     promos = [_promo(f"Product {i}", f"sku{i}") for i in range(3)]
-    msg = _build_ntfy_message(promos)
+    msg, _ = _build_ntfy_message(promos)
     assert "3 producten" in msg
     assert "Product 0" in msg
     assert "Product 2" in msg
@@ -62,7 +62,7 @@ def test_message_plural():
 
 def test_message_truncates_beyond_max():
     promos = [_promo(f"P{i}", f"s{i}") for i in range(_NTFY_MAX_PROMOS + 3)]
-    msg = _build_ntfy_message(promos)
+    msg, _ = _build_ntfy_message(promos)
     assert "… en 3 meer" in msg
     # Names beyond _NTFY_MAX_PROMOS should not appear explicitly
     assert f"P{_NTFY_MAX_PROMOS}" not in msg
@@ -70,17 +70,18 @@ def test_message_truncates_beyond_max():
 
 def test_message_no_truncation_at_exact_max():
     promos = [_promo(f"P{i}", f"s{i}") for i in range(_NTFY_MAX_PROMOS)]
-    msg = _build_ntfy_message(promos)
+    msg, _ = _build_ntfy_message(promos)
     assert "meer" not in msg
 
 
 def test_message_deep_link_included():
-    msg = _build_ntfy_message([_promo("Kaas", "kaas")], base_url="http://localhost:8080")
-    assert "http://localhost:8080/weekmenu" in msg
+    _, click_url = _build_ntfy_message([_promo("Kaas", "kaas")], base_url="http://localhost:8080")
+    assert click_url == "http://localhost:8080/weekmenu"
 
 
 def test_message_no_deep_link_when_base_url_empty():
-    msg = _build_ntfy_message([_promo("Kaas", "kaas")], base_url="")
+    msg, click_url = _build_ntfy_message([_promo("Kaas", "kaas")], base_url="")
+    assert click_url == ""
     assert "weekmenu" not in msg
     assert "→" not in msg
 
@@ -88,7 +89,7 @@ def test_message_no_deep_link_when_base_url_empty():
 def test_message_falls_back_to_sku_when_name_empty():
     p, s = _promo("", "melk_sku")
     p.name = ""
-    msg = _build_ntfy_message([(p, s)])
+    msg, _ = _build_ntfy_message([(p, s)])
     assert "melk_sku" in msg
 
 

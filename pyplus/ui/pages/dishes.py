@@ -58,6 +58,7 @@ class _DishFilters:
     cooking_methods: set = field(default_factory=set)
     prep_max: int | None = None
     is_cold: bool | None = None
+    is_unhealthy: bool | None = None
 
 
 def _apply_filters(dishes: list, filters: _DishFilters) -> list:
@@ -84,6 +85,8 @@ def _apply_filters(dishes: list, filters: _DishFilters) -> list:
                 continue
         if filters.is_cold is True and not d.is_cold:
             continue
+        if filters.is_unhealthy is True and not d.is_unhealthy:
+            continue
         result.append(d)
     return result
 
@@ -95,6 +98,7 @@ def _active_filter_count(filters: _DishFilters) -> int:
         + len(filters.cooking_methods)
         + (1 if filters.prep_max is not None else 0)
         + (1 if filters.is_cold else 0)
+        + (1 if filters.is_unhealthy else 0)
     )
 
 
@@ -189,6 +193,18 @@ def _render_filter_chips(filters: _DishFilters, refresh_fn) -> None:
         refresh_fn()
 
     cold_chip.on("update:selected", _toggle_cold)
+
+    unhealthy_chip = (
+        ui.chip("🍔 Ongezond", selectable=True, selected=filters.is_unhealthy is True)
+        .props(f"{'color=warning' if filters.is_unhealthy else 'outline'} size=sm clickable")
+        .style("font-size:11px")
+    )
+
+    def _toggle_unhealthy(e):
+        filters.is_unhealthy = True if filters.is_unhealthy is None else None
+        refresh_fn()
+
+    unhealthy_chip.on("update:selected", _toggle_unhealthy)
 
 
 def _render_filters(filters: _DishFilters, refresh_fn) -> None:
@@ -347,6 +363,7 @@ async def create_dishes_page() -> None:
     user_id = app.storage.user.get("user_id")
     session = manager.get(user_id) if user_id else None
     if session is None:
+        app.storage.browser["_login_next"] = "/dishes"
         ui.navigate.to("/login")
         return
 
@@ -503,7 +520,13 @@ def _render_dish_card(dish, data: _DishCardData | None, session, reload_fn) -> N
         with ui.element("div").style(
             "display:flex;align-items:flex-start;justify-content:space-between;gap:.375rem"
         ):
-            ui.label(dish.name).classes("sp-dish-card-name").style("flex:1;min-width:0")
+            with ui.element("div").style("flex:1;min-width:0"):
+                ui.label(dish.name).classes("sp-dish-card-name")
+                if dish.group_name and dish.group_name != dish.name:
+                    ui.label(f"Groep: {dish.group_name}").style(
+                        "font-size:10px;color:var(--c-text-4);margin-top:1px;"
+                        "white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
+                    )
             if dish.rating and dish.rating > 0:
                 _render_star_display(dish.rating)
 
@@ -528,6 +551,8 @@ def _render_dish_card(dish, data: _DishCardData | None, session, reload_fn) -> N
                     prop_parts.append(ce)
             if dish.is_cold:
                 prop_parts.append("❄️")
+            if dish.is_unhealthy:
+                prop_parts.append("🍔")
             if prop_parts:
                 ui.label(" · ".join(prop_parts)).style(
                     "font-size:11px;color:var(--c-text-3);margin-top:2px"
@@ -601,6 +626,9 @@ class _IngRow:
 
 async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) -> None:
     """Open the dish editor dialog for creating or editing a dish."""
+    async with AsyncSessionLocal() as db:
+        all_group_names = await repo.get_dish_group_names(db, user_id)
+
     if dish_id is not None:
         async with AsyncSessionLocal() as db:
             dish = await repo.get_dish(db, user_id, dish_id)
@@ -621,8 +649,12 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
         except Exception:
             cooking_val = []
         cold_val = dish.is_cold
+        unhealthy_val = dish.is_unhealthy
         dinner_val = dish.is_dinner
         rating_val = dish.rating
+        group_val = dish.group_name or dish.name
+        cooldown_val = dish.cooldown_weeks
+        original_name = dish.name
     else:
         dish = None
         raw_ings = []
@@ -634,8 +666,12 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
         veg_val = None
         cooking_val = []
         cold_val = False
+        unhealthy_val = False
         dinner_val = True
         rating_val = None
+        group_val = ""
+        cooldown_val = None
+        original_name = ""
 
     meta = {
         "prep_minutes": prep_val,
@@ -644,8 +680,12 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
         "veg_count": veg_val,
         "cooking_methods": list(cooking_val),
         "is_cold": cold_val,
+        "is_unhealthy": unhealthy_val,
         "is_dinner": dinner_val,
         "rating": rating_val,
+        "group_name": group_val,
+        "cooldown_weeks": cooldown_val,
+        "_original_name": original_name,
     }
 
     rows: list[_IngRow] = []
@@ -754,7 +794,9 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
                     )
 
             # Scrollable body
-            with ui.element("div").style("flex:1;overflow-y:auto;overflow-x:hidden;min-width:0;width:100%;padding:1.25rem 1.25rem .75rem"):
+            with ui.element("div").style(
+                "flex:1;overflow-y:auto;overflow-x:hidden;min-width:0;width:100%;padding:1.25rem 1.25rem .75rem"
+            ):
                 name_input = (
                     ui.input(label=t("dishes.name_label"), value=name_val)
                     .props("outlined dense")
@@ -773,7 +815,11 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
                     "font-size:11px;color:var(--c-text-4);margin-bottom:.75rem"
                 )
 
-                _render_meta_fields(meta)
+                _render_meta_fields(
+                    meta,
+                    all_group_names=all_group_names,
+                    global_cooldown=session.settings.ml_repeat_cooldown_weeks,
+                )
 
                 # Ingredients section header
                 with ui.element("div").style(
@@ -860,15 +906,16 @@ def _infer_starch_type(name: str, ingredients: list[_IngRow]) -> str | None:
         return "noedels"
     if any(w in combined for w in ("wrap", "tortilla", "taco", "pita", "naan", "flatbread")):
         return "wraps"
-    if any(
-        w in combined
-        for w in ("deeg", "bladerdeeg", "filodeeg", "pizza", "brood")
-    ):
+    if any(w in combined for w in ("deeg", "bladerdeeg", "filodeeg", "pizza", "brood")):
         return "deeg"
     return None
 
 
-def _render_meta_fields(meta: dict) -> None:
+def _render_meta_fields(
+    meta: dict,
+    all_group_names: list[str] | None = None,
+    global_cooldown: int = 0,
+) -> None:
     from pyplus.db.models import COOKING_METHODS, MEAT_TYPES, PREP_TIME_BUCKETS, STARCH_TYPES
     from pyplus.ui.format import (
         cooking_emoji,
@@ -921,6 +968,40 @@ def _render_meta_fields(meta: dict) -> None:
         )
         veg_sel.on("update:model-value", lambda e, s=veg_sel: meta.update(veg_count=s.value))
 
+    with ui.element("div").classes("sp-meta-grid"):
+        group_opts = {g: g for g in (all_group_names or [])}
+        group_sel = (
+            ui.select(
+                group_opts,
+                value=meta.get("group_name", ""),
+                label=t("dishes.group_label"),
+                with_input=True,
+                new_value_mode="add-unique",
+            )
+            .props("outlined dense options-dense")
+            .style("width:100%")
+            .tooltip(t("dishes.group_hint"))
+        )
+        group_sel.on("update:model-value", lambda e, s=group_sel: meta.update(group_name=s.value))
+
+        cooldown_input = (
+            ui.number(
+                value=meta.get("cooldown_weeks"),
+                label=t("dishes.cooldown_label"),
+                min=0,
+                max=52,
+            )
+            .props("outlined dense clearable suffix=weken")
+            .style("width:100%")
+            .tooltip(t("dishes.cooldown_hint", n=global_cooldown))
+        )
+        cooldown_input.on(
+            "update:model-value",
+            lambda e, c=cooldown_input: meta.update(
+                cooldown_weeks=int(c.value) if c.value is not None else None
+            ),
+        )
+
     with ui.element("div").style(
         "display:flex;align-items:center;gap:.25rem .75rem;flex-wrap:wrap;margin-bottom:.75rem"
     ):
@@ -956,6 +1037,18 @@ def _render_meta_fields(meta: dict) -> None:
         cold_cb.on(
             "update:model-value",
             lambda e: meta.update(is_cold=bool(cold_cb.value)),
+        )
+
+        unhealthy_cb = (
+            ui.checkbox(
+                f"🍔 {t('dishes.is_unhealthy_label')}", value=meta.get("is_unhealthy", False)
+            )
+            .props("dense")
+            .style("margin-right:-.25rem")
+        )
+        unhealthy_cb.on(
+            "update:model-value",
+            lambda e: meta.update(is_unhealthy=bool(unhealthy_cb.value)),
         )
 
         dinner_cb = (
@@ -1428,6 +1521,14 @@ async def _save_dish(
         if inferred:
             meta["starch_type"] = inferred
 
+    group_name = meta.get("group_name") or ""
+    original_name = meta.get("_original_name", "")
+    if group_name == original_name and name != original_name:
+        group_name = name
+    if not group_name:
+        group_name = name
+    cooldown_weeks = meta.get("cooldown_weeks")
+
     async with AsyncSessionLocal() as db:
         if dish_id is None:
             dish = await repo.create_dish(
@@ -1440,9 +1541,12 @@ async def _save_dish(
                 starch_type=meta.get("starch_type"),
                 cooking_methods=cooking_json,
                 is_cold=bool(meta.get("is_cold", False)),
+                is_unhealthy=bool(meta.get("is_unhealthy", False)),
                 is_dinner=bool(meta.get("is_dinner", True)),
                 rating=meta.get("rating"),
                 veg_count=meta.get("veg_count"),
+                group_name=group_name,
+                cooldown_weeks=cooldown_weeks,
             )
         else:
             dish = await repo.update_dish(
@@ -1456,9 +1560,12 @@ async def _save_dish(
                 starch_type=meta.get("starch_type"),
                 cooking_methods=cooking_json,
                 is_cold=bool(meta.get("is_cold", False)),
+                is_unhealthy=bool(meta.get("is_unhealthy", False)),
                 is_dinner=bool(meta.get("is_dinner", True)),
                 rating=meta.get("rating"),
                 veg_count=meta.get("veg_count"),
+                group_name=group_name,
+                cooldown_weeks=cooldown_weeks,
             )
 
         if not dish:

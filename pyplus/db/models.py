@@ -147,11 +147,14 @@ class Dish(Base):
         Text, default="[]"
     )  # JSON list from COOKING_METHODS
     is_cold: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_unhealthy: Mapped[bool] = mapped_column(Boolean, default=False)
     is_dinner: Mapped[bool] = mapped_column(Boolean, default=True)
     rating: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     veg_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 0–3
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=_utcnow)
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    group_name: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    cooldown_weeks: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="dishes")
     ingredients: Mapped[list["DishIngredient"]] = relationship(

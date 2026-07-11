@@ -15,6 +15,7 @@ async def create_promos_page() -> None:
 
     session = manager.get(user_id) if user_id else None
     if session is None:
+        app.storage.browser["_login_next"] = "/promos"
         ui.navigate.to("/login")
         return
 

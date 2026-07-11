@@ -16,6 +16,7 @@ async def create_cart_page() -> None:
 
     session = manager.get(user_id) if user_id else None
     if session is None:
+        app.storage.browser["_login_next"] = "/cart"
         ui.navigate.to("/login")
         return
 

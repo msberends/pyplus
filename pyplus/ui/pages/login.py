@@ -32,6 +32,10 @@ def _mask_email(email: str) -> str:
 # ── Public entry point ─────────────────────────────────────────────────────────
 
 
+def _post_login_destination() -> str:
+    return app.storage.browser.pop("_login_next", "/weekmenu")
+
+
 async def create_login_page() -> None:
     """
     Render the login page. Checks for a warm session or remember-me credentials
@@ -45,7 +49,7 @@ async def create_login_page() -> None:
         from pyplus.session import manager
 
         if manager.get(user_id):
-            ui.navigate.to("/weekmenu")
+            ui.navigate.to(_post_login_destination())
             return
 
         # Another tab/reconnect already started auto-login for this user —
@@ -100,7 +104,7 @@ def _render_auto_login_waiting(user_id: int) -> None:
         from pyplus.session import manager
 
         if manager.get(user_id):
-            ui.navigate.to("/weekmenu")
+            ui.navigate.to(_post_login_destination())
         elif user_id not in _auto_login_in_progress:
             ui.navigate.to("/login")
 
@@ -144,7 +148,7 @@ def _render_auto_login(email: str, password: str, name: str, user_id: int) -> No
                     app.storage.browser.update({"_auto_login_failed": True}),
                     ui.navigate.to("/login"),
                 ),
-                on_success=lambda: ui.navigate.to("/weekmenu"),
+                on_success=lambda: ui.navigate.to(_post_login_destination()),
             )
         finally:
             _auto_login_in_progress.discard(user_id)
@@ -228,7 +232,7 @@ def _render_login_form() -> None:
                     remember=remember,
                     on_progress=lambda msg: progress_label.set_text(msg),
                     on_error=_on_err,
-                    on_success=lambda: ui.navigate.to("/weekmenu"),
+                    on_success=lambda: ui.navigate.to(_post_login_destination()),
                 )
 
             submit_btn = (
