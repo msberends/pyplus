@@ -22,6 +22,7 @@ class PyPlusData:
 
     status: dict = field(default_factory=dict)
     weekmenu: dict | None = None
+    dishes: list | None = None
     staples: list | None = None
     autopilot: dict | None = None
     settings: dict | None = None
@@ -44,6 +45,7 @@ class PyPlusCoordinator(DataUpdateCoordinator[PyPlusData]):
         try:
             status_resp = await self.client.async_get_status()
             weekmenu_resp = await self.client.async_get_weekmenu()
+            dishes_resp = await self.client.async_get_dishes()
             staples_resp = await self.client.async_get_staples()
             autopilot_resp = await self.client.async_get_autopilot_plan()
             settings_resp = await self.client.async_get_settings()
@@ -55,6 +57,7 @@ class PyPlusCoordinator(DataUpdateCoordinator[PyPlusData]):
         return PyPlusData(
             status=status_resp.get("data", {}),
             weekmenu=weekmenu_resp.get("data"),
+            dishes=dishes_resp.get("data"),
             staples=staples_resp.get("data"),
             autopilot=autopilot_resp.get("data"),
             settings=settings_resp.get("data"),

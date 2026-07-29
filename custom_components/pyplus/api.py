@@ -90,6 +90,9 @@ class PyPlusApiClient:
             params["week"] = week
         return await self._get("/weekmenu", **params)
 
+    async def async_get_dishes(self) -> dict:
+        return await self._get("/dishes")
+
     async def async_get_staples(self) -> dict:
         return await self._get("/staples")
 
