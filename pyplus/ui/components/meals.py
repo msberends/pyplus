@@ -188,28 +188,32 @@ async def create_meals_lane(session) -> None:
                                 session.user_id, state, +1, week_lbl, title_lbl, _render, session
                             ),
                         ).props("flat round dense size=sm color=grey-6")
-                        plan_btn = (
-                            ui.button(
-                                icon="sym_r_auto_awesome",
-                                on_click=lambda: _plan_week(session, state, _render),
-                            )
-                            .props("flat round dense size=sm color=primary")
-                            .tooltip(t("lane.meals.plan_week"))
-                        )
-                        plan_btn.set_visibility(False)
-                        asyncio.ensure_future(_check_recommender_available(session, plan_btn))
-                        ui.button(
-                            icon="sym_r_event",
-                            on_click=lambda: _show_ical_dialog(session, state.week_start),
-                        ).props("flat round dense size=sm color=grey-6").tooltip(
-                            "Agenda-abonnement"
-                        )
-                        ui.button(
-                            icon="sym_r_skillet",
-                            on_click=lambda: ui.navigate.to("/dishes"),
-                        ).props("flat round dense size=sm color=grey-6").tooltip(
-                            t("weekmenu.manage_dishes")
-                        )
+            with ui.element("div").classes("sp-weekmenu-actions"):
+                plan_btn = (
+                    ui.button(
+                        t("lane.meals.plan_week"),
+                        icon="sym_r_auto_awesome",
+                        on_click=lambda: _plan_week(session, state, _render),
+                    )
+                    .props("flat dense no-caps size=sm color=primary")
+                    .classes("sp-weekmenu-action-btn")
+                )
+                plan_btn.set_visibility(False)
+                asyncio.ensure_future(_check_recommender_available(session, plan_btn))
+                ui.button(
+                    "Agenda",
+                    icon="sym_r_event",
+                    on_click=lambda: _show_ical_dialog(session, state.week_start),
+                ).props("flat dense no-caps size=sm color=grey-8").classes(
+                    "sp-weekmenu-action-btn"
+                )
+                ui.button(
+                    t("weekmenu.manage_dishes"),
+                    icon="sym_r_skillet",
+                    on_click=lambda: ui.navigate.to("/dishes"),
+                ).props("flat dense no-caps size=sm color=grey-8").classes(
+                    "sp-weekmenu-action-btn"
+                )
 
             def _subtitle_text() -> str:
                 _dinner_all = _DINNER_SLOTS + _WEEKEND_SLOTS
@@ -373,16 +377,6 @@ def _slot_card(slot, day_label, date_str, temp, state, options, session, refresh
         if is_filled and dish is not None:
             with ui.element("div").classes("sp-weekmenu-card__foot"):
                 with ui.element("div").style("display:flex;gap:1px"):
-                    ui.button(
-                        icon="sym_r_swap_horiz",
-                        on_click=lambda s=slot, d=dish: (
-                            _confirm_clear(session, s, d, state, refresh_fn)
-                            if session.settings.confirm_clear_slot
-                            else asyncio.ensure_future(
-                                _clear_slot(session.user_id, s, state, refresh_fn)
-                            )
-                        ),
-                    ).props("flat round dense size=xs color=grey-6").tooltip(t("lane.meals.swap"))
                     ui.button(
                         icon="sym_r_close",
                         on_click=lambda s=slot, d=dish: (

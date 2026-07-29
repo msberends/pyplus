@@ -407,6 +407,9 @@ _STRINGS: dict[str, str] = {
     "autopilot.delete_confirm_title": "Plan verwijderen?",
     "autopilot.delete_confirm_body": "Het huidige plan wordt verwijderd. Je kunt daarna een nieuw plan genereren.",
     "autopilot.regenerate_error": "Plan kon niet worden gegenereerd. Probeer het later opnieuw.",
+    "autopilot.menu_preview_info": "Hieronder staan de voorgestelde gerechten voor de komende week. Pas ze aan of laat dagen leeg als je niet thuis bent. Druk op Akkoord om het volledige plan samen te stellen.",
+    "autopilot.menu_preview_confirm": "Akkoord",
+    "autopilot.menu_preview_cancel": "Annuleren",
     # ── Autopilot settings ───────────────────────────────────────────────────
     "settings.autopilot.schedule_day": "Autopilot-dag",
     "settings.autopilot.schedule_hour": "Autopilot-tijdstip",

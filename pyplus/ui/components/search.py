@@ -260,3 +260,117 @@ def _render_search_stepper(
         qty_lbl = ui.label(str(cart_qty)).classes("sp-qty-count")
         stepper_button("+", aria_label=t("a11y.qty_increase"), on_click=_add)
     return qty_lbl
+
+
+def create_search_bar(session) -> None:
+    """Compact search bar — input + results, no lane wrapper or header."""
+    cart_service = getattr(session, "cart_service", None)
+    _debounce_task: list[asyncio.Task | None] = [None]
+    _results: list = []
+    _qty_labels: dict[str, ui.label] = {}
+    _last_in_cart: list[frozenset] = [frozenset()]
+
+    search_input = (
+        ui.input(placeholder=t("lane.search.placeholder"))
+        .props("outlined dense clearable")
+        .style("width:100%")
+    )
+    search_input.props("prepend-icon=search")
+
+    status_row = ui.element("div").style("display:flex;align-items:center;gap:.5rem;min-height:0")
+    with status_row:
+        search_spinner = ui.spinner(size="16px", color="primary")
+        search_spinner.set_visibility(False)
+        status_label = ui.label("").style("font-size:12px;color:var(--c-text-3)")
+
+    with ui.element("div"):
+
+        @ui.refreshable
+        def _results_list() -> None:
+            _qty_labels.clear()
+            if not _results:
+                return
+            cart_qty_map = {it.sku: it.quantity for it in session.cart.items}
+            syncing = session.syncing_skus
+            for product in _results:
+                qty_lbl = _render_product_row(product, cart_qty_map, syncing, cart_service)
+                if qty_lbl is not None:
+                    _qty_labels[product.sku] = qty_lbl
+            _last_in_cart[0] = frozenset({p.sku for p in _results} & cart_qty_map.keys())
+
+        _results_list()
+
+    _generation: list[int] = [0]
+
+    async def _search(query: str, gen: int) -> None:
+        query = query.strip()
+        if len(query) < 3:
+            _results.clear()
+            status_label.set_text("")
+            _results_list.refresh()
+            return
+        try:
+            from pyplus.services.search import search_products
+
+            prefs = session.settings
+            found = await search_products(session, query, limit=prefs.search_result_limit)
+            if gen != _generation[0]:
+                return
+            if prefs.hide_unavailable_search:
+                found = [p for p in found if p.is_available]
+            _results.clear()
+            _results.extend(found)
+            if found:
+                status_label.set_text(f"{len(found)} resultaten")
+            else:
+                status_label.set_text(t("lane.search.no_results"))
+        except Exception as exc:
+            if gen != _generation[0]:
+                return
+            log.warning("Search error: %s", exc)
+            _results.clear()
+            status_label.set_text(t("status.error"))
+        finally:
+            if gen == _generation[0]:
+                search_spinner.set_visibility(False)
+                _results_list.refresh()
+
+    async def _on_input(e) -> None:
+        query = e.value if hasattr(e, "value") else search_input.value
+        if _debounce_task[0] and not _debounce_task[0].done():
+            _debounce_task[0].cancel()
+        _generation[0] += 1
+        gen = _generation[0]
+        stripped = (query or "").strip()
+        if len(stripped) >= 3:
+            _results.clear()
+            _results_list.refresh()
+            search_spinner.set_visibility(True)
+            status_label.set_text(t("status.loading"))
+        else:
+            _results.clear()
+            _results_list.refresh()
+            search_spinner.set_visibility(False)
+            status_label.set_text("")
+
+        async def _debounced():
+            await asyncio.sleep(_DEBOUNCE)
+            await _search(query, gen)
+
+        _debounce_task[0] = asyncio.create_task(_debounced())
+
+    search_input.on("update:model-value", _on_input)
+    search_input.on("clear", lambda _: asyncio.ensure_future(_search("", _generation[0])))
+
+    def _on_cart() -> None:
+        if not _results:
+            return
+        cart_qty_map = {it.sku: it.quantity for it in session.cart.items}
+        in_cart_now = frozenset(s for s in {p.sku for p in _results} if cart_qty_map.get(s, 0) > 0)
+        if in_cart_now != _last_in_cart[0]:
+            _results_list.refresh()
+        else:
+            for sku, lbl in _qty_labels.items():
+                lbl.set_text(str(cart_qty_map.get(sku, 0)))
+
+    session.add_cart_listener(_on_cart)

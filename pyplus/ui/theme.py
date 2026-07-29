@@ -15,53 +15,53 @@ _GOOGLE_FONTS = (
 # the Quasar JS theme set in apply_theme().
 _P: dict[str, str] = {
     # PLUS brand
-    "brand":            "#80bd1d",  # green-light — accent, positive
-    "brand_dark":       "#227647",  # green-dark — buttons, focus
-    "brand_tint":       "#f0f7e6",
-    "brand_tint_2":     "#dff0c0",
-    "brand_text":       "#1a5e22",  # dark green text on brand-tint bg
+    "brand": "#80bd1d",  # green-light — accent, positive
+    "brand_dark": "#227647",  # green-dark — buttons, focus
+    "brand_tint": "#f0f7e6",
+    "brand_tint_2": "#dff0c0",
+    "brand_text": "#1a5e22",  # dark green text on brand-tint bg
     # Danger
-    "danger":           "#e3131d",  # PLUS red — destructive only
-    "danger_tint":      "#fff0f0",
-    "danger_red":       "#ef4444",  # generic red-500 (non-PLUS contexts)
-    "danger_text":      "#b91c1c",  # red-700 text on danger-tint bg
+    "danger": "#e3131d",  # PLUS red — destructive only
+    "danger_tint": "#fff0f0",
+    "danger_red": "#ef4444",  # generic red-500 (non-PLUS contexts)
+    "danger_text": "#b91c1c",  # red-700 text on danger-tint bg
     # Accent (PLUS purple)
-    "accent":           "#554da7",
-    "accent_tint":      "#eee8f5",  # lightest purple bg
-    "accent_tint_2":    "#e8e3f5",  # slightly deeper
-    "accent_tint_3":    "#ebe5f2",  # mid
-    "accent_tint_4":    "#f0ebf7",  # palest
-    "accent_border":    "#d5cef0",
-    "accent_surface":   "#faf8fd",  # barely-there purple surface
+    "accent": "#554da7",
+    "accent_tint": "#eee8f5",  # lightest purple bg
+    "accent_tint_2": "#e8e3f5",  # slightly deeper
+    "accent_tint_3": "#ebe5f2",  # mid
+    "accent_tint_4": "#f0ebf7",  # palest
+    "accent_border": "#d5cef0",
+    "accent_surface": "#faf8fd",  # barely-there purple surface
     # Warning (amber/orange)
-    "warning":          "#f59e0b",  # amber-500
-    "warning_dark":     "#d97706",  # amber-600
-    "warning_icon":     "#f57c00",  # orange-700 icon on amber bg
-    "warning_text":     "#92400e",  # amber-800 text on amber bg
-    "warning_tint":     "#fffbeb",  # amber-50 bg
-    "warning_tint_2":   "#fff3e0",  # orange-50 bg variant
-    "warning_border":   "#fde68a",  # amber-200 border
+    "warning": "#f59e0b",  # amber-500
+    "warning_dark": "#d97706",  # amber-600
+    "warning_icon": "#f57c00",  # orange-700 icon on amber bg
+    "warning_text": "#92400e",  # amber-800 text on amber bg
+    "warning_tint": "#fffbeb",  # amber-50 bg
+    "warning_tint_2": "#fff3e0",  # orange-50 bg variant
+    "warning_border": "#fde68a",  # amber-200 border
     "warning_border_2": "#f5d6a0",  # amber border alt
     # Info (blue)
-    "info_tint":        "#e8f0fe",
-    "info_text":        "#1a56b0",
+    "info_tint": "#e8f0fe",
+    "info_text": "#1a56b0",
     # Positive (non-PLUS success green)
-    "positive_tint":    "#e8f5e9",
-    "positive_text":    "#2e7d32",
+    "positive_tint": "#e8f5e9",
+    "positive_text": "#2e7d32",
     # Neutrals — warm stone
-    "bg":               "#f5f4f1",
-    "surface":          "#ffffff",
-    "surface_2":        "#faf9f7",
-    "border":           "#e6e4df",
-    "border_strong":    "#d1cfc9",
+    "bg": "#f5f4f1",
+    "surface": "#ffffff",
+    "surface_2": "#faf9f7",
+    "border": "#e6e4df",
+    "border_strong": "#d1cfc9",
     # Text — warm neutrals, WCAG AA compliant
-    "text":             "#111810",
-    "text_2":           "#3d3d38",
-    "text_3":           "#5c5c56",  # ~6.0:1
-    "text_4":           "#7a7a73",  # ~4.8:1 — lightest that passes AA
+    "text": "#111810",
+    "text_2": "#3d3d38",
+    "text_3": "#5c5c56",  # ~6.0:1
+    "text_4": "#7a7a73",  # ~4.8:1 — lightest that passes AA
     # Quasar-only (no CSS custom-property equivalent needed)
-    "q_positive":       "#16a34a",
-    "q_info":           "#3b82f6",
+    "q_positive": "#16a34a",
+    "q_info": "#3b82f6",
 }
 
 
@@ -806,6 +806,7 @@ body {
   max-height: calc(100vh - 3rem);
   overflow-y: auto;
 }
+.sp-cart-mobile-search { display: none; }
 
 /* Origin chips — small pills on cart items showing how they were added */
 .sp-origin-chip {
@@ -1346,6 +1347,21 @@ body {
   margin: .5rem 0 .25rem;
 }
 
+/* ─── Weekmenu action buttons ────────────────────────────────────────────── */
+.sp-weekmenu-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .25rem;
+  margin-top: .375rem;
+}
+.sp-weekmenu-action-btn {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  letter-spacing: -.1px;
+  border-radius: var(--r-md) !important;
+  padding: 2px 10px 2px 6px !important;
+}
+
 /* ─── Weekmenu card grid ─────────────────────────────────────────────────── */
 .sp-weekmenu-grid {
   display: grid;
@@ -1662,7 +1678,8 @@ body {
   /* align-items:flex-start (desktop) collapses children in column mode → items overflow right;
      stretch makes both cols fill the full available width. */
   .sp-cart-two-col { flex-direction: column; align-items: stretch; }
-  .sp-cart-two-col__search { position: static; max-height: none; }
+  .sp-cart-two-col__search { display: none; }
+  .sp-cart-mobile-search { display: block; margin-bottom: .5rem; }
   /* Sticky total footer — floats above the bottom nav bar so price+checkout are always visible */
   .sp-cart-footer {
     position: sticky;
@@ -1674,10 +1691,10 @@ body {
   }
   .sp-mobile-cart-bar { display: flex; bottom: 58px; }
 
-  /* Weekmenu grids: 2 cols on mobile */
-  .sp-weekmenu-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .sp-weekmenu-weekend-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .sp-weekmenu-extra-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* Weekmenu grids: 1 col on mobile */
+  .sp-weekmenu-grid { grid-template-columns: 1fr; }
+  .sp-weekmenu-weekend-grid { grid-template-columns: 1fr; }
+  .sp-weekmenu-extra-grid { grid-template-columns: 1fr; }
 
   /* Staples/promo cards: narrower minimum so more fit */
   .sp-staples-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }

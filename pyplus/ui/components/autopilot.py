@@ -44,10 +44,87 @@ def _unit_price_label(price: float, subtitle: str) -> str:
         if per_100 > 0:
             return f"{fmt(per_100)} / 100 g"
     if norm_unit == "l" and per_norm > 10:
-        per_100 = price / (size / 100) if unit == "ml" else price / (size / 10) if unit == "cl" else 0
+        per_100 = (
+            price / (size / 100) if unit == "ml" else price / (size / 10) if unit == "cl" else 0
+        )
         if per_100 > 0:
             return f"{fmt(per_100)} / 100 ml"
     return f"{fmt(per_norm)} / {norm_unit}"
+
+
+_WEIGHT_UNITS = {"g", "kg"}
+_VOLUME_UNITS = {"ml", "cl", "l", "liter"}
+
+
+def _unit_price_pair(
+    new_price: float,
+    new_subtitle: str,
+    orig_price: float,
+    orig_subtitle: str,
+) -> tuple[str, str]:
+    """Format unit prices for a pair of products using a shared unit for comparison."""
+    from pyplus.services.dishes import _parse_pack_from_subtitle
+
+    new_size, new_unit = _parse_pack_from_subtitle(new_subtitle)
+    orig_size, orig_unit = _parse_pack_from_subtitle(orig_subtitle)
+
+    if (
+        not new_size
+        or not new_unit
+        or not orig_size
+        or not orig_unit
+        or new_price <= 0
+        or orig_price <= 0
+    ):
+        return _unit_price_label(new_price, new_subtitle), _unit_price_label(
+            orig_price, orig_subtitle
+        )
+
+    def fmt(v: float) -> str:
+        return f"€ {v:.2f}".replace(".", ",")
+
+    both_weight = new_unit in _WEIGHT_UNITS and orig_unit in _WEIGHT_UNITS
+    both_volume = new_unit in _VOLUME_UNITS and orig_unit in _VOLUME_UNITS
+
+    if not both_weight and not both_volume:
+        return _unit_price_label(new_price, new_subtitle), _unit_price_label(
+            orig_price, orig_subtitle
+        )
+
+    new_norm = _NORM_UNITS.get(new_unit, (new_unit, 1))
+    orig_norm = _NORM_UNITS.get(orig_unit, (orig_unit, 1))
+    new_size_norm = new_size / new_norm[1]
+    orig_size_norm = orig_size / orig_norm[1]
+
+    new_per_norm = new_price / new_size_norm if new_size_norm > 0 else 0
+    orig_per_norm = orig_price / orig_size_norm if orig_size_norm > 0 else 0
+
+    if both_weight:
+        if new_per_norm > 20 or orig_per_norm > 20:
+            new_per_100 = new_price / (new_size / 100) if new_size > 0 else 0
+            orig_per_100 = orig_price / (orig_size / 100) if orig_size > 0 else 0
+            if new_per_100 > 0 and orig_per_100 > 0:
+                return f"{fmt(new_per_100)} / 100 g", f"{fmt(orig_per_100)} / 100 g"
+        return f"{fmt(new_per_norm)} / kg", f"{fmt(orig_per_norm)} / kg"
+
+    if new_per_norm > 10 or orig_per_norm > 10:
+
+        def _to_ml(size: float, unit: str) -> float:
+            if unit == "ml":
+                return size
+            if unit == "cl":
+                return size * 10
+            if unit in ("l", "liter"):
+                return size * 1000
+            return size
+
+        new_ml = _to_ml(new_size, new_unit)
+        orig_ml = _to_ml(orig_size, orig_unit)
+        new_per_100 = new_price / (new_ml / 100) if new_ml > 0 else 0
+        orig_per_100 = orig_price / (orig_ml / 100) if orig_ml > 0 else 0
+        if new_per_100 > 0 and orig_per_100 > 0:
+            return f"{fmt(new_per_100)} / 100 ml", f"{fmt(orig_per_100)} / 100 ml"
+    return f"{fmt(new_per_norm)} / l", f"{fmt(orig_per_norm)} / l"
 
 
 def _eur(amount: float) -> str:
@@ -135,9 +212,10 @@ def _render_no_plan(session, user_id: int, settings, body) -> None:
 
         from pyplus.db import repo
         from pyplus.db.engine import AsyncSessionLocal
-        from pyplus.services.autopilot import prepare_plan
+        from pyplus.services.autopilot import AutopilotResult, PlanSummary, prepare_menu_only
 
-        result = await prepare_plan(user_id, store_number=session.store_number)
+        menu = await prepare_menu_only(user_id, store_number=session.store_number)
+        preview = AutopilotResult(items=[], summary=PlanSummary(), menu_assignments=menu)
 
         today = datetime.date.today()
         next_monday = today + datetime.timedelta(days=(7 - today.weekday()))
@@ -146,7 +224,8 @@ def _render_no_plan(session, user_id: int, settings, body) -> None:
                 db,
                 user_id,
                 next_monday,
-                result.to_json(),
+                preview.to_json(),
+                status="menu_preview",
             )
 
         ui.navigate.to("/autopilot")
@@ -186,6 +265,10 @@ async def _render_plan_view(body, session, user_id: int, settings) -> None:
         _render_no_plan(session, user_id, settings, body)
         return
 
+    if plan.status == "menu_preview":
+        await _render_menu_preview(plan, result, session, user_id, settings, body)
+        return
+
     if plan.status == "confirmed":
         if session.cart.total_items == 0:
             async with AsyncSessionLocal() as db:
@@ -202,6 +285,152 @@ async def _render_plan_view(body, session, user_id: int, settings) -> None:
 
     # ── Draft plan — full review UI ──────────────────────────────────
     await _render_draft(plan, result, session, user_id, body, settings)
+
+
+# ── Menu preview (interactive weekmenu confirmation) ───────────────────────
+
+
+_SLOT_DAY_OFFSET = {
+    "ma": 0,
+    "di": 1,
+    "wo": 2,
+    "do": 3,
+    "vr": 4,
+    "za": 5,
+    "zo": 6,
+}
+
+
+def _render_slot_row(slot, week_start, options, confirmed_menu, option_slot) -> None:
+    offset = _SLOT_DAY_OFFSET.get(slot)
+    if offset is not None:
+        d = week_start + datetime.timedelta(days=offset)
+        day_text = f"{_DAY_FULL.get(slot, slot)} {d.day} {_MONTHS_NL[d.month]}"
+    else:
+        day_text = _EXTRA_LABEL.get(slot.replace("lunch", "extra "), slot)
+
+    with ui.element("div").style("display:flex;align-items:center;gap:.5rem;min-width:0"):
+        ui.label(day_text).style(
+            "font-size:12px;font-weight:600;color:var(--c-text-2);flex-shrink:0;min-width:140px"
+        )
+        picker = (
+            ui.select(
+                options,
+                value=confirmed_menu.get(slot),
+                with_input=True,
+                clearable=True,
+                on_change=lambda e, s=slot: confirmed_menu.__setitem__(s, e.value),
+            )
+            .props("outlined dense options-dense borderless")
+            .style("flex:1;min-width:0")
+        )
+        picker.add_slot("option", option_slot)
+
+
+async def _render_menu_preview(plan, result, session, user_id: int, settings, body) -> None:
+    from pyplus.db import repo
+    from pyplus.db.engine import AsyncSessionLocal
+    from pyplus.ui.components.meals import (
+        _DINNER_SLOTS,
+        _EXTRA_SLOTS,
+        _PICKER_OPTION_SLOT,
+        _WEEKEND_SLOTS,
+    )
+
+    today = datetime.date.today()
+    next_monday = today + datetime.timedelta(days=(7 - today.weekday()))
+
+    async with AsyncSessionLocal() as db:
+        user_dishes = await repo.get_dishes(db, user_id)
+
+    options = {d.id: d.name for d in user_dishes}
+    suggested = result.menu_assignments or {}
+    confirmed_menu: dict[str, int | None] = {}
+
+    all_slots = _DINNER_SLOTS + _WEEKEND_SLOTS + _EXTRA_SLOTS
+    for slot in all_slots:
+        dish_id = suggested.get(slot)
+        confirmed_menu[slot] = dish_id if dish_id and dish_id in options else None
+
+    with ui.element("div").style(
+        "display:flex;align-items:flex-start;gap:.5rem;padding:.625rem .75rem;"
+        "background:var(--c-accent-tint);border-radius:var(--r-md);"
+        "border:1px solid var(--c-accent-border);margin-bottom:.75rem"
+    ):
+        ui.icon(_ICON, size="16px").style("color:var(--c-accent);flex-shrink:0;margin-top:1px")
+        ui.label(t("autopilot.menu_preview_info")).style(
+            "font-size:12px;color:var(--c-accent);line-height:1.55"
+        )
+
+    spinner_slot = ui.element("div")
+
+    async def _confirm_menu() -> None:
+        spinner_slot.clear()
+        with spinner_slot:
+            with ui.element("div").style(
+                "display:flex;align-items:center;gap:.5rem;justify-content:center;padding:1rem"
+            ):
+                ui.spinner(size="sm", color="deep-purple")
+                ui.label(t("autopilot.generating")).style("font-size:13px;color:var(--c-text-3)")
+
+        from pyplus.services.autopilot import prepare_plan
+
+        fixed = {s: d for s, d in confirmed_menu.items() if d is not None}
+        full_result = await prepare_plan(
+            user_id, store_number=session.store_number, fixed_menu=fixed
+        )
+
+        async with AsyncSessionLocal() as db:
+            await repo.upsert_autopilot_plan(
+                db, user_id, next_monday, full_result.to_json(), status="draft"
+            )
+
+        ui.navigate.to("/autopilot")
+
+    async def _cancel_preview() -> None:
+        async with AsyncSessionLocal() as db:
+            await repo.update_autopilot_plan_status(db, plan.id, "expired")
+        ui.navigate.to("/autopilot")
+
+    # ── Slot rows inside a single card (matches draft weekmenu overview density)
+    _dinner_slots = _DINNER_SLOTS + _WEEKEND_SLOTS
+
+    with ui.element("div").style(
+        "display:flex;flex-direction:column;gap:0;padding:.625rem .75rem;"
+        "background:var(--c-surface-2);border-radius:var(--r-md);"
+        "border:1px solid var(--c-border);margin-bottom:.75rem"
+    ):
+        ui.label("Weekmenu").style(
+            "font-size:11px;font-weight:700;color:var(--c-accent);"
+            "letter-spacing:.04em;text-transform:uppercase;margin-bottom:.5rem"
+        )
+        with ui.element("div").style("display:flex;flex-direction:column;gap:.25rem"):
+            for slot in _dinner_slots:
+                _render_slot_row(slot, next_monday, options, confirmed_menu, _PICKER_OPTION_SLOT)
+
+        has_extras = any(confirmed_menu.get(s) for s in _EXTRA_SLOTS)
+        if has_extras:
+            ui.element("div").style("height:.375rem")
+            for slot in _EXTRA_SLOTS:
+                if confirmed_menu.get(slot):
+                    _render_slot_row(
+                        slot, next_monday, options, confirmed_menu, _PICKER_OPTION_SLOT
+                    )
+
+    # ── Action bar ──────────────────────────────────────────────────
+    with ui.element("div").style("display:flex;flex-wrap:wrap;gap:.5rem;align-items:center"):
+        ui.button(
+            t("autopilot.menu_preview_confirm"),
+            icon="sym_r_check",
+            on_click=_confirm_menu,
+        ).props("unelevated dense no-caps size=sm color=deep-purple").style(
+            "font-size:12px;font-weight:600"
+        )
+        ui.button(
+            t("autopilot.menu_preview_cancel"),
+            icon="sym_r_close",
+            on_click=_cancel_preview,
+        ).props("flat dense no-caps size=sm").style("font-size:12px;font-weight:600")
 
 
 # ── Draft plan ───────────────────────────────────────────────────────────────
@@ -499,13 +728,20 @@ def _render_action_bar_top(plan, result, session, user_id: int, settings, refres
             try:
                 from pyplus.db import repo
                 from pyplus.db.engine import AsyncSessionLocal
-                from pyplus.services.autopilot import prepare_plan
+                from pyplus.services.autopilot import (
+                    AutopilotResult,
+                    PlanSummary,
+                    prepare_menu_only,
+                )
 
-                new_result = await prepare_plan(user_id, store_number=session.store_number)
+                menu = await prepare_menu_only(user_id, store_number=session.store_number)
+                preview = AutopilotResult(items=[], summary=PlanSummary(), menu_assignments=menu)
                 today = datetime.date.today()
                 ws = today + datetime.timedelta(days=(7 - today.weekday()))
                 async with AsyncSessionLocal() as db:
-                    await repo.upsert_autopilot_plan(db, user_id, ws, new_result.to_json())
+                    await repo.upsert_autopilot_plan(
+                        db, user_id, ws, preview.to_json(), status="menu_preview"
+                    )
             except Exception:
                 log.exception("Regenerate plan failed")
                 ui.notify(t("autopilot.regenerate_error"), type="negative")
@@ -790,7 +1026,9 @@ def _render_promo_swap_card(item, plan, result, refresh_fn) -> None:
     subtitle = (pc.subtitle if pc else None) or ""
     orig_pc = cache.get(item.original_sku) if item.original_sku else None
     orig_subtitle = (orig_pc.subtitle if orig_pc else None) or ""
-    orig_price = item.price + (item.promo_savings / max(item.qty, 1)) if item.promo_savings > 0 else 0.0
+    orig_price = (
+        item.price + (item.promo_savings / max(item.qty, 1)) if item.promo_savings > 0 else 0.0
+    )
 
     with ui.element("div").style(
         "display:flex;align-items:center;gap:.625rem;padding:.625rem .75rem;"
@@ -825,8 +1063,13 @@ def _render_promo_swap_card(item, plan, result, refresh_fn) -> None:
                     ui.label(f"bespaar {_eur(item.promo_savings)}").style(
                         "font-size:11px;font-weight:700;color:var(--c-accent)"
                     )
-            new_unit = _unit_price_label(item.price, subtitle)
-            orig_unit = _unit_price_label(orig_price, orig_subtitle) if orig_price > 0 else ""
+            if orig_price > 0:
+                new_unit, orig_unit = _unit_price_pair(
+                    item.price, subtitle, orig_price, orig_subtitle
+                )
+            else:
+                new_unit = _unit_price_label(item.price, subtitle)
+                orig_unit = ""
             if new_unit or orig_unit:
                 with ui.element("div").style(
                     "display:flex;gap:.375rem;align-items:center;flex-wrap:wrap;margin-top:1px"

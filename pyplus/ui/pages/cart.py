@@ -36,6 +36,15 @@ async def create_cart_page() -> None:
             with ui.element("div").classes("sp-cart-two-col"):
                 # Left: cart panel (PLUS category grouping, origin chips per row)
                 with ui.element("div").classes("sp-cart-two-col__main"):
+                    # Mobile-only compact search bar (hidden on desktop via CSS)
+                    try:
+                        from pyplus.ui.components.search import create_search_bar
+
+                        with ui.element("div").classes("sp-cart-mobile-search"):
+                            create_search_bar(session)
+                    except Exception as exc:
+                        log.error("Mobile search crashed: %s", exc)
+
                     try:
                         from pyplus.ui.components.cart import create_cart_panel
 
@@ -55,7 +64,7 @@ async def create_cart_page() -> None:
                                     "font-size:13px;color:var(--c-text-3)"
                                 )
 
-                # Right: search panel
+                # Right: search panel (hidden on mobile via CSS)
                 with ui.element("div").classes("sp-cart-two-col__search"):
                     try:
                         from pyplus.ui.components.search import create_search_lane

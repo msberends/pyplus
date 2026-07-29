@@ -117,7 +117,62 @@ class AutopilotResult:
         return cls(items=items, summary=summary, menu_assignments=assignments)
 
 
-async def prepare_plan(user_id: int, *, store_number: int = 0) -> AutopilotResult:
+async def prepare_menu_only(user_id: int, *, store_number: int = 0) -> dict[str, int]:
+    """Run only the ML weekmenu step and return slot -> dish_id assignments."""
+    from pyplus.db import repo
+    from pyplus.db.engine import AsyncSessionLocal
+    from pyplus.ml.artifacts import load_artifact, recompute_recommender
+    from pyplus.ml.interface import UserSettings
+    from pyplus.ml.recommender import RecommenderArtifact, plan_week
+
+    async with AsyncSessionLocal() as db:
+        user = await repo.get_user_by_id(db, user_id)
+        settings_json = await repo.get_user_settings_json(db, user_id)
+    if user is None:
+        return {}
+
+    try:
+        settings = UserSettings.model_validate_json(settings_json)
+    except Exception:
+        settings = UserSettings()
+
+    today = datetime.date.today()
+    next_monday = today + datetime.timedelta(days=(7 - today.weekday()))
+
+    async with AsyncSessionLocal() as db:
+        wm_rows = await repo.get_weekmenu(db, user_id, next_monday)
+        all_dishes = await repo.get_all_dish_ingredients_for_user(db, user_id)
+
+    current_slots: dict[str, int | None] = {}
+    for row in wm_rows:
+        current_slots[row.slot] = row.dish_id
+
+    new_assignments: dict[str, int] = {}
+    if settings.ml_autopilot_dinner or settings.ml_autopilot_lunch:
+        await recompute_recommender(user_id)
+        artifact = await load_artifact(user_id, "recommender")
+        if isinstance(artifact, RecommenderArtifact):
+            n_dinner = settings.ml_autopilot_max_dinner if settings.ml_autopilot_dinner else 0
+            n_lunch = settings.ml_autopilot_max_lunch if settings.ml_autopilot_lunch else 0
+            dish_ids = list(all_dishes.keys())
+            weather_temps = await _load_weather_temps(user_id, settings, next_monday)
+
+            new_assignments = plan_week(
+                artifact,
+                dish_ids,
+                current_slots,
+                settings=settings,
+                n_dinner=n_dinner,
+                n_lunch=n_lunch,
+                weather_temps=weather_temps,
+            )
+
+    return {**{k: v for k, v in current_slots.items() if v is not None}, **new_assignments}
+
+
+async def prepare_plan(
+    user_id: int, *, store_number: int = 0, fixed_menu: dict[str, int] | None = None
+) -> AutopilotResult:
     from pyplus.db import repo
     from pyplus.db.engine import AsyncSessionLocal
 
@@ -151,7 +206,9 @@ async def prepare_plan(user_id: int, *, store_number: int = 0) -> AutopilotResul
             items.append(item)
 
     # ── 1. Plan week menu ─────────────────────────────────────────────────
-    menu_assignments = await _fill_weekmenu(user_id, store, settings, _add)
+    menu_assignments = await _fill_weekmenu(
+        user_id, store, settings, _add, override_assignments=fixed_menu
+    )
 
     # ── 2. Top up staples ─────────────────────────────────────────────────
     if settings.ml_autopilot_staples:
@@ -181,6 +238,7 @@ async def _fill_weekmenu(
     store: int,
     settings: UserSettings,
     add_fn,
+    override_assignments: dict[str, int] | None = None,
 ) -> dict[str, int]:
     from pyplus.db import repo
     from pyplus.db.engine import AsyncSessionLocal
@@ -188,42 +246,47 @@ async def _fill_weekmenu(
     from pyplus.ml.recommender import RecommenderArtifact, plan_week
 
     today = datetime.date.today()
-    # Plan for next week (the coming Monday), not the current week
     next_monday = today + datetime.timedelta(days=(7 - today.weekday()))
     week_start = next_monday
 
     async with AsyncSessionLocal() as db:
-        wm_rows = await repo.get_weekmenu(db, user_id, week_start)
         all_dishes = await repo.get_all_dish_ingredients_for_user(db, user_id)
         user_dishes = await repo.get_dishes(db, user_id)
 
     dish_names: dict[int, str] = {d.id: d.name for d in user_dishes}
 
-    current_slots: dict[str, int | None] = {}
-    for row in wm_rows:
-        current_slots[row.slot] = row.dish_id
+    if override_assignments is not None:
+        new_assignments = override_assignments
+        filled_slots = override_assignments
+    else:
+        async with AsyncSessionLocal() as db:
+            wm_rows = await repo.get_weekmenu(db, user_id, week_start)
 
-    new_assignments: dict[str, int] = {}
-    if settings.ml_autopilot_dinner or settings.ml_autopilot_lunch:
-        await recompute_recommender(user_id)
-        artifact = await load_artifact(user_id, "recommender")
-        if isinstance(artifact, RecommenderArtifact):
-            n_dinner = settings.ml_autopilot_max_dinner if settings.ml_autopilot_dinner else 0
-            n_lunch = settings.ml_autopilot_max_lunch if settings.ml_autopilot_lunch else 0
-            dish_ids = list(all_dishes.keys())
-            weather_temps = await _load_weather_temps(user_id, settings, week_start)
+        current_slots: dict[str, int | None] = {}
+        for row in wm_rows:
+            current_slots[row.slot] = row.dish_id
 
-            new_assignments = plan_week(
-                artifact,
-                dish_ids,
-                current_slots,
-                settings=settings,
-                n_dinner=n_dinner,
-                n_lunch=n_lunch,
-                weather_temps=weather_temps,
-            )
+        new_assignments: dict[str, int] = {}
+        if settings.ml_autopilot_dinner or settings.ml_autopilot_lunch:
+            await recompute_recommender(user_id)
+            artifact = await load_artifact(user_id, "recommender")
+            if isinstance(artifact, RecommenderArtifact):
+                n_dinner = settings.ml_autopilot_max_dinner if settings.ml_autopilot_dinner else 0
+                n_lunch = settings.ml_autopilot_max_lunch if settings.ml_autopilot_lunch else 0
+                dish_ids = list(all_dishes.keys())
+                weather_temps = await _load_weather_temps(user_id, settings, week_start)
 
-    filled_slots = {**current_slots, **new_assignments}
+                new_assignments = plan_week(
+                    artifact,
+                    dish_ids,
+                    current_slots,
+                    settings=settings,
+                    n_dinner=n_dinner,
+                    n_lunch=n_lunch,
+                    weather_temps=weather_temps,
+                )
+
+        filled_slots = {**current_slots, **new_assignments}
 
     for slot, dish_id in filled_slots.items():
         if dish_id is None or dish_id not in all_dishes:
