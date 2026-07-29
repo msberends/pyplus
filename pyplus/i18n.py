@@ -419,6 +419,18 @@ _STRINGS: dict[str, str] = {
     "settings.autopilot.auto_confirm": "Automatisch toevoegen aan winkelwagen",
     "settings.autopilot.sub_threshold": "Drempel automatische vervanging",
     "settings.autopilot.sub_threshold_hint": "Score waarboven een vervangproduct automatisch wordt geaccepteerd (max. 10).",
+    # ── API ────────────────────────────────────────────────────────────────────
+    "settings.api.title": "API-toegang",
+    "settings.api.info": (
+        "Genereer een API-sleutel om PyPLUS vanuit andere apps te bedienen, "
+        "bijvoorbeeld Home Assistant. De sleutel wordt één keer getoond."
+    ),
+    "settings.api.generate": "Genereer API-sleutel",
+    "settings.api.revoke": "Intrekken",
+    "settings.api.active": "API-sleutel actief",
+    "settings.api.inactive": "Geen API-sleutel ingesteld",
+    "settings.api.generated": "Bewaar deze sleutel — hij wordt niet meer getoond",
+    "settings.api.revoked": "API-sleutel ingetrokken",
     # ── Accessibility (screen-reader labels for icon-only controls) ─────────────
     "a11y.add_to_cart": "Toevoegen aan winkelwagen",
     "a11y.qty_increase": "Aantal verhogen",

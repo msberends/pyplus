@@ -87,6 +87,7 @@ class User(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=_utcnow)
     last_login_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
     settings_json: Mapped[str] = mapped_column(Text, default="{}")
+    api_key_hash: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
 
     credentials: Mapped[Optional["Credentials"]] = relationship(
         back_populates="user", uselist=False, cascade="all, delete-orphan"

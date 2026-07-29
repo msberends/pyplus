@@ -78,6 +78,10 @@ async def create_settings_page() -> None:
                         t("settings.account.title"),
                         lambda: _render_account(session, user, user_id),
                     )
+                    _section_card(
+                        t("settings.api.title"),
+                        lambda: _render_api_key(user, user_id),
+                    )
                     _section_card("Weergave & gedrag", lambda: _render_behaviour(settings, _save))
                     _section_card(
                         "Indeling & sortering",
@@ -234,6 +238,79 @@ def _render_account(session, user, user_id: int) -> None:
     ui.button(t("settings.logout"), icon="sym_r_logout", on_click=_logout).props(
         "flat rounded no-caps color=negative"
     ).style("font-size:13px")
+
+
+def _render_api_key(user, user_id: int) -> None:
+    from pyplus.db import repo
+    from pyplus.db.engine import AsyncSessionLocal
+
+    _infobox(t("settings.api.info"))
+
+    has_key = user.api_key_hash is not None
+
+    status_label = ui.label(
+        t("settings.api.active") if has_key else t("settings.api.inactive")
+    ).style(
+        "font-size:12px;font-weight:600;display:block;margin-bottom:.75rem;"
+        f"color:{'var(--c-brand-dark)' if has_key else 'var(--c-text-4)'}"
+    )
+
+    key_display = ui.element("div").style("display:none")
+
+    async def _generate() -> None:
+        from pyplus.api.auth import generate_api_key, hash_api_key
+
+        key = generate_api_key()
+        async with AsyncSessionLocal() as db:
+            await repo.set_api_key_hash(db, user_id, hash_api_key(key))
+        user.api_key_hash = "set"
+        status_label.set_text(t("settings.api.active"))
+        status_label.style(
+            "font-size:12px;font-weight:600;display:block;margin-bottom:.75rem;"
+            "color:var(--c-brand-dark)"
+        )
+        key_display.style("display:block;margin-bottom:.75rem")
+        key_display.clear()
+        with key_display:
+            ui.label(t("settings.api.generated")).style(
+                "font-size:11px;color:var(--c-warning-dark);margin-bottom:.375rem;display:block"
+            )
+            ui.input(value=key).props("outlined dense readonly").style(
+                "width:100%;font-family:monospace;font-size:12px"
+            )
+        revoke_btn.set_visibility(True)
+
+    async def _revoke() -> None:
+        async with AsyncSessionLocal() as db:
+            await repo.clear_api_key_hash(db, user_id)
+        user.api_key_hash = None
+        status_label.set_text(t("settings.api.inactive"))
+        status_label.style(
+            "font-size:12px;font-weight:600;display:block;margin-bottom:.75rem;"
+            "color:var(--c-text-4)"
+        )
+        key_display.style("display:none")
+        key_display.clear()
+        revoke_btn.set_visibility(False)
+        ui.notify(t("settings.api.revoked"), type="info", position="top", timeout=1500)
+
+    with ui.row().style("gap:.625rem"):
+        ui.button(
+            t("settings.api.generate"),
+            icon="sym_r_key",
+            on_click=lambda: asyncio.ensure_future(_generate()),
+        ).props("flat rounded no-caps color=primary size=sm").style("font-size:12px")
+
+        revoke_btn = (
+            ui.button(
+                t("settings.api.revoke"),
+                icon="sym_r_block",
+                on_click=lambda: asyncio.ensure_future(_revoke()),
+            )
+            .props("flat rounded no-caps color=negative size=sm")
+            .style("font-size:12px")
+        )
+        revoke_btn.set_visibility(has_key)
 
 
 def _toggle_setting(settings: UserSettings, attr: str, label: str, hint: str, save_fn) -> None:

@@ -1,0 +1,11 @@
+{
+  "domain": "pyplus",
+  "name": "PyPLUS",
+  "version": "0.1.0",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/msberends/pyplus",
+  "iot_class": "local_polling",
+  "requirements": [],
+  "integration_type": "hub"
+}

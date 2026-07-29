@@ -115,6 +115,25 @@ async def set_user_display_name(db: AsyncSession, user_id: int, display_name: st
         await db.commit()
 
 
+async def get_user_by_api_key_hash(db: AsyncSession, key_hash: str) -> User | None:
+    result = await db.execute(select(User).where(User.api_key_hash == key_hash))
+    return result.scalar_one_or_none()
+
+
+async def set_api_key_hash(db: AsyncSession, user_id: int, key_hash: str) -> None:
+    user = await get_user_by_id(db, user_id)
+    if user:
+        user.api_key_hash = key_hash
+        await db.commit()
+
+
+async def clear_api_key_hash(db: AsyncSession, user_id: int) -> None:
+    user = await get_user_by_id(db, user_id)
+    if user:
+        user.api_key_hash = None
+        await db.commit()
+
+
 # ── Credentials ────────────────────────────────────────────────────────────────
 
 

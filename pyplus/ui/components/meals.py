@@ -204,16 +204,12 @@ async def create_meals_lane(session) -> None:
                     "Agenda",
                     icon="sym_r_event",
                     on_click=lambda: _show_ical_dialog(session, state.week_start),
-                ).props("flat dense no-caps size=sm color=grey-8").classes(
-                    "sp-weekmenu-action-btn"
-                )
+                ).props("flat dense no-caps size=sm color=grey-8").classes("sp-weekmenu-action-btn")
                 ui.button(
                     t("weekmenu.manage_dishes"),
                     icon="sym_r_skillet",
                     on_click=lambda: ui.navigate.to("/dishes"),
-                ).props("flat dense no-caps size=sm color=grey-8").classes(
-                    "sp-weekmenu-action-btn"
-                )
+                ).props("flat dense no-caps size=sm color=grey-8").classes("sp-weekmenu-action-btn")
 
             def _subtitle_text() -> str:
                 _dinner_all = _DINNER_SLOTS + _WEEKEND_SLOTS

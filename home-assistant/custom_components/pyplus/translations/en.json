@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to PyPLUS",
+        "description": "Enter the URL and API key for your PyPLUS instance. You can generate an API key in PyPLUS Settings.",
+        "data": {
+          "url": "PyPLUS URL",
+          "api_key": "API Key"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to PyPLUS. Check the URL.",
+      "invalid_auth": "Invalid API key. Generate a new one in PyPLUS Settings.",
+      "unknown": "Unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This PyPLUS instance is already configured."
+    }
+  }
+}

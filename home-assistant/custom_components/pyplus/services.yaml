@@ -1,0 +1,45 @@
+set_weekmenu_slot:
+  name: Set weekmenu slot
+  description: Assign a dish to a weekmenu slot or clear it.
+  fields:
+    slot:
+      name: Slot
+      description: "Slot name: ma/di/wo/do/vr/za/zo for dinner, lunch1-5 for lunch."
+      required: true
+      selector:
+        select:
+          options:
+            - ma
+            - di
+            - wo
+            - do
+            - vr
+            - za
+            - zo
+            - lunch1
+            - lunch2
+            - lunch3
+            - lunch4
+            - lunch5
+    week_start:
+      name: Week start
+      description: "Monday of the target week (YYYY-MM-DD)."
+      required: true
+      selector:
+        text:
+    dish_id:
+      name: Dish ID
+      description: "Dish ID to assign. Omit or null to clear the slot."
+      required: false
+      selector:
+        number:
+          min: 1
+          mode: box
+
+trigger_autopilot:
+  name: Trigger autopilot
+  description: Generate a new autopilot shopping plan.
+
+sync_now:
+  name: Sync now
+  description: Force an immediate data refresh from PyPLUS.

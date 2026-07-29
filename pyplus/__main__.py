@@ -10,6 +10,7 @@ from fastapi import Request
 from fastapi.responses import Response
 from nicegui import app, ui
 
+from pyplus.api.router import api_router
 from pyplus.config import settings
 
 log = logging.getLogger(__name__)
@@ -163,6 +164,10 @@ async def _on_shutdown() -> None:
 
 app.on_startup(_on_startup)
 app.on_shutdown(_on_shutdown)
+
+# ── REST API ─────────────────────────────────────────────────────────────────
+
+app.include_router(api_router)
 
 
 # ── HTTP security headers ───────────────────────────────────────────────────
