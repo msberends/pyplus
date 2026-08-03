@@ -79,6 +79,9 @@ class PlanItem:
     promo_savings: float = 0.0
     needs_review: bool = False
     substitute_options: list[dict] = field(default_factory=list)
+    is_optional: bool = False
+    is_flexible: bool = False
+    flex_label: str = ""
 
 
 @dataclass
@@ -90,6 +93,8 @@ class PlanSummary:
     promo_savings: float = 0.0
     needs_review_count: int = 0
     free_delivery_met: bool = False
+    optional_count: int = 0
+    flex_count: int = 0
 
 
 @dataclass
@@ -190,8 +195,16 @@ async def prepare_plan(
 
     items: list[PlanItem] = []
     seen_skus: dict[str, PlanItem] = {}
+    _flex_counter = 0
 
     def _add(item: PlanItem) -> None:
+        nonlocal _flex_counter
+        if item.is_flexible:
+            _flex_counter += 1
+            key = f"__flex_{_flex_counter}"
+            seen_skus[key] = item
+            items.append(item)
+            return
         if item.sku in seen_skus:
             seen_skus[item.sku].qty += item.qty
             ctx = seen_skus[item.sku].context
@@ -295,9 +308,37 @@ async def _fill_weekmenu(
         d_name = dish_names.get(dish_id, f"Gerecht #{dish_id}")
         context = f"{d_name} ({day_label})"
         for ing in all_dishes[dish_id]:
-            if not ing.sku or ing.flexible or ing.optional:
+            if ing.flexible:
+                add_fn(
+                    PlanItem(
+                        sku="",
+                        name=ing.display_name,
+                        qty=max(1, math.ceil(ing.amount / (ing.pack_size or ing.amount or 1))),
+                        price=0.0,
+                        source="autopilot:menu",
+                        context=context,
+                        is_flexible=True,
+                        flex_label=ing.display_name,
+                        needs_review=True,
+                    )
+                )
+                continue
+            if not ing.sku:
                 continue
             qty = max(1, math.ceil(ing.amount / (ing.pack_size or ing.amount or 1)))
+            if ing.optional:
+                add_fn(
+                    PlanItem(
+                        sku=ing.sku,
+                        name=ing.display_name,
+                        qty=qty,
+                        price=0.0,
+                        source="autopilot:menu",
+                        context=context,
+                        is_optional=True,
+                    )
+                )
+                continue
             add_fn(
                 PlanItem(
                     sku=ing.sku,
@@ -484,7 +525,7 @@ async def _apply_promo_swaps(
     promo_skus = set(promo_index.keys())
 
     for item in items:
-        if item.needs_review or item.is_promo_swap:
+        if item.needs_review or item.is_promo_swap or item.is_optional or item.is_flexible:
             continue
         if item.sku in promo_skus:
             continue
@@ -615,12 +656,14 @@ async def _fill_free_delivery(
 
 
 def _compute_summary(items: list[PlanItem], fd_met: bool) -> PlanSummary:
-    total_qty = sum(i.qty for i in items)
-    total_cost = sum(i.price * i.qty for i in items)
+    total_qty = sum(i.qty for i in items if not i.is_optional and not i.is_flexible)
+    total_cost = sum(i.price * i.qty for i in items if not i.is_optional and not i.is_flexible)
     statiegeld = sum(1 for i in items if "statiegeld" in i.name.lower())
     promo_swaps = sum(1 for i in items if i.is_promo_swap)
     promo_savings = sum(i.promo_savings for i in items if i.is_promo_swap)
     needs_review = sum(1 for i in items if i.needs_review)
+    optional_count = sum(1 for i in items if i.is_optional)
+    flex_count = sum(1 for i in items if i.is_flexible)
 
     return PlanSummary(
         total_items=total_qty,
@@ -630,4 +673,6 @@ def _compute_summary(items: list[PlanItem], fd_met: bool) -> PlanSummary:
         promo_savings=round(promo_savings, 2),
         needs_review_count=needs_review,
         free_delivery_met=fd_met,
+        optional_count=optional_count,
+        flex_count=flex_count,
     )

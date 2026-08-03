@@ -58,6 +58,8 @@ def _dish(dish_id, name):
     d.name = name
     d.is_dinner = True
     d.rating = None
+    d.is_unhealthy = False
+    d.is_restaurant = False
     return d
 
 
@@ -267,6 +269,24 @@ def test_plan_week_fills_empty_slots():
     # Should fill 2 dinner slots with different dishes
     assert len(result) == 2
     assert len(set(result.values())) == 2  # no duplicates
+
+
+def test_plan_week_never_suggests_restaurant_dish():
+    """A dish flagged is_restaurant must never be picked, even as the only candidate."""
+    dish1 = _dish(1, "A")
+    dish2 = _dish(2, "McDonald's")
+    dish2.is_restaurant = True
+    artifact = compute_all_scores(
+        [(dish1, []), (dish2, [])],
+        weekmenu_history=[],
+        promo_skus=set(),
+        replenish_due_skus=set(),
+        weights={"afwisseling": 1.0, "vaste_dagen": 0.0, "voordeel": 0.0, "voorraad": 0.0},
+        reference_week=datetime.date(2026, 6, 2),
+    )
+    current = {"ma": None, "di": None}
+    result = plan_week(artifact, [1, 2], current, n_dinner=2, n_lunch=0)
+    assert 2 not in result.values()
 
 
 def test_plan_week_respects_existing():

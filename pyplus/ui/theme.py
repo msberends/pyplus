@@ -1281,6 +1281,48 @@ body {
   background: var(--c-accent-surface);
 }
 
+.sp-ap-optional {
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  margin-bottom: .625rem;
+}
+.sp-ap-optional__header {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .625rem .75rem;
+  background: var(--c-surface-2);
+  border-bottom: 1px solid var(--c-border);
+}
+.sp-ap-optional-row {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .5rem .75rem;
+  border-bottom: 1px solid var(--c-border);
+}
+.sp-ap-optional-row:last-child { border-bottom: none; }
+.sp-ap-flex {
+  border: 2px solid var(--c-brand);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  margin-bottom: .75rem;
+}
+.sp-ap-flex__header {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .625rem .75rem;
+  background: color-mix(in srgb, var(--c-brand) 8%, transparent);
+  border-bottom: 1px solid var(--c-brand);
+}
+.sp-ap-flex-card {
+  padding: .75rem;
+  border-bottom: 1px solid var(--c-border);
+}
+.sp-ap-flex-card:last-child { border-bottom: none; }
+
 /* ─── Deals lane ─────────────────────────────────────────────────────────── */
 .sp-deals-body {
   padding: .375rem .625rem .75rem;

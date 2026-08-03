@@ -43,6 +43,7 @@ class DishMeta:
     cooking_methods: list[str] = field(default_factory=list)
     is_cold: bool = False
     is_unhealthy: bool = False
+    is_restaurant: bool = False
     is_dinner: bool = True
     rating: float | None = None
     ingredient_skus: frozenset[str] = field(default_factory=frozenset)
@@ -136,6 +137,7 @@ def compute_all_scores(
             cooking_methods=cm_list,
             is_cold=bool(getattr(dish, "is_cold", False)),
             is_unhealthy=bool(getattr(dish, "is_unhealthy", False)),
+            is_restaurant=bool(getattr(dish, "is_restaurant", False)),
             is_dinner=bool(getattr(dish, "is_dinner", True)),
             rating=getattr(dish, "rating", None),
             ingredient_skus=frozenset(dish_skus),
@@ -536,6 +538,11 @@ def plan_week(
                 continue
 
             available = [did for did in dish_ids if did not in used_ids]
+            available = [
+                did
+                for did in available
+                if not (artifact.dish_meta.get(did) or DishMeta()).is_restaurant
+            ]
             available = [
                 did
                 for did in available

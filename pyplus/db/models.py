@@ -149,6 +149,7 @@ class Dish(Base):
     )  # JSON list from COOKING_METHODS
     is_cold: Mapped[bool] = mapped_column(Boolean, default=False)
     is_unhealthy: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_restaurant: Mapped[bool] = mapped_column(Boolean, default=False)
     is_dinner: Mapped[bool] = mapped_column(Boolean, default=True)
     rating: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     veg_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 0–3

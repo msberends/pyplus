@@ -486,13 +486,21 @@ async def _render_draft(plan, result, session, user_id: int, body, settings=None
         if menu_items:
             _render_weekmenu_overview(menu_items)
 
-        review_items = [i for i in result.items if i.needs_review]
+        flex_items = [i for i in result.items if i.is_flexible]
+        if flex_items:
+            _render_flex_section(flex_items, plan, result, session, _draft_content)
+
+        optional_items = [i for i in result.items if i.is_optional]
+        if optional_items:
+            _render_optional_section(optional_items, plan, result, _draft_content)
+
+        review_items = [i for i in result.items if i.needs_review and not i.is_flexible]
         if review_items:
             _render_review_section(review_items, plan, result, session, user_id, _draft_content)
 
         items_by_source: dict[str, list] = {}
         for item in result.items:
-            if item.needs_review:
+            if item.needs_review or item.is_optional or item.is_flexible:
                 continue
             src = item.source.split(",")[0].strip() if item.source else "other"
             items_by_source.setdefault(src, []).append(item)
@@ -647,6 +655,8 @@ def _render_action_bar_top(plan, result, session, user_id: int, settings, refres
             for item in result.items:
                 if item.needs_review:
                     continue
+                if item.is_optional:
+                    continue
                 ok = await session.cart_service.add(
                     item.sku,
                     item.qty,
@@ -683,7 +693,9 @@ def _render_action_bar_top(plan, result, session, user_id: int, settings, refres
                 await repo.stamp_fixed_products_added(db, user_id, staple_skus)
 
             added = len(cart_snapshot)
-            cost = sum(i.price * i.qty for i in result.items if not i.needs_review)
+            cost = sum(
+                i.price * i.qty for i in result.items if not i.needs_review and not i.is_optional
+            )
             ui.notify(
                 t("autopilot.confirmed_summary", n=added, cost=f"{cost:.2f}"),
                 type="positive",
@@ -691,8 +703,14 @@ def _render_action_bar_top(plan, result, session, user_id: int, settings, refres
             ui.navigate.to("/autopilot")
 
         def _confirm() -> None:
-            n = sum(i.qty for i in result.items if not i.needs_review)
-            cost = _eur(sum(i.price * i.qty for i in result.items if not i.needs_review))
+            n = sum(i.qty for i in result.items if not i.needs_review and not i.is_optional)
+            cost = _eur(
+                sum(
+                    i.price * i.qty
+                    for i in result.items
+                    if not i.needs_review and not i.is_optional
+                )
+            )
             confirm_body = t("autopilot.confirm_body", n=n, cost=cost)
             if clear_cart:
                 confirm_body += (
@@ -830,14 +848,29 @@ def _render_summary_bar(summary) -> None:
                 bg="var(--c-positive-tint)",
                 fg="var(--c-positive-text)",
             )
-        if summary.needs_review_count > 0:
+        if summary.flex_count > 0:
+            _stat_pill(
+                "sym_r_tune",
+                t("autopilot.flex_pending", n=summary.flex_count),
+                bg="color-mix(in srgb, var(--c-brand) 10%, transparent)",
+                fg="var(--c-brand-dark)",
+            )
+        if summary.optional_count > 0:
+            _stat_pill(
+                "sym_r_add_circle_outline",
+                f"{summary.optional_count} optioneel",
+                bg="var(--c-surface-2)",
+                fg="var(--c-text-3)",
+            )
+        non_flex_review = summary.needs_review_count - summary.flex_count
+        if non_flex_review > 0:
             _stat_pill(
                 "sym_r_rate_review",
-                t("autopilot.review_needed", n=summary.needs_review_count),
+                t("autopilot.review_needed", n=non_flex_review),
                 bg="var(--c-warning-tint)",
                 fg="var(--c-warning-icon)",
             )
-        elif summary.total_items > 0:
+        elif summary.total_items > 0 and summary.flex_count == 0:
             _stat_pill(
                 "sym_r_check_circle",
                 t("autopilot.all_ready"),
@@ -1160,6 +1193,271 @@ def _remove_item(item, plan, result, refresh_fn) -> None:
     result.summary.estimated_cost = round(
         max(0, result.summary.estimated_cost - item.price * item.qty), 2
     )
+    _persist_plan_update(plan, result)
+    refresh_fn.refresh()
+
+
+# ── Optional ingredients section ────────────────────────────────────────────
+
+
+def _render_optional_section(items: list, plan, result, refresh_fn) -> None:
+    with ui.element("div").classes("sp-ap-optional"):
+        with ui.element("div").classes("sp-ap-optional__header"):
+            ui.icon("sym_r_add_circle_outline", size="18px").style("color:var(--c-text-3)")
+            ui.label(f"{t('autopilot.section.optional')} ({len(items)})").style(
+                "font-size:13px;font-weight:600;color:var(--c-text);flex:1"
+            )
+            ui.label(t("autopilot.optional_hint")).style("font-size:11px;color:var(--c-text-3)")
+
+        for item in items:
+            _render_optional_row(item, plan, result, refresh_fn)
+
+
+def _render_optional_row(item, plan, result, refresh_fn) -> None:
+    cache = getattr(plan, "_product_cache", {})
+    pc = cache.get(item.sku)
+    subtitle = (pc.subtitle if pc else None) or ""
+    price_label = _eur(item.price) if item.price > 0 else ""
+
+    with ui.element("div").classes("sp-ap-optional-row"):
+        cb = ui.checkbox(value=False).props("dense color=deep-purple")
+
+        def _toggle(e, it=item):
+            if e.value:
+                it.is_optional = False
+                result.summary.optional_count = max(0, result.summary.optional_count - 1)
+                result.summary.total_items += it.qty
+                result.summary.estimated_cost = round(
+                    result.summary.estimated_cost + it.price * it.qty, 2
+                )
+            else:
+                it.is_optional = True
+                result.summary.optional_count += 1
+                result.summary.total_items = max(0, result.summary.total_items - it.qty)
+                result.summary.estimated_cost = round(
+                    result.summary.estimated_cost - it.price * it.qty, 2
+                )
+            _persist_plan_update(plan, result)
+            refresh_fn.refresh()
+
+        cb.on("update:model-value", _toggle)
+
+        if item.image_url:
+            ui.image(thumbnail_url(item.image_url, 36, fit="pad")).style(
+                "width:36px;height:36px;border-radius:var(--r-sm);flex-shrink:0;object-fit:contain"
+            ).props(f'alt="{_alt(item.name)}"')
+
+        with ui.element("div").style("flex:1;min-width:0"):
+            ui.label(item.name).style(
+                "font-size:13px;font-weight:600;color:var(--c-text);"
+                "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            )
+            if subtitle:
+                ui.label(subtitle).style("font-size:11px;color:var(--c-text-3)")
+            if item.context:
+                ui.label(item.context).style("font-size:10px;color:var(--c-text-4)")
+
+        if price_label:
+            ui.label(price_label).style(
+                "font-size:12px;font-weight:600;color:var(--c-text-3);flex-shrink:0"
+            )
+
+
+# ── Flexible ingredients section ───────────────────────────────────────────
+
+
+def _render_flex_section(items: list, plan, result, session, refresh_fn) -> None:
+    pending = sum(1 for i in items if i.needs_review)
+    with ui.element("div").classes("sp-ap-flex"):
+        with ui.element("div").classes("sp-ap-flex__header"):
+            ui.icon("sym_r_tune", size="18px").style("color:var(--c-brand-dark)")
+            ui.label(f"{t('autopilot.section.flexible')} ({len(items)})").style(
+                "font-size:14px;font-weight:600;color:var(--c-text);flex:1"
+            )
+            if pending > 0:
+                ui.label(t("autopilot.flex_hint")).style("font-size:11px;color:var(--c-text-3)")
+
+        for item in items:
+            _render_flex_card(item, plan, result, session, refresh_fn)
+
+
+def _render_flex_card(item, plan, result, session, refresh_fn) -> None:
+    with ui.element("div").classes("sp-ap-flex-card"):
+        with ui.element("div").style(
+            "display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem"
+        ):
+            ui.icon("sym_r_tune", size="16px").style("color:var(--c-brand-dark);flex-shrink:0")
+            ui.label(item.flex_label or item.name).style(
+                "font-size:13px;font-weight:600;color:var(--c-text);flex:1;min-width:0"
+            )
+            if item.context:
+                ui.label(item.context).style("font-size:10px;color:var(--c-text-4);flex-shrink:0")
+
+        if not item.needs_review and item.sku:
+            cache = getattr(plan, "_product_cache", {})
+            pc = cache.get(item.sku)
+            subtitle = (pc.subtitle if pc else None) or ""
+            with ui.element("div").style(
+                "display:flex;align-items:center;gap:.5rem;padding:.375rem .5rem;"
+                "background:var(--c-accent-surface);border:1px solid var(--c-accent-border);"
+                "border-radius:var(--r-md)"
+            ):
+                if item.image_url:
+                    ui.image(thumbnail_url(item.image_url, 32, fit="pad")).style(
+                        "width:32px;height:32px;object-fit:contain;border-radius:4px;flex-shrink:0"
+                    ).props(f'alt="{_alt(item.name)}"')
+                with ui.element("div").style("flex:1;min-width:0"):
+                    ui.label(item.name).style(
+                        "font-size:13px;color:var(--c-text);overflow:hidden;"
+                        "text-overflow:ellipsis;white-space:nowrap"
+                    )
+                    if subtitle:
+                        ui.label(subtitle).style("font-size:11px;color:var(--c-text-3)")
+                if item.price > 0:
+                    ui.label(_eur(item.price)).style(
+                        "font-size:12px;font-weight:600;color:var(--c-text-3);flex-shrink:0"
+                    )
+
+                def _clear_flex(it=item):
+                    it.sku = ""
+                    it.name = it.flex_label
+                    it.price = 0.0
+                    it.image_url = ""
+                    it.needs_review = True
+                    it.is_flexible = True
+                    result.summary.flex_count += 1
+                    result.summary.needs_review_count += 1
+                    result.summary.total_items = max(0, result.summary.total_items - it.qty)
+                    result.summary.estimated_cost = round(
+                        result.summary.estimated_cost - it.price * it.qty, 2
+                    )
+                    _persist_plan_update(plan, result)
+                    refresh_fn.refresh()
+
+                ui.button(t("autopilot.flex_change"), on_click=_clear_flex).props(
+                    "flat dense no-caps size=sm color=primary"
+                ).style("font-size:12px;flex-shrink:0")
+            return
+
+        # Search picker for unresolved flex items
+        _flex_state: dict = {"query": "", "results": [], "searching": False}
+
+        with ui.element("div").style("position:relative"):
+            search_field = (
+                ui.input(
+                    placeholder=t("autopilot.flex_search_placeholder"),
+                    value=_flex_state["query"],
+                )
+                .props("outlined dense clearable")
+                .style("width:100%")
+            )
+            results_box = ui.element("div")
+
+            def _draw_results(st=_flex_state, box=results_box):
+                box.clear()
+                with box:
+                    if st["searching"]:
+                        ui.label("Zoeken…").style(
+                            "padding:.375rem .5rem;font-size:12px;color:var(--c-text-3)"
+                        )
+                    elif st["results"]:
+                        with ui.element("div").style(
+                            "border:1px solid var(--c-border);border-radius:var(--r-md);"
+                            "margin-top:.25rem;max-height:200px;overflow-y:auto"
+                        ):
+                            for prod in st["results"][:8]:
+
+                                def _pick(p=prod, it=item, s=st):
+                                    it.sku = p.sku
+                                    it.name = p.name
+                                    it.price = getattr(p, "price", 0.0)
+                                    it.image_url = getattr(p, "image_url", "") or ""
+                                    it.needs_review = False
+                                    it.is_flexible = False
+                                    result.summary.flex_count = max(
+                                        0, result.summary.flex_count - 1
+                                    )
+                                    result.summary.needs_review_count = max(
+                                        0, result.summary.needs_review_count - 1
+                                    )
+                                    result.summary.total_items += it.qty
+                                    result.summary.estimated_cost = round(
+                                        result.summary.estimated_cost + it.price * it.qty, 2
+                                    )
+                                    _persist_plan_update(plan, result)
+                                    refresh_fn.refresh()
+
+                                with (
+                                    ui.element("div")
+                                    .style(
+                                        "display:flex;align-items:center;gap:.5rem;"
+                                        "padding:.375rem .5rem;cursor:pointer"
+                                    )
+                                    .on("click", _pick)
+                                ):
+                                    if prod.image_url:
+                                        ui.image(thumbnail_url(prod.image_url, 28)).style(
+                                            "width:28px;height:28px;object-fit:contain;"
+                                            "border-radius:4px;background:var(--c-border);"
+                                            "flex-shrink:0"
+                                        ).props(f'alt="{_alt(prod.name)}"')
+                                    ui.label(prod.name).style(
+                                        "font-size:12px;flex:1;min-width:0;overflow:hidden;"
+                                        "text-overflow:ellipsis;white-space:nowrap"
+                                    )
+                                    if hasattr(prod, "price") and prod.price > 0:
+                                        ui.label(_eur(prod.price)).style(
+                                            "font-size:11px;color:var(--c-text-3);flex-shrink:0"
+                                        )
+                                    dot = (
+                                        "var(--c-brand-dark)"
+                                        if prod.is_available
+                                        else "var(--c-danger)"
+                                    )
+                                    ui.element("div").style(
+                                        f"width:6px;height:6px;border-radius:50%;"
+                                        f"background:{dot};flex-shrink:0"
+                                    )
+
+            async def _on_search(e, st=_flex_state, field=search_field):
+                st["query"] = (e.value if hasattr(e, "value") else field.value) or ""
+                if len(st["query"].strip()) >= 2:
+                    st["searching"] = True
+                    _draw_results()
+                    try:
+                        from pyplus.services.search import search_products
+
+                        st["results"] = await search_products(session, st["query"])
+                    except Exception:
+                        st["results"] = []
+                    st["searching"] = False
+                else:
+                    st["results"] = []
+                _draw_results()
+
+            search_field.on("update:model-value", _on_search)
+            _draw_results()
+
+        ui.button(
+            t("autopilot.remove_item"),
+            icon="sym_r_delete_outline",
+            on_click=lambda it=item: _remove_flex_item(it, plan, result, refresh_fn),
+        ).props("flat dense no-caps size=xs color=negative").style(
+            "font-size:11px;margin-top:.375rem"
+        )
+
+
+def _remove_flex_item(item, plan, result, refresh_fn) -> None:
+    if item in result.items:
+        result.items.remove(item)
+    if item.needs_review:
+        result.summary.needs_review_count = max(0, result.summary.needs_review_count - 1)
+    else:
+        result.summary.total_items = max(0, result.summary.total_items - item.qty)
+        result.summary.estimated_cost = round(
+            result.summary.estimated_cost - item.price * item.qty, 2
+        )
+    result.summary.flex_count = max(0, result.summary.flex_count - 1)
     _persist_plan_update(plan, result)
     refresh_fn.refresh()
 

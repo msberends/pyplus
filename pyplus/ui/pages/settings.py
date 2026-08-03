@@ -841,7 +841,8 @@ def _render_ml_day_preferences(settings: UserSettings, save_fn) -> None:
             "Stel per dag in welke gerechten het model mag voorstellen. Blokkeer "
             "bepaalde eiwittypes (bijv. vleesvrije maandag) of koolhydraten, of stel een"
             "maximum bereidingstijd in voor doordeweekse dagen. Dagen op 'uit' worden "
-            "overgeslagen bij het automatisch invullen.",
+            "overgeslagen bij het automatisch invullen. Het model stelt gerechten met "
+            "het label 🥡 Restaurant nooit voor, ongeacht deze instellingen.",
         )
 
         with ui.tabs().style("margin-bottom:.5rem").props("dense inline-label") as tabs:

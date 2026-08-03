@@ -886,8 +886,16 @@ def _build_autopilot_ntfy(result, base_url: str) -> tuple[str, str]:
         "Je boodschappenplan staat klaar!",
         f"{s.total_items} producten · {cost}",
     ]
-    if s.needs_review_count > 0:
-        lines.append(f"{s.needs_review_count} vervangproducten om te beoordelen")
+    pending: list[str] = []
+    non_flex_review = s.needs_review_count - getattr(s, "flex_count", 0)
+    if non_flex_review > 0:
+        pending.append(f"{non_flex_review} vervangproducten")
+    if getattr(s, "flex_count", 0) > 0:
+        pending.append(f"{s.flex_count} flexibele ingrediënten")
+    if getattr(s, "optional_count", 0) > 0:
+        pending.append(f"{s.optional_count} optionele ingrediënten")
+    if pending:
+        lines.append(f"{', '.join(pending)} om te beoordelen")
     else:
         lines.append("Alles automatisch ingevuld")
     click_url = f"{base_url.rstrip('/')}/autopilot" if base_url else ""

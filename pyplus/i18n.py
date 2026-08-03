@@ -260,6 +260,11 @@ _STRINGS: dict[str, str] = {
     "dishes.cooking_methods_label": "Bereiding",
     "dishes.is_cold_label": "Is koud",
     "dishes.is_unhealthy_label": "Ongezond",
+    "dishes.is_restaurant_label": "Restaurant",
+    "dishes.is_restaurant_hint": (
+        "Wordt nooit door de ML-suggesties ingevuld, maar telt wel mee voor de groep "
+        "(bijv. 'Patat' via McDonald's) zodat herhaling daarvan wordt herkend."
+    ),
     "dishes.is_dinner_label": "Avondeten",
     "dishes.rating_label": "Waardering",
     "dishes.group_label": "Groep",
@@ -407,6 +412,14 @@ _STRINGS: dict[str, str] = {
     "autopilot.delete_confirm_title": "Plan verwijderen?",
     "autopilot.delete_confirm_body": "Het huidige plan wordt verwijderd. Je kunt daarna een nieuw plan genereren.",
     "autopilot.regenerate_error": "Plan kon niet worden gegenereerd. Probeer het later opnieuw.",
+    "autopilot.section.optional": "Optionele ingrediënten",
+    "autopilot.optional_hint": "Vink aan wat je wilt toevoegen",
+    "autopilot.section.flexible": "Flexibele ingrediënten",
+    "autopilot.flex_hint": "Zoek en kies een product",
+    "autopilot.flex_search_placeholder": "Zoek product…",
+    "autopilot.flex_resolved": "Gekozen",
+    "autopilot.flex_change": "Wijzigen",
+    "autopilot.flex_pending": "{n} flexibele ingrediënten in te vullen",
     "autopilot.menu_preview_info": "Hieronder staan de voorgestelde gerechten voor de komende week. Pas ze aan of laat dagen leeg als je niet thuis bent. Druk op Akkoord om het volledige plan samen te stellen.",
     "autopilot.menu_preview_confirm": "Akkoord",
     "autopilot.menu_preview_cancel": "Annuleren",

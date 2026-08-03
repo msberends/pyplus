@@ -25,6 +25,7 @@ def _serialize_dish(d, *, ingredients: list | None = None) -> dict:
         "cooking_methods": json.loads(d.cooking_methods) if d.cooking_methods else [],
         "is_cold": d.is_cold,
         "is_unhealthy": d.is_unhealthy,
+        "is_restaurant": d.is_restaurant,
         "is_dinner": d.is_dinner,
         "rating": d.rating,
         "veg_count": d.veg_count,

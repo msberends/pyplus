@@ -59,6 +59,7 @@ class _DishFilters:
     prep_max: int | None = None
     is_cold: bool | None = None
     is_unhealthy: bool | None = None
+    is_restaurant: bool | None = None
 
 
 def _apply_filters(dishes: list, filters: _DishFilters) -> list:
@@ -87,6 +88,8 @@ def _apply_filters(dishes: list, filters: _DishFilters) -> list:
             continue
         if filters.is_unhealthy is True and not d.is_unhealthy:
             continue
+        if filters.is_restaurant is True and not d.is_restaurant:
+            continue
         result.append(d)
     return result
 
@@ -99,6 +102,7 @@ def _active_filter_count(filters: _DishFilters) -> int:
         + (1 if filters.prep_max is not None else 0)
         + (1 if filters.is_cold else 0)
         + (1 if filters.is_unhealthy else 0)
+        + (1 if filters.is_restaurant else 0)
     )
 
 
@@ -205,6 +209,18 @@ def _render_filter_chips(filters: _DishFilters, refresh_fn) -> None:
         refresh_fn()
 
     unhealthy_chip.on("update:selected", _toggle_unhealthy)
+
+    restaurant_chip = (
+        ui.chip("🥡 Restaurant", selectable=True, selected=filters.is_restaurant is True)
+        .props(f"{'color=warning' if filters.is_restaurant else 'outline'} size=sm clickable")
+        .style("font-size:11px")
+    )
+
+    def _toggle_restaurant(e):
+        filters.is_restaurant = True if filters.is_restaurant is None else None
+        refresh_fn()
+
+    restaurant_chip.on("update:selected", _toggle_restaurant)
 
 
 def _render_filters(filters: _DishFilters, refresh_fn) -> None:
@@ -553,6 +569,8 @@ def _render_dish_card(dish, data: _DishCardData | None, session, reload_fn) -> N
                 prop_parts.append("❄️")
             if dish.is_unhealthy:
                 prop_parts.append("🍔")
+            if dish.is_restaurant:
+                prop_parts.append("🥡")
             if prop_parts:
                 ui.label(" · ".join(prop_parts)).style(
                     "font-size:11px;color:var(--c-text-3);margin-top:2px"
@@ -650,6 +668,7 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
             cooking_val = []
         cold_val = dish.is_cold
         unhealthy_val = dish.is_unhealthy
+        restaurant_val = dish.is_restaurant
         dinner_val = dish.is_dinner
         rating_val = dish.rating
         group_val = dish.group_name or dish.name
@@ -667,6 +686,7 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
         cooking_val = []
         cold_val = False
         unhealthy_val = False
+        restaurant_val = False
         dinner_val = True
         rating_val = None
         group_val = ""
@@ -681,6 +701,7 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
         "cooking_methods": list(cooking_val),
         "is_cold": cold_val,
         "is_unhealthy": unhealthy_val,
+        "is_restaurant": restaurant_val,
         "is_dinner": dinner_val,
         "rating": rating_val,
         "group_name": group_val,
@@ -1049,6 +1070,19 @@ def _render_meta_fields(
         unhealthy_cb.on(
             "update:model-value",
             lambda e: meta.update(is_unhealthy=bool(unhealthy_cb.value)),
+        )
+
+        restaurant_cb = (
+            ui.checkbox(
+                f"🥡 {t('dishes.is_restaurant_label')}", value=meta.get("is_restaurant", False)
+            )
+            .props("dense")
+            .style("margin-right:-.25rem")
+            .tooltip(t("dishes.is_restaurant_hint"))
+        )
+        restaurant_cb.on(
+            "update:model-value",
+            lambda e: meta.update(is_restaurant=bool(restaurant_cb.value)),
         )
 
         dinner_cb = (
@@ -1542,6 +1576,7 @@ async def _save_dish(
                 cooking_methods=cooking_json,
                 is_cold=bool(meta.get("is_cold", False)),
                 is_unhealthy=bool(meta.get("is_unhealthy", False)),
+                is_restaurant=bool(meta.get("is_restaurant", False)),
                 is_dinner=bool(meta.get("is_dinner", True)),
                 rating=meta.get("rating"),
                 veg_count=meta.get("veg_count"),
@@ -1561,6 +1596,7 @@ async def _save_dish(
                 cooking_methods=cooking_json,
                 is_cold=bool(meta.get("is_cold", False)),
                 is_unhealthy=bool(meta.get("is_unhealthy", False)),
+                is_restaurant=bool(meta.get("is_restaurant", False)),
                 is_dinner=bool(meta.get("is_dinner", True)),
                 rating=meta.get("rating"),
                 veg_count=meta.get("veg_count"),
