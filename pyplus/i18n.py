@@ -381,10 +381,11 @@ _STRINGS: dict[str, str] = {
     "autopilot.section.weekmenu": "Weekmenu",
     "autopilot.section.staples": "Vaste boodschappen",
     "autopilot.section.promo_swaps": "Actie-alternatieven",
-    "autopilot.section.substitutes": "Vervangproducten",
+    "autopilot.section.substitutes": "Vervangingsproducten",
     "autopilot.section.fillers": "Bezorgvullers",
     "autopilot.summary": "{n} producten · €{cost} · {s} statiegeld",
-    "autopilot.review_needed": "{n} vervangproducten te beoordelen",
+    "autopilot.review_needed": "{n} vervangingsproducten te beoordelen",
+    "autopilot.review_needed_one": "1 vervangingsproduct te beoordelen",
     "autopilot.all_ready": "Alles automatisch ingevuld",
     "autopilot.confirm": "Voeg alles toe aan winkelwagen",
     "autopilot.clear_first": "Winkelwagen eerst legen",
@@ -420,6 +421,7 @@ _STRINGS: dict[str, str] = {
     "autopilot.flex_resolved": "Gekozen",
     "autopilot.flex_change": "Wijzigen",
     "autopilot.flex_pending": "{n} flexibele ingrediënten in te vullen",
+    "autopilot.flex_pending_one": "1 flexibel ingrediënt in te vullen",
     "autopilot.menu_preview_info": "Hieronder staan de voorgestelde gerechten voor de komende week. Pas ze aan of laat dagen leeg als je niet thuis bent. Druk op Akkoord om het volledige plan samen te stellen.",
     "autopilot.menu_preview_confirm": "Akkoord",
     "autopilot.menu_preview_cancel": "Annuleren",
@@ -431,7 +433,7 @@ _STRINGS: dict[str, str] = {
     "settings.autopilot.clear_cart_warn": "Let op: dit verwijdert alle producten uit je winkelwagen voordat autopilot begint.",
     "settings.autopilot.auto_confirm": "Automatisch toevoegen aan winkelwagen",
     "settings.autopilot.sub_threshold": "Drempel automatische vervanging",
-    "settings.autopilot.sub_threshold_hint": "Score waarboven een vervangproduct automatisch wordt geaccepteerd (max. 10).",
+    "settings.autopilot.sub_threshold_hint": "Score waarboven een vervangingsproduct automatisch wordt geaccepteerd (max. 10).",
     # ── API ────────────────────────────────────────────────────────────────────
     "settings.api.title": "API-toegang",
     "settings.api.info": (
@@ -444,6 +446,9 @@ _STRINGS: dict[str, str] = {
     "settings.api.inactive": "Geen API-sleutel ingesteld",
     "settings.api.generated": "Bewaar deze sleutel — hij wordt niet meer getoond",
     "settings.api.revoked": "API-sleutel ingetrokken",
+    "settings.footer.licence": (
+        "PyPLUS v{version}. Open-source software ({link}), ontwikkeld door Matthijs Berends."
+    ),
     # ── Accessibility (screen-reader labels for icon-only controls) ─────────────
     "a11y.add_to_cart": "Toevoegen aan winkelwagen",
     "a11y.qty_increase": "Aantal verhogen",

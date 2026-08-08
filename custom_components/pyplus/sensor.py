@@ -101,9 +101,7 @@ class PyPlusWeekMenuDaySensor(PyPlusSensorBase):
 
     _attr_icon = "mdi:silverware-fork-knife"
 
-    def __init__(
-        self, coordinator: PyPlusCoordinator, entry: ConfigEntry, day: str
-    ) -> None:
+    def __init__(self, coordinator: PyPlusCoordinator, entry: ConfigEntry, day: str) -> None:
         super().__init__(coordinator, entry)
         self._day = day
         self._attr_name = f"Weekmenu {_DAY_LABELS[day]}"

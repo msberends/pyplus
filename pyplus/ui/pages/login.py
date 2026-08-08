@@ -7,6 +7,7 @@ import logging
 
 from nicegui import app, ui
 
+from pyplus import __version__
 from pyplus.i18n import t
 
 log = logging.getLogger(__name__)
@@ -19,6 +20,10 @@ _login_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_LOGINS)
 # Tracks user IDs currently being auto-logged in, so reconnect-driven page
 # reloads don't pile up duplicate Playwright sessions.
 _auto_login_in_progress: set[int] = set()
+
+
+def _render_version_badge() -> None:
+    ui.label(f"v{__version__}").classes("sp-login-version")
 
 
 def _mask_email(email: str) -> str:
@@ -83,6 +88,7 @@ async def create_login_page() -> None:
 def _render_auto_login_waiting(user_id: int) -> None:
     """Show a waiting screen when auto-login is already in progress on another connection."""
     with ui.element("div").classes("sp-login-bg"):
+        _render_version_badge()
         with ui.element("div").classes("sp-login-card"):
             with ui.element("div").classes("sp-login-logo-wrap"):
                 with (
@@ -115,6 +121,7 @@ def _render_auto_login(email: str, password: str, name: str, user_id: int) -> No
     _auto_login_in_progress.add(user_id)
 
     with ui.element("div").classes("sp-login-bg"):
+        _render_version_badge()
         with ui.element("div").classes("sp-login-card"):
             with ui.element("div").classes("sp-login-logo-wrap"):
                 with (
@@ -161,6 +168,7 @@ def _render_auto_login(email: str, password: str, name: str, user_id: int) -> No
 
 def _render_login_form() -> None:
     with ui.element("div").classes("sp-login-bg"):
+        _render_version_badge()
         with ui.element("div").classes("sp-login-card"):
             # Logo
             with ui.element("div").classes("sp-login-logo-wrap"):

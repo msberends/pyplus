@@ -882,18 +882,22 @@ def _build_autopilot_ntfy(result, base_url: str) -> tuple[str, str]:
     """Return (body, click_url) for the autopilot ntfy push."""
     s = result.summary
     cost = f"€ {s.estimated_cost:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    product_word = "product" if s.total_items == 1 else "producten"
     lines = [
         "Je boodschappenplan staat klaar!",
-        f"{s.total_items} producten · {cost}",
+        f"{s.total_items} {product_word} · {cost}",
     ]
     pending: list[str] = []
     non_flex_review = s.needs_review_count - getattr(s, "flex_count", 0)
     if non_flex_review > 0:
-        pending.append(f"{non_flex_review} vervangproducten")
+        word = "vervangingsproduct" if non_flex_review == 1 else "vervangingsproducten"
+        pending.append(f"{non_flex_review} {word}")
     if getattr(s, "flex_count", 0) > 0:
-        pending.append(f"{s.flex_count} flexibele ingrediënten")
+        word = "flexibel ingrediënt" if s.flex_count == 1 else "flexibele ingrediënten"
+        pending.append(f"{s.flex_count} {word}")
     if getattr(s, "optional_count", 0) > 0:
-        pending.append(f"{s.optional_count} optionele ingrediënten")
+        word = "optioneel ingrediënt" if s.optional_count == 1 else "optionele ingrediënten"
+        pending.append(f"{s.optional_count} {word}")
     if pending:
         lines.append(f"{', '.join(pending)} om te beoordelen")
     else:

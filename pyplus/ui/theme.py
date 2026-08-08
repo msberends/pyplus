@@ -261,6 +261,14 @@ body {
   background: var(--c-bg);
 }
 
+.sp-login-version {
+  position: fixed;
+  bottom: 1rem;
+  right: 1.25rem;
+  font-size: 11px;
+  color: var(--c-text-4);
+}
+
 .sp-login-card {
   width: 100%;
   max-width: 420px;

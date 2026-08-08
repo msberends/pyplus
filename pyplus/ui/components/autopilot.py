@@ -835,9 +835,10 @@ def _render_summary_bar(summary) -> None:
         )
 
         if summary.promo_swaps > 0:
+            swap_word = "besparingsproduct" if summary.promo_swaps == 1 else "besparingsproducten"
             _stat_pill(
                 "sym_r_sell",
-                f"{summary.promo_swaps} actie-wisselingen",
+                f"{summary.promo_swaps} {swap_word}",
                 bg="var(--c-warning-tint-2)",
                 fg="var(--c-warning-text)",
             )
@@ -851,7 +852,12 @@ def _render_summary_bar(summary) -> None:
         if summary.flex_count > 0:
             _stat_pill(
                 "sym_r_tune",
-                t("autopilot.flex_pending", n=summary.flex_count),
+                t(
+                    "autopilot.flex_pending_one"
+                    if summary.flex_count == 1
+                    else "autopilot.flex_pending",
+                    n=summary.flex_count,
+                ),
                 bg="color-mix(in srgb, var(--c-brand) 10%, transparent)",
                 fg="var(--c-brand-dark)",
             )
@@ -866,7 +872,12 @@ def _render_summary_bar(summary) -> None:
         if non_flex_review > 0:
             _stat_pill(
                 "sym_r_rate_review",
-                t("autopilot.review_needed", n=non_flex_review),
+                t(
+                    "autopilot.review_needed_one"
+                    if non_flex_review == 1
+                    else "autopilot.review_needed",
+                    n=non_flex_review,
+                ),
                 bg="var(--c-warning-tint)",
                 fg="var(--c-warning-icon)",
             )

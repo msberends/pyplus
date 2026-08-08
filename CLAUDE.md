@@ -1,8 +1,7 @@
 # CLAUDE.md — PyPLUS
 
-Guidance for working in this repository. Read `README.md` for the user-facing overview,
-`ARCHITECTURE.md` for the PLUS.nl integration internals, and `SONNET_BUILD_INSTRUCTION.md` for the
-authoritative product/design spec (it leaves few decisions open — follow it where it speaks).
+Guidance for working in this repository. Read `README.md` for the user-facing overview and
+`api_documentation/` for the reverse-engineered PLUS.nl endpoint reference.
 
 ## What this is
 
@@ -27,6 +26,29 @@ uv run ruff check . && uv run ruff format .
 
 Run `ruff` and `pytest` clean before declaring work done. `tests/manual/` hits the live PLUS API and
 needs real credentials — it is **not** part of the suite; never put personal data in it.
+
+## Releasing
+
+The version's source of truth is `version` in `pyproject.toml` (read at runtime via
+`importlib.metadata` in `pyplus/__init__.py`, shown muted bottom-right on the login page and in the
+settings-page footer). `custom_components/pyplus/manifest.json`'s `version` field must always be kept
+identical to it — HACS reads that file directly, it does not read `pyproject.toml`. The README version
+badge reads the latest GitHub tag, so a bump without a matching tag leaves it stale. Follow
+[semantic versioning](https://semver.org/): patch for fixes, minor for backwards-compatible features,
+major for breaking changes to data/behaviour a user would notice.
+
+**Every `git push` to the remote — no exceptions — bumps the version first and ships it as a tagged
+release.** Before pushing:
+
+1. Bump `version` in `pyproject.toml` (pick patch/minor/major by semver) **and** the matching
+   `version` field in `custom_components/pyplus/manifest.json` — same value, every time. Then
+   `uv sync` so the installed metadata matches.
+2. Commit the bump — either as its own commit, or included in the commit(s) being pushed.
+3. `git tag vX.Y.Z`.
+4. Push the commit(s) and the tag, then `gh release create vX.Y.Z --generate-notes`.
+
+Confirm with the user before the push/tag/release step — it's visible to others and not easily
+reversible — unless they've already told you to proceed autonomously.
 
 ## Screenshots
 
@@ -99,7 +121,7 @@ overflow, text readable, bottom of page not obscured by the fixed nav bar.
   scheduler lifecycle, `ui.run()`.
 - `pyplus/db/` — `models.py` (all tables), `engine.py` (async session), `repo.py` (**user-scoped**
   data access).
-- `pyplus/services/` — `cart.py`, `dishes.py`, `aggregate.py` (pack optimization), `history.py`
+- `pyplus/services/` — `cart.py`, `dishes.py`, `aggregate.py` (pack optimisation), `history.py`
   (fuses PLUS history sources), `exports.py` (iCal + shopping list).
 - `pyplus/ml/` — `interface.py` (the `PurchaseHistory` protocol every model reads),
   `recommender.py`, `replenish.py`, `promo_match.py`, `artifacts.py`.
@@ -109,7 +131,7 @@ overflow, text readable, bottom of page not obscured by the fixed nav bar.
 
 ## Hard invariants — do not violate
 
-**PLUS integration (learned the hard way — see ARCHITECTURE.md):**
+**PLUS integration (learned the hard way — see `api_documentation/`):**
 - All PLUS API calls go through `page.evaluate(fetch(...))` inside the logged-in browser context.
   Direct `httpx` returns **403**. Keep one Playwright context per active user session.
 - Every cart write sends the latest `CheckoutVersion`; always update it from the response. Use the
@@ -121,7 +143,7 @@ overflow, text readable, bottom of page not obscured by the fixed nav bar.
   full `screenData.variables` must match the browser, or the server silently returns everything as
   unavailable (`Quantity=0`) with no error.
 
-**Application behavior:**
+**Application behaviour:**
 - **The live cart IS the real PLUS cart.** There is no local staging basket. Add/remove call PLUS;
   update the UI optimistically, then reconcile from the authoritative response; revert + quiet inline
   error on failure.

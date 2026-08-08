@@ -7,6 +7,7 @@ import logging
 
 from nicegui import app, ui
 
+from pyplus import __version__
 from pyplus.i18n import t
 from pyplus.ml.interface import DayPreference, UserSettings
 from pyplus.session import manager
@@ -119,6 +120,17 @@ async def create_settings_page() -> None:
                         "Gegevens & synchronisatie",
                         lambda: _render_sync_status(session, user_id, sync_states, next_runs),
                     )
+
+            _licence_link = (
+                '<a href="https://github.com/msberends/pyplus/blob/main/LICENSE" '
+                'target="_blank" rel="noopener" style="color:inherit">GPL-3.0-licentie</a>'
+            )
+            ui.html(
+                f'<div style="font-size:11px;color:var(--c-text-4);text-align:right;'
+                f'margin-top:1.5rem">'
+                f"{t('settings.footer.licence', version=__version__, link=_licence_link)}"
+                f"</div>"
+            )
 
 
 def _section_card(title: str, body_fn) -> None:
@@ -1501,8 +1513,8 @@ def _render_ml_autopilot(settings: UserSettings, save_fn) -> None:
         save_fn,
     )
 
-    # ── Vervangproducten ─────────────────────────────────────────────
-    ui.label("Vervangproducten").style(_ap_subhead)
+    # ── Vervangingsproducten ─────────────────────────────────────────────
+    ui.label("Vervangingsproducten").style(_ap_subhead)
 
     with ui.element("div").style("padding:.375rem 0 .25rem;border-top:1px solid var(--c-border)"):
         ui.label("Automatische vervanging tot score").style(

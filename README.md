@@ -1,13 +1,11 @@
 # PyPLUS
 
+[![version](https://img.shields.io/github/v/tag/msberends/pyplus?label=version&sort=semver)](https://github.com/msberends/pyplus/tags)
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+
 A personal, fast Dutch grocery-shopping web app for **PLUS.nl**. Plan the week's meals, keep your
 recipes and fixed weekly products, and fill your real PLUS.nl cart in minutes — then press the final
 *bestellen* on PLUS yourself.
-
-PyPLUS replaces an older R/Shiny app. Its PLUS.nl integration talks to the supermarket's internal
-OutSystems API directly (≈400 ms per cart operation instead of the 20–30 s the old browser-driven
-version needed). See [`ARCHITECTURE.md`](ARCHITECTURE.md) for how that API was reverse-engineered, and
-[`SONNET_BUILD_INSTRUCTION.md`](SONNET_BUILD_INSTRUCTION.md) for the full product/design specification.
 
 > **The single goal:** get the routine weekly shop into the PLUS cart in **under 2 minutes** (under
 > 10 on an unusual week). Every feature is judged against that. The app never completes checkout for
@@ -17,20 +15,26 @@ version needed). See [`ARCHITECTURE.md`](ARCHITECTURE.md) for how that API was r
 
 ## What it does
 
-- **Single-surface cockpit** — four item *sources* (lanes) feed one **live cart** (the cart on screen
-  *is* your real PLUS cart, kept in sync optimistically):
-  1. **Deze week** — a 7-dinner + 5-lunch weekly meal planner built from your dishes.
-  2. **Vaste boodschappen** — your fixed weekly staples; add or remove products inline.
-  3. **Aanbiedingen voor jou** — this week's promotions, ranked for relevance.
-  4. **Zoeken** — instant product search for ad-hoc extras.
-- **Dish manager** — recipes with strict, assisted ingredient→SKU mapping, prep notes, amounts/pack
-  sizes, planning metadata (prep time, meat/diet type, vegetable count), and one-tap relinking when a
-  product changes. Ingredients can be **optional** (offered at cart-add) or **flexible** (a free-text
-  placeholder whose product you pick at cart-add) — both prompted before anything is aggregated.
-- **Local product catalogue** — the full store catalogue (~11k products) is synced to SQLite via the
-  direct API, so search is instant with images/prices, and staples or dish ingredients the store no
-  longer carries are flagged *"niet meer verkrijgbaar"*.
-- **Pack optimization** — two complementary, always-transparent savings:
+- **Live cart** — the cart on screen *is* your real PLUS.nl cart, kept in sync optimistically on
+  every add/remove and reconciled from PLUS's response.
+- **Weekmenu** — a 7-dinner + 5-lunch weekly meal planner built from your own dishes, with a shuffle
+  and one-tap "add the whole week" to cart.
+- **Vaste boodschappen (staples)** — your fixed weekly products with replenishment timing; add or
+  remove inline, or top up everything that's due in one tap.
+- **Aanbiedingen (promotions)** — this week's PLUS deals, ranked by relevance to what you actually buy.
+- **Zoeken** — instant product search for ad-hoc extras.
+- **Autopilot** — generates a complete shopping plan for the week (weekmenu + staples + promo
+  swaps + free-delivery top-up) in one pass, based on your rules and history. You review anything
+  it's unsure about — out-of-stock **vervangingsproducten**, free-text **flexibele ingrediënten**,
+  **optionele ingrediënten**, and money-saving **besparingsproducten** — then add the whole plan to
+  your cart at once. Optional push notification (see below) when a plan is ready.
+- **Dish manager** — recipes with assisted ingredient→SKU mapping, prep notes, amounts/pack sizes,
+  and planning metadata (prep time, meat/diet type, vegetable count). Ingredients can be **optional**
+  (offered at cart-add) or **flexible** (a free-text placeholder whose product you pick at cart-add).
+- **Local product catalogue** — the full store catalogue is synced to SQLite, so search is instant
+  with images/prices, and staples or dish ingredients the store no longer carries are flagged
+  *"niet meer verkrijgbaar"*.
+- **Pack optimisation** — two complementary, always-transparent savings:
   - *Cross-dish* — aggregates ingredients across the week and buys the fewest packs (e.g.
     *2 × 300 g chicken → 1 × 650 g pack, split at home*), previewed before anything hits the cart.
   - *Cart-wide* — spots when a product in your cart is cheaper per unit in another pack size
@@ -40,7 +44,10 @@ version needed). See [`ARCHITECTURE.md`](ARCHITECTURE.md) for how that API was r
 - **Local intelligence layer** *(off by default)* — week-menu recommender, staple replenishment
   prediction, and promotion matching. All local, explainable, **no LLM, no cloud AI**. Suggest-only;
   it never touches the cart unless you explicitly enable Autopilot.
-- **ntfy weekly alert** — an optional push when products you regularly buy go on sale next week.
+- **ntfy push notifications** — optional alerts when products you regularly buy go on sale next week,
+  and when an Autopilot plan is ready for review.
+- **Home Assistant integration** — a HACS-installable custom integration exposing weekmenu, staples,
+  and Autopilot as entities/services (see [below](#home-assistant-integration)).
 - **Multi-user** — each PLUS account is an isolated session with its own cart and data.
 
 UI language is **Dutch**; code and comments are English.
@@ -108,79 +115,122 @@ Every job is a plain function runnable two ways:
   ```
 
 Named jobs: `refresh_orders`, `refresh_purchase_catalogue`, `refresh_promotions`, `refresh_products`,
-`refresh_product_catalogue` (full store catalogue → `product_cache`, weekly), `recompute_ml`,
-`weekly_ntfy`, and `full_preload` (runs them in dependency order). The two paths are idempotent and
-locked per (user, resource) so an in-app run and a cron run never collide.
+`refresh_product_catalogue` (full store catalogue, weekly), `recompute_ml`, `refresh_weather`
+(Open-Meteo forecast, no API key needed), `weekly_ntfy`, `autopilot_prepare`, and `full_preload` (runs
+the PLUS-dependent jobs in dependency order). All jobs are idempotent and locked per (user, resource)
+so an in-app run and a cron run never collide.
 
 See [`crontab-scripts.sh`](crontab-scripts.sh) for ready-to-paste cron lines and the recommended
 schedule.
 
 > **Jobs that call PLUS need credentials without you present** — so they only run for users who
 > enabled *"Onthoud mij"* (remember-me), which stores encrypted credentials. Users without it still
-> work fine; their caches just warm on first open instead, and they get no ntfy alerts. `recompute_ml`
-> is the only job that needs no credentials.
+> work fine; their caches just warm on first open instead, and they get no ntfy alerts or Autopilot
+> plans. `recompute_ml` and `refresh_weather` are the only jobs that need no PLUS credentials.
+
+---
+
+## Home Assistant integration
+
+PyPLUS ships a [HACS](https://hacs.xyz/)-compatible custom integration at
+[`custom_components/pyplus/`](custom_components/pyplus/), so your weekmenu, Autopilot status, and
+staples count can show up as entities in Home Assistant, plus services to set weekmenu slots or
+trigger Autopilot from an automation.
+
+It isn't in the default HACS store — add this repo as a **custom repository** (HACS → Integrations →
+⋮ → Custom repositories → this repo URL, category *Integration*), then install and configure it with
+an API key generated under **Instellingen → API-toegang** in PyPLUS. Full entity/service reference:
+[`custom_components/pyplus/README.md`](custom_components/pyplus/README.md).
+
+---
+
+## PLUS.nl API
+
+PyPLUS talks to PLUS.nl's internal API from inside an authenticated browser session — there is no
+public API. The reverse-engineered endpoint reference (authentication, request/response shapes,
+version-hash handling, known constraints) lives in a dedicated doc, kept out of this README:
+[api_documentation](https://github.com/msberends/pyplus/tree/main/api_documentation).
 
 ---
 
 ## Deployment
 
-PyPLUS binds to localhost and expects a reverse proxy (nginx/Caddy) terminating TLS in front of it.
-NiceGUI uses WebSockets, so the proxy **must** forward the `Upgrade`/`Connection` headers:
+PyPLUS binds to localhost and expects a reverse proxy terminating TLS in front of it. NiceGUI uses
+WebSockets, so the proxy **must** forward the `Upgrade`/`Connection` headers. Put PyPLUS on its own
+(sub)domain — e.g. `pyplus.example.com` — and set that as the server/virtual-host name below, plus
+`PYPLUS_BASE_URL` in `.env` so ntfy deep links point at the right host.
+
+### nginx
 
 ```nginx
-location / {
-    proxy_pass http://127.0.0.1:8080;
-    proxy_http_version 1.1;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";   # required for NiceGUI WebSockets
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
+server {
+    server_name pyplus.example.com;   # ← your (sub)domain
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";   # required for NiceGUI WebSockets
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
 }
 ```
+
+### Apache2
+
+Requires `mod_proxy` and `mod_proxy_http`:
+
+```bash
+sudo a2enmod proxy proxy_http
+```
+
+```apache
+<VirtualHost *:80>
+    ServerName pyplus.example.com   # ← your (sub)domain
+
+    ProxyPreserveHost On
+    ProxyPass / http://127.0.0.1:8080/ upgrade=websocket   # required by NiceGUI, Apache ≥2.4.47
+    ProxyPassReverse / http://127.0.0.1:8080/
+</VirtualHost>
+```
+
+On Apache older than 2.4.47, replace `upgrade=websocket` with a `mod_proxy_wstunnel` + `mod_rewrite`
+rule that reroutes `Upgrade: websocket` requests to a `ws://` backend instead.
+
+Both examples assume TLS termination is added separately (e.g. Certbot managing the `:443` block) —
+adapt to your setup.
 
 Run it under systemd using [`pyplus.service.example`](pyplus.service.example) as a template (copy to
 `pyplus.service`, fill in the real paths — the real `.service` is gitignored).
 
 ---
 
-## Security & GitHub hygiene
-
-This repository is public. The rules it follows:
-
-- **No personal data is committed** — no real emails, domains, credentials, or server paths anywhere
-  in code, docs, fixtures, or commit messages. Placeholders only (`you@example.com`, `<APP_DIR>`).
-- **Credentials at rest are Fernet-encrypted** with `PYPLUS_SECRET_KEY`, which the operator sets and
-  which is never committed or defaulted. No key ⇒ remember-me is disabled, not bypassed.
-- **Multi-user isolation** — every DB query is scoped by `user_id`; each session has its own browser
-  context and PLUS cart. Users can never see or affect each other's data.
-- **`.gitignore` keeps secrets and data out of the repo:** `.env`, `*.service`, the data dir,
-  `*.db`, `logs/`, the apiVersion cache, ML artifacts, and the operator's personal
-  `NOTES_FOR_ADMIN.md`.
-
----
-
 ## Project layout
 
 ```
-new_app/
-├── plus/              # Reverse-engineered PLUS.nl client (see ARCHITECTURE.md) — reused, not rewritten
-├── pyplus/            # The application
-│   ├── __main__.py    # entrypoint: page routes, iCal endpoint, scheduler lifecycle, ui.run()
-│   ├── config.py      # env-based settings (pydantic-settings)
-│   ├── db/            # SQLAlchemy ORM models, async engine, user-scoped repo helpers
-│   ├── security/      # Fernet credential encryption + HMAC iCal tokens
-│   ├── session/       # per-user PlusClient lifecycle + session manager
-│   ├── services/      # cart, dishes, aggregate (pack-opt), savings (cart unit-price), search, history, exports
-│   ├── ml/            # recommender, replenish, promo_match, artifacts (off by default)
-│   ├── jobs/          # job registry + CLI + APScheduler wiring
-│   ├── ui/            # theme, components, pages (login, cockpit, dishes, settings)
-│   └── i18n.py        # Dutch UI strings (single source)
-├── migrations/        # Alembic versions
-├── tools/migrate_rds.py   # one-time R .rds → SQLite importer
-├── tests/             # pytest unit suite (offline)
-│   └── manual/        # live-API smoke scripts (need real credentials — not part of CI)
-├── crontab-scripts.sh # cron reference for the operator
-└── pyproject.toml     # uv-managed; requirements.txt covers only the manual client scripts
+.
+├── plus/                       # Reverse-engineered PLUS.nl client (Playwright) — reused, not rewritten
+├── pyplus/                     # The application
+│   ├── __main__.py             # entrypoint: page routes, iCal endpoint, scheduler lifecycle, ui.run()
+│   ├── config.py                # env-based settings (pydantic-settings)
+│   ├── api/                     # REST API backing the Home Assistant integration
+│   ├── db/                      # SQLAlchemy ORM models, async engine, user-scoped repo helpers
+│   ├── security/                 # Fernet credential encryption + HMAC iCal/API tokens
+│   ├── session/                  # per-user PlusClient lifecycle + session manager
+│   ├── services/                 # cart, dishes, autopilot, aggregate (pack-opt), savings, search, history, exports
+│   ├── ml/                       # recommender, replenish, promo_match, artifacts (off by default)
+│   ├── jobs/                     # job registry + CLI + APScheduler wiring
+│   ├── ui/                       # theme, components, pages (login, weekmenu, autopilot, dishes, settings, …)
+│   └── i18n.py                   # Dutch UI strings (single source)
+├── custom_components/pyplus/   # HACS-compatible Home Assistant integration
+├── api_documentation/          # Reverse-engineered PLUS.nl endpoint reference
+├── migrations/                 # Alembic versions
+├── tests/                      # pytest unit suite (offline)
+│   └── manual/                 # live-API smoke scripts (need real credentials — not part of CI)
+├── tools/screenshot.py         # visual QA: headless Playwright screenshots of every page
+├── crontab-scripts.sh          # cron reference for the operator
+└── pyproject.toml              # uv-managed
 ```
 
 ---

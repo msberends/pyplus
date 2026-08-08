@@ -144,6 +144,10 @@ async def _login(page, base_url: str, env: dict[str, str]) -> None:
     await page.get_by_label("E-mailadres", exact=False).fill(env["EMAIL"])
     await page.get_by_label("Wachtwoord", exact=False).fill(env["PASSWORD"])
 
+    # Must check "Onthoud mij" — an unchecked login deletes any stored remember-me
+    # credentials for this user, which would silently break background jobs.
+    await page.get_by_text("Onthoud mij", exact=False).click()
+
     print("Submitting login form — waiting for Plus.nl OAuth (~20s)…")
     await page.get_by_role("button").filter(has_text="Inloggen").click()
 

@@ -14,7 +14,7 @@ _CTFASSETS_HOST = "images.ctfassets.net"
 
 
 def alt_text(name: str) -> str:
-    """Sanitize a product name for use as an HTML alt / aria-label attribute value.
+    """Sanitise a product name for use as an HTML alt / aria-label attribute value.
 
     Strips characters that would break the quoted NiceGUI props string.
     """
@@ -24,7 +24,7 @@ def alt_text(name: str) -> str:
 def thumbnail_url(url: str, size: int = 44, fit: str = "thumb") -> str:
     """Return a resized Contentful image URL (w=size×3, WebP).
 
-    fit="thumb"  — center-crop to a square (default, compact rows/search).
+    fit="thumb"  — centre-crop to a square (default, compact rows/search).
     fit="pad"    — full image padded to a square (larger product cards).
 
     A 3× DPR factor covers HiDPI/Retina displays; still 10–30× smaller than

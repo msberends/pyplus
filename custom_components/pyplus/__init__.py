@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -62,9 +61,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ),
     )
 
-    hass.services.async_register(
-        DOMAIN, "trigger_autopilot", handle_trigger_autopilot
-    )
+    hass.services.async_register(DOMAIN, "trigger_autopilot", handle_trigger_autopilot)
 
     hass.services.async_register(DOMAIN, "sync_now", handle_sync_now)
 

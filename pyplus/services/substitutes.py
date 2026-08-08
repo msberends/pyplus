@@ -101,7 +101,7 @@ def score_candidate(
 
     raw = cat_score + name_score + brand_score + price_score + bought_score
 
-    # Normalize: express as fraction of the achievable max given available signals.
+    # Normalise: express as fraction of the achievable max given available signals.
     # When source has no categories, the category weight (highest!) contributes 0
     # to both raw and max, so scores stay meaningful.
     cat_max = settings.sub_weight_category if source_categories else 0.0
