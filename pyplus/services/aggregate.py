@@ -13,9 +13,38 @@ Chicken example (from the brief):
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 
 from pyplus.db.models import Dish, DishIngredient, IngredientSku
+
+# ── Product-family normalisation ────────────────────────────────────────────────
+
+# Strips a trailing pack-count/size qualifier so pack-size variants of the same
+# product — e.g. "PLUS Boerentrots Kipfilet 2 stuks" vs plain "PLUS Boerentrots
+# Kipfilet", or "... Voordeelverpakking" — are recognised as the same product
+# family. Applied repeatedly so multiple trailing qualifiers all get stripped.
+_TRAILING_QUALIFIER_RE = re.compile(
+    r"\s+(?:\d+(?:[.,]\d+)?\s*(?:stuks?|st|gram|gr|kg|g|ml|cl|l)|voordeelverpakking)$",
+    re.IGNORECASE,
+)
+
+
+def normalize_product_family(name: str) -> str:
+    """Collapse a product name to its pack-size-independent "family" form.
+
+    Used to recognise that two differently-SKU'd catalogue products (a "2
+    stuks" multipack and its plain single-pack sibling, say) are the same
+    underlying product in different pack sizes, so a swap/consolidation
+    suggestion can consider them together.
+    """
+    result = (name or "").strip()
+    while True:
+        stripped = _TRAILING_QUALIFIER_RE.sub("", result)
+        if stripped == result:
+            return result
+        result = stripped.strip()
+
 
 # ── Unit normalisation ─────────────────────────────────────────────────────────
 

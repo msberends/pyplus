@@ -698,26 +698,32 @@ async def get_product_cache_by_skus(
 async def get_pack_alternatives(
     db: AsyncSession, store_number: int, skus: list[str]
 ) -> dict[str, list[ProductCache]]:
-    """For each cart SKU, return the catalogue products sharing its (brand, name).
+    """For each cart SKU, return the catalogue products sharing its brand.
 
-    These are the same product in different pack sizes — the candidate set for a
-    cheaper-per-unit swap. Maps sku → [ProductCache, …] (includes the sku itself).
+    A coarse, cheap DB-side net — the candidate set for a cheaper-per-unit swap.
+    Deciding which same-brand candidates are actually pack-size variants of the
+    *same* product (as opposed to just another product from that brand) is
+    business logic, not a DB concern — see `services.savings.best_swap`, which
+    filters this set down via `services.aggregate.normalize_product_family`.
+    Maps sku → [ProductCache, …] (includes the sku itself).
     """
     base = await get_product_cache_by_skus(db, store_number, skus)
     if not base:
         return {}
-    names = {row.name for row in base.values()}
+    brands = {row.brand for row in base.values() if row.brand}
+    if not brands:
+        return {sku: [row] for sku, row in base.items()}
     result = await db.execute(
         select(ProductCache).where(
             ProductCache.store_number == store_number,
-            ProductCache.name.in_(names),
+            ProductCache.brand.in_(brands),
             ProductCache.is_available == True,  # noqa: E712
         )
     )
-    groups: dict[tuple[str, str], list[ProductCache]] = {}
+    by_brand: dict[str, list[ProductCache]] = {}
     for row in result.scalars().all():
-        groups.setdefault((row.brand, row.name), []).append(row)
-    return {sku: groups.get((r.brand, r.name), [r]) for sku, r in base.items()}
+        by_brand.setdefault(row.brand, []).append(row)
+    return {sku: by_brand.get(row.brand, [row]) for sku, row in base.items()}
 
 
 async def search_product_cache(

@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from unittest.mock import MagicMock
 
-from pyplus.services.aggregate import aggregate, fmt_amount
+from pyplus.services.aggregate import aggregate, fmt_amount, normalize_product_family
 
 # ── Helpers to build mock model objects ───────────────────────────────────────
 
@@ -279,3 +279,38 @@ def test_no_pack_size_no_saving():
     assert result.total_savings == 0.0
     line = result.lines[0]
     assert not line.has_saving
+
+
+# ── normalize_product_family ──────────────────────────────────────────────────
+
+
+def test_normalize_strips_pack_count_suffix():
+    assert (
+        normalize_product_family("PLUS Boerentrots Kipfilet 2 stuks") == "PLUS Boerentrots Kipfilet"
+    )
+
+
+def test_normalize_strips_voordeelverpakking():
+    assert normalize_product_family("PLUS Kipfilet Voordeelverpakking") == "PLUS Kipfilet"
+
+
+def test_normalize_strips_trailing_weight():
+    assert (
+        normalize_product_family("PLUS Boerentrots Kipfiletblokjes fijn 600 gram")
+        == "PLUS Boerentrots Kipfiletblokjes fijn"
+    )
+
+
+def test_normalize_strips_compact_stuks_count():
+    assert normalize_product_family(
+        "PLUS Boerentrots Krokante kipfiletschnitzels 2st"
+    ) == normalize_product_family("PLUS Boerentrots Krokante kipfiletschnitzels 5st")
+
+
+def test_normalize_leaves_plain_name_untouched():
+    assert normalize_product_family("PLUS Boerentrots Kipfilet") == "PLUS Boerentrots Kipfilet"
+
+
+def test_normalize_no_qualifier_no_change():
+    # A name with no trailing pack qualifier shouldn't be mangled.
+    assert normalize_product_family("PLUS Prei") == "PLUS Prei"

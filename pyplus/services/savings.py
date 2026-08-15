@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from pyplus.services.aggregate import _to_base
+from pyplus.services.aggregate import _to_base, normalize_product_family
 from pyplus.services.dishes import _parse_pack_from_subtitle
 
 _MIN_SAVING = 0.05  # € — ignore rounding-noise suggestions
@@ -84,8 +84,12 @@ def best_swap(
 ) -> Saving | None:
     """Cheapest alternative pack covering the same amount, or None.
 
-    `group` items expose .sku, .subtitle, .price (plus.models.Product or
-    db.models.ProductCache both qualify via duck-typing).
+    `group` items expose .sku, .name, .subtitle, .price (plus.models.Product or
+    db.models.ProductCache both qualify via duck-typing). `group` is only a
+    coarse same-brand net (see repo.get_pack_alternatives) — this is where
+    candidates actually get filtered down to pack-size variants of the *same*
+    product, via `normalize_product_family` (so "X 2 stuks" matches plain "X",
+    but doesn't also match some unrelated same-brand product).
 
     Two strategies per candidate:
       1. Pure swap: replace ALL items with candidate packs (total coverage ≥ need).
@@ -98,6 +102,7 @@ def best_swap(
     if cur_base is None:
         return None
 
+    own_family = normalize_product_family(name)
     need = cur_qty * cur_base
     cur_cost_full = round(cur_qty * cur_price, 2)
 
@@ -106,6 +111,11 @@ def best_swap(
 
     for cand in group:
         if not getattr(cand, "is_available", True):
+            continue
+        if cand.sku != sku and (
+            not own_family
+            or normalize_product_family(getattr(cand, "name", "") or "") != own_family
+        ):
             continue
         cand_price = getattr(cand, "price", 0.0) or 0.0
         if cand_price <= 0:

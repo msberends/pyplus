@@ -264,6 +264,8 @@ async def refresh_products(*, user_id: int, client, store_number: int) -> None:
             ),
         )
 
+        from pyplus.services.dishes import _parse_pack_from_subtitle
+
         updated = 0
         not_found = 0
         for sku in ordered:
@@ -280,6 +282,13 @@ async def refresh_products(*, user_id: int, client, store_number: int) -> None:
 
                 if match:
                     existing = cached.get(sku)
+                    # Re-derive pack size from the freshly-fetched subtitle rather than
+                    # blindly carrying the old value forward — otherwise a SKU whose
+                    # subtitle didn't parse (or wasn't captured) at link-time stays
+                    # pack_size=None forever, silently disabling pack optimisation for it.
+                    pack_size, pack_unit = _parse_pack_from_subtitle(match.subtitle or "")
+                    if pack_size is None and existing:
+                        pack_size, pack_unit = existing.pack_size, existing.pack_unit
                     async with AsyncSessionLocal() as db:
                         await repo.upsert_ingredient_sku(
                             db,
@@ -289,8 +298,8 @@ async def refresh_products(*, user_id: int, client, store_number: int) -> None:
                             subtitle=match.subtitle,
                             slug=getattr(match, "slug", "") or "",
                             image_url=match.image_url,
-                            pack_size=existing.pack_size if existing else None,
-                            pack_unit=existing.pack_unit if existing else None,
+                            pack_size=pack_size,
+                            pack_unit=pack_unit,
                             last_price=match.price,
                             last_seen_available=match.is_available,
                         )
