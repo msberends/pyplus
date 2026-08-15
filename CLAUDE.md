@@ -175,3 +175,6 @@ overflow, text readable, bottom of page not obscured by the fixed nav bar.
   apiVersion cache, ML artifacts, and `NOTES_FOR_ADMIN.md` gitignored.
 - **Migrations:** schema changes go through Alembic in `migrations/`; all tables are defined in
   `pyplus/db/models.py`.
+- **Dead code:** when you come across a function, class, or branch that turns out to be unused
+  (verify with a repo-wide reference search, not just the current file), remove it — after
+  confirming with the user — rather than leaving it in place. Don't leave it "out of scope."
