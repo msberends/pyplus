@@ -1084,9 +1084,13 @@ body {
   transition: border-color var(--dur-fast) var(--ease);
 }
 .sp-staples-card:hover { border-color: var(--c-border-strong); }
-.sp-staples-card--due {
+.sp-staples-card--standard {
   background: var(--c-brand-tint);
   border-color: var(--c-brand-tint-2);
+}
+.sp-staples-card--unavailable {
+  background: var(--c-danger-tint);
+  border-color: color-mix(in srgb, var(--c-danger) 25%, transparent);
 }
 .sp-staples-card__img {
   width: 72px; height: 72px;

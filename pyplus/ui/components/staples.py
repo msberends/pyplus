@@ -568,8 +568,14 @@ def _render_card(
     from pyplus.ui.format import plus_product_url
 
     product_url = plus_product_url(slug, fp.sku) if available is not False else ""
-    is_due = replenish_score is not None and replenish_score.is_due
-    card_cls = "sp-staples-card sp-staples-card--due" if is_due else "sp-staples-card"
+    min_q = fp.min_qty if fp.min_qty is not None else 0
+    is_unavailable = discontinued or available is False
+    if is_unavailable:
+        card_cls = "sp-staples-card sp-staples-card--unavailable"
+    elif min_q > 0:
+        card_cls = "sp-staples-card sp-staples-card--standard"
+    else:
+        card_cls = "sp-staples-card"
 
     with ui.element("div").classes(card_cls):
         # Delete button (absolute top-right, out of flow)
@@ -641,7 +647,6 @@ def _render_card(
 
         # Min-qty ("Standaard: N") — editable in edit mode, plain text otherwise
         if not discontinued and available is not False:
-            min_q = fp.min_qty if fp.min_qty is not None else 0
             if editing:
                 with ui.element("div").style(
                     "display:flex;align-items:center;gap:.25rem;justify-content:center"
