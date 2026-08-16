@@ -37,9 +37,15 @@ class CartService:
         product_price: float = 0.0,
         product_image: str = "",
         source: str = "",
+        detail: str = "",
+        via_autopilot: bool = False,
         check_stock: bool = True,
     ) -> bool:
-        """Add qty units of sku. Returns False (and fires stock alert) if out of stock."""
+        """Add qty units of sku. Returns False (and fires stock alert) if out of stock.
+
+        ``source`` is the origin kind ("menu" | "staple" | "promotion" | "search" |
+        "filler"); ``detail`` is human context for it (e.g. a dish name).
+        """
         if check_stock:
             try:
                 from pyplus.db import repo as _repo
@@ -64,12 +70,28 @@ class CartService:
             price=product_price,
             image=product_image,
             source=source,
+            detail=detail,
+            via_autopilot=via_autopilot,
         )
+
+        if source:
+            try:
+                from pyplus.db import repo as _repo
+                from pyplus.db.engine import AsyncSessionLocal as _ASL
+
+                async with _ASL() as _db:
+                    await _repo.upsert_cart_provenance(
+                        _db, self.session.user_id, sku, source, detail, via_autopilot
+                    )
+            except Exception:
+                log.debug("Cart provenance write failed", exc_info=True)
+
         return True
 
     async def remove(self, sku: str, qty: int = 1) -> None:
         """Remove qty units of sku."""
         await self._queue(sku, -qty)
+        await self._clear_provenance_if_gone(sku)
 
     async def set_quantity(self, sku: str, new_qty: int) -> None:
         """Jump directly to new_qty (used by inline numeric input in M3 polish)."""
@@ -77,6 +99,19 @@ class CartService:
         delta = new_qty - current
         if delta != 0:
             await self._queue(sku, delta)
+            await self._clear_provenance_if_gone(sku)
+
+    async def _clear_provenance_if_gone(self, sku: str) -> None:
+        if any(it.sku == sku for it in self.session.cart.items):
+            return
+        try:
+            from pyplus.db import repo as _repo
+            from pyplus.db.engine import AsyncSessionLocal as _ASL
+
+            async with _ASL() as _db:
+                await _repo.clear_cart_provenance(_db, self.session.user_id, sku)
+        except Exception:
+            log.debug("Cart provenance clear failed", exc_info=True)
 
     async def clear_all(self) -> None:
         """Remove every item from the cart (optimistic clear + API calls)."""
@@ -103,6 +138,15 @@ class CartService:
 
                 new_cart = _parse_cart_from_checkout(checkout)
                 self.session.set_cart(new_cart)
+
+            try:
+                from pyplus.db import repo as _repo
+                from pyplus.db.engine import AsyncSessionLocal as _ASL
+
+                async with _ASL() as _db:
+                    await _repo.clear_all_cart_provenance(_db, self.session.user_id)
+            except Exception:
+                log.debug("Cart provenance clear-all failed", exc_info=True)
         except Exception as exc:
             log.warning("Clear cart error: %s", exc)
             self.session.set_cart(snapshot)
@@ -122,13 +166,23 @@ class CartService:
         price: float = 0.0,
         image: str = "",
         source: str = "",
+        detail: str = "",
+        via_autopilot: bool = False,
     ) -> None:
         # Take a pre-cycle snapshot on the very first tap of each debounce cycle.
         if sku not in self._pending:
             self._snapshots[sku] = self.session.cart
 
         self._apply_optimistic(
-            sku, delta, name=name, unit=unit, price=price, image=image, source=source
+            sku,
+            delta,
+            name=name,
+            unit=unit,
+            price=price,
+            image=image,
+            source=source,
+            detail=detail,
+            via_autopilot=via_autopilot,
         )
         self._pending[sku] = self._pending.get(sku, 0) + delta
 
@@ -166,17 +220,17 @@ class CartService:
             from plus.client import _parse_cart_from_checkout
 
             new_cart = _parse_cart_from_checkout(checkout)
-            # PLUS cart API doesn't return ImageURLs or source tags — preserve from optimistic cart.
+            # PLUS cart API doesn't return ImageURLs or origins — preserve from optimistic cart.
             old_images = {it.sku: it.image_url for it in self.session.cart.items if it.image_url}
-            old_sources = {it.sku: it.source for it in self.session.cart.items if it.source}
-            if old_images or old_sources:
+            old_origins = {it.sku: it.origins for it in self.session.cart.items if it.origins}
+            if old_images or old_origins:
                 patched = []
                 for it in new_cart.items:
                     updates = {}
                     if not it.image_url and it.sku in old_images:
                         updates["image_url"] = old_images[it.sku]
-                    if not it.source and it.sku in old_sources:
-                        updates["source"] = old_sources[it.sku]
+                    if not it.origins and it.sku in old_origins:
+                        updates["origins"] = old_origins[it.sku]
                     patched.append(it.model_copy(update=updates) if updates else it)
                 new_cart = new_cart.model_copy(update={"items": patched})
             # Re-apply any taps that arrived while this call was in flight, so the
@@ -243,8 +297,10 @@ class CartService:
         price: float,
         image: str,
         source: str = "",
+        detail: str = "",
+        via_autopilot: bool = False,
     ) -> None:
-        from plus.models import CartItem
+        from plus.models import CartItem, CartOrigin
 
         cart = self.session.cart
         new_items = list(cart.items)
@@ -257,20 +313,25 @@ class CartService:
                 unit_price = item.price  # known per-unit price of the existing line
                 new_qty = item.quantity + delta
                 if new_qty > 0:
-                    # Merge source: append new origin if not already present.
-                    if source and source not in (item.source or "").split(","):
-                        merged = ",".join(filter(None, [item.source, source]))
-                        new_items[i] = item.model_copy(
-                            update={"quantity": new_qty, "source": merged}
-                        )
-                    else:
-                        new_items[i] = item.model_copy(update={"quantity": new_qty})
+                    # Merge origin: append this (kind, detail) pair if not already present.
+                    origins = item.origins
+                    if source and not any(o.kind == source and o.detail == detail for o in origins):
+                        origins = [
+                            *origins,
+                            CartOrigin(kind=source, detail=detail, via_autopilot=via_autopilot),
+                        ]
+                    new_items[i] = item.model_copy(update={"quantity": new_qty, "origins": origins})
                 else:
                     new_items.pop(i)
                 break
 
         if not found and delta > 0 and name:
             # New item from a lane (M4+).
+            origins = (
+                [CartOrigin(kind=source, detail=detail, via_autopilot=via_autopilot)]
+                if source
+                else []
+            )
             new_items.append(
                 CartItem(
                     product=name,
@@ -279,7 +340,7 @@ class CartService:
                     quantity=delta,
                     sku=sku,
                     image_url=image,
-                    source=source,
+                    origins=origins,
                 )
             )
 
@@ -293,3 +354,36 @@ class CartService:
         self.session.set_cart(
             cart.model_copy(update={"items": new_items, "final_total": new_total})
         )
+
+
+async def enrich_cart_with_provenance(db, user_id: int, cart):
+    """Fill in origins for lines PLUS returned bare.
+
+    PLUS's cart API never carries provenance, so any cart line not already
+    tagged in-memory (fresh login, app restart, manual refresh) needs its
+    origins restored from the persisted CartProvenance table.
+    """
+    from plus.models import CartOrigin
+    from pyplus.db import repo as _repo
+
+    skus = [it.sku for it in cart.items if it.sku and not it.origins]
+    if not skus:
+        return cart
+
+    by_sku = await _repo.get_cart_provenance(db, user_id, skus)
+    if not by_sku:
+        return cart
+
+    patched = []
+    for it in cart.items:
+        rows = by_sku.get(it.sku) if not it.origins else None
+        if rows:
+            # Rows are newest-first (see get_cart_provenance); restore insertion order.
+            origins = [
+                CartOrigin(kind=r.kind, detail=r.detail, via_autopilot=r.via_autopilot)
+                for r in reversed(rows)
+            ]
+            patched.append(it.model_copy(update={"origins": origins}))
+        else:
+            patched.append(it)
+    return cart.model_copy(update={"items": patched})

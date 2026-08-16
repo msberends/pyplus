@@ -82,7 +82,7 @@ def _compute_deal_total(promo, item) -> float | None:
     return None
 
 
-def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
+def create_cart_panel(session) -> None:
     """Render the cart panel and wire it to the session's live cart."""
     cart_service = getattr(session, "cart_service", None)
     savings_by_sku: dict = {}  # sku → savings.Saving for the current cart
@@ -90,6 +90,8 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
     image_by_sku: dict = {}  # sku → catalogue image (fallback when cart line has none)
     slug_by_sku: dict = {}  # sku → product slug (for canonical plus.nl URLs)
     cat_by_sku: dict = {}  # sku → category breadcrumb (for grouping/sorting)
+    order_map: dict = {}  # category name → PLUS SortOrder (when category_order == "plus")
+    added_at_by_sku: dict = {}  # sku → most recent provenance timestamp (for "recent" sort)
     _fd_thresholds: dict = {}  # slug → {"promo": Promotion, "eur": float|None, "qty": int|None}
     prefs = session.settings
 
@@ -106,11 +108,42 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
     with ui.element("div").classes("sp-cart-panel"):
         # ── Header ─────────────────────────────────────────────────────
         with ui.element("div").classes("sp-cart-header"):
-            ui.label(t("cart.title")).classes("sp-cart-title")
-            count_badge = (
-                ui.label("").classes("sp-badge sp-badge-available").style("font-size:11px")
+            with ui.element("div").style("display:flex;align-items:center;gap:.5rem"):
+                ui.label(t("cart.title")).classes("sp-cart-title")
+                count_badge = (
+                    ui.label("").classes("sp-badge sp-badge-available").style("font-size:11px")
+                )
+                count_badge.set_visibility(False)
+
+            def _update_sort_btn() -> None:
+                grouped = prefs.cart_grouping == "category"
+                sort_btn.set_text("Alfabetisch sorteren" if grouped else "Groeperen per categorie")
+                sort_btn.icon = "sym_r_sort_by_alpha" if grouped else "sym_r_category"
+
+            async def _toggle_grouping() -> None:
+                prefs.cart_grouping = "none" if prefs.cart_grouping == "category" else "category"
+                from pyplus.db import repo
+                from pyplus.db.engine import AsyncSessionLocal
+
+                async with AsyncSessionLocal() as db:
+                    await repo.save_user_settings_json(db, session.user_id, prefs.model_dump_json())
+                session.set_settings(prefs)
+                _update_sort_btn()
+                if (
+                    prefs.cart_grouping == "category"
+                    and prefs.category_order == "plus"
+                    and not order_map
+                ):
+                    asyncio.ensure_future(_load_category_order())
+                _sync()
+
+            sort_btn = (
+                ui.button(icon="sym_r_category")
+                .props("flat dense no-caps color=primary size=sm")
+                .style("font-size:11px;font-weight:600")
             )
-            count_badge.set_visibility(False)
+            sort_btn.on("click", lambda: asyncio.ensure_future(_toggle_grouping()))
+            _update_sort_btn()
 
         # ── Scrollable item list ────────────────────────────────────────
         with ui.element("div").classes("sp-cart-body"):
@@ -226,15 +259,25 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
                 if slot is None:
                     return
                 slot.clear()
-                if not item.source:
+                if not item.origins:
                     return
                 with slot:
-                    for src in item.source.split(","):
-                        src = src.strip()
-                        if not src:
-                            continue
-                        label = t(f"cart.origin.{src}")
-                        ui.label(label).classes(f"sp-origin-chip sp-origin-chip--{src}")
+                    for origin in item.origins:
+                        kind_label = t(f"cart.origin.{origin.kind}")
+                        bolt = "⚡ " if origin.via_autopilot else ""
+                        if origin.detail:
+                            with (
+                                ui.element("div")
+                                .classes(f"sp-origin-chip sp-origin-chip--{origin.kind}")
+                                .tooltip(origin.detail)
+                            ):
+                                ui.label(f"{bolt}{kind_label}").classes("sp-origin-chip__kind")
+                                ui.label(origin.detail).classes("sp-origin-chip__detail")
+                        else:
+                            ui.label(f"{bolt}{kind_label}").classes(
+                                f"sp-origin-chip sp-origin-chip--single "
+                                f"sp-origin-chip--{origin.kind}"
+                            )
 
             def _fill_stepper(refs, item) -> None:
                 from pyplus.ui.components.controls import stepper_button
@@ -354,7 +397,7 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
                 → add/remove/move only the affected rows; reused rows keep their image.
                 """
                 cart = session.cart
-                items = _sort_items(list(cart.items), prefs.cart_sort)
+                items = _sort_items(list(cart.items), prefs.cart_sort, added_at_by_sku)
                 if not items:
                     for refs in list(_rows.values()):
                         refs["row"].delete()
@@ -374,13 +417,13 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
                 empty_holder.clear()
 
                 plan: list = []  # ("h", label) | ("i", item)
-                if group_by_origin and any(it.source for it in items):
+                if prefs.cart_grouping == "origin" and any(it.origins for it in items):
                     for origin_label, group in _group_by_origin(items):
                         plan.append(("h", origin_label))
                         for it in group:
                             plan.append(("i", it))
-                elif prefs.cart_group_by_category:
-                    for cat, group in _group_items(items, cat_by_sku):
+                elif prefs.cart_grouping == "category":
+                    for cat, group in _group_items(items, cat_by_sku, order_map):
                         plan.append(("h", cat))
                         for it in group:
                             plan.append(("i", it))
@@ -434,8 +477,29 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
                 if new_skus:
                     asyncio.ensure_future(_load_promos())
                     asyncio.ensure_future(_load_images())
-                    if prefs.cart_group_by_category:
+                    if prefs.cart_grouping == "category":
                         asyncio.ensure_future(_load_categories())
+                    if prefs.cart_sort == "recent":
+                        asyncio.ensure_future(_load_recency())
+
+            async def _load_recency() -> None:
+                """Load persisted provenance timestamps for the 'recent' sort (cache-only)."""
+                skus = [it.sku for it in session.cart.items if it.sku]
+                if not skus:
+                    return
+                from pyplus.db import repo
+                from pyplus.db.engine import AsyncSessionLocal
+
+                async with AsyncSessionLocal() as db:
+                    by_sku = await repo.get_cart_provenance(db, session.user_id, skus)
+                changed = False
+                for sku, rows in by_sku.items():
+                    newest = rows[0].added_at if rows else None  # newest-first ordering
+                    if newest and added_at_by_sku.get(sku) != newest:
+                        added_at_by_sku[sku] = newest
+                        changed = True
+                if changed:
+                    _sync()
 
             async def _load_categories() -> None:
                 """Load category breadcrumbs for grouping (cache-only); re-sync if changed."""
@@ -449,6 +513,16 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
                 )
                 if idx and any(cat_by_sku.get(k) != v for k, v in idx.items()):
                     cat_by_sku.update(idx)
+                    _sync()
+
+            async def _load_category_order() -> None:
+                """Load PLUS's own top-level category order (cache-only); re-sync if changed."""
+                from pyplus.services.categories import get_category_order_map
+
+                m = await get_category_order_map()
+                if m and m != order_map:
+                    order_map.clear()
+                    order_map.update(m)
                     _sync()
 
             async def _load_promos() -> None:
@@ -515,8 +589,12 @@ def create_cart_panel(session, *, group_by_origin: bool = False) -> None:
             _sync()
             asyncio.ensure_future(_load_promos())  # drives on-offer row emphasis + tags
             asyncio.ensure_future(_load_images())
-            if prefs.cart_group_by_category:
+            if prefs.cart_grouping == "category":
                 asyncio.ensure_future(_load_categories())
+                if prefs.category_order == "plus":
+                    asyncio.ensure_future(_load_category_order())
+            if prefs.cart_sort == "recent":
+                asyncio.ensure_future(_load_recency())
 
         # ── Footer ──────────────────────────────────────────────────────
         with ui.element("div").classes("sp-cart-footer"):
@@ -780,16 +858,17 @@ _ORIGIN_LABELS = {
     "menu": "Weekmenu",
     "staple": "Vaste boodschap",
     "promotion": "Aanbieding",
-    "search": "Gezocht",
+    "search": "Handmatig toegevoegd",
+    "filler": "Aangevuld",
 }
-_ORIGIN_ORDER = ["menu", "staple", "promotion", "search"]
+_ORIGIN_ORDER = ["menu", "staple", "promotion", "search", "filler"]
 
 
 def _group_by_origin(items: list) -> list[tuple[str, list]]:
-    """Bucket items by their first source tag, preserving insertion order within groups."""
+    """Bucket items by their first origin's kind, preserving insertion order within groups."""
     buckets: dict[str, list] = {}
     for it in items:
-        origin = (it.source or "").split(",")[0] or "other"
+        origin = it.origins[0].kind if it.origins else "other"
         buckets.setdefault(origin, []).append(it)
     ordered = [o for o in _ORIGIN_ORDER if o in buckets]
     if "other" in buckets:
@@ -798,16 +877,23 @@ def _group_by_origin(items: list) -> list[tuple[str, list]]:
     return [(labels.get(k, k), buckets[k]) for k in ordered]
 
 
-def _sort_items(items: list, sort: str) -> list:
+def _sort_items(items: list, sort: str, added_at_by_sku: dict | None = None) -> list:
     """Order cart items per the user's choice; 'cart' keeps the PLUS order."""
     if sort == "name":
         return sorted(items, key=lambda it: (it.product or "").casefold())
     if sort == "price":
         return sorted(items, key=lambda it: it.price_total, reverse=True)
+    if sort == "recent" and added_at_by_sku:
+        import datetime as _dt
+
+        epoch = _dt.datetime.min
+        return sorted(items, key=lambda it: added_at_by_sku.get(it.sku, epoch), reverse=True)
     return items  # "cart" — preserve PLUS/insertion order
 
 
-def _group_items(items: list, cat_by_sku: dict) -> list[tuple[str, list]]:
+def _group_items(
+    items: list, cat_by_sku: dict, order_map: dict[str, float] | None = None
+) -> list[tuple[str, list]]:
     """Bucket items by their top-level category, preserving the given item order
     within each group. Returns [(category, items), …] in display order."""
     from pyplus.services.categories import group_order, top_category
@@ -816,7 +902,7 @@ def _group_items(items: list, cat_by_sku: dict) -> list[tuple[str, list]]:
     for it in items:
         cat = top_category(cat_by_sku.get(it.sku, []))
         buckets.setdefault(cat, []).append(it)
-    return [(cat, buckets[cat]) for cat in group_order(list(buckets))]
+    return [(cat, buckets[cat]) for cat in group_order(list(buckets), order_map)]
 
 
 def _confirm_clear_cart(cart_service) -> None:

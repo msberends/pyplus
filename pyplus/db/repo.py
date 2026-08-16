@@ -12,11 +12,13 @@ from sqlalchemy.orm import selectinload
 
 from pyplus.db.models import (
     AutopilotPlan,
+    CartProvenance,
     Credentials,
     Dish,
     DishIngredient,
     FixedProduct,
     IngredientSku,
+    MenuCategoryOrderCache,
     MlArtifact,
     OrderCache,
     OrderItemCache,
@@ -848,6 +850,25 @@ async def upsert_promotions_cache(
     await db.commit()
 
 
+# ── MenuCategoryOrderCache ─────────────────────────────────────────────────────
+
+
+async def get_menu_category_order_cache(db: AsyncSession) -> MenuCategoryOrderCache | None:
+    result = await db.execute(select(MenuCategoryOrderCache).limit(1))
+    return result.scalar_one_or_none()
+
+
+async def upsert_menu_category_order_cache(db: AsyncSession, payload_json: str) -> None:
+    row = await get_menu_category_order_cache(db)
+    now = _utcnow()
+    if row:
+        row.payload_json = payload_json
+        row.fetched_at = now
+    else:
+        db.add(MenuCategoryOrderCache(payload_json=payload_json, fetched_at=now))
+    await db.commit()
+
+
 # ── Users with credentials ─────────────────────────────────────────────────────
 
 
@@ -1328,3 +1349,60 @@ async def expire_old_autopilot_plans(
         p.status = "expired"
     await db.commit()
     return len(plans)
+
+
+# ── Cart provenance ──────────────────────────────────────────────────────────
+
+
+async def upsert_cart_provenance(
+    db: AsyncSession,
+    user_id: int,
+    sku: str,
+    kind: str,
+    detail: str = "",
+    via_autopilot: bool = False,
+) -> None:
+    stmt = sqlite_insert(CartProvenance).values(
+        user_id=user_id,
+        sku=sku,
+        kind=kind,
+        detail=detail,
+        via_autopilot=via_autopilot,
+        added_at=_utcnow(),
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["user_id", "sku", "kind", "detail"],
+        set_={"via_autopilot": stmt.excluded.via_autopilot, "added_at": stmt.excluded.added_at},
+    )
+    await db.execute(stmt)
+    await db.commit()
+
+
+async def get_cart_provenance(
+    db: AsyncSession, user_id: int, skus: list[str]
+) -> dict[str, list[CartProvenance]]:
+    """Stored origins per SKU, most-recently-added first within each SKU."""
+    skus = [s for s in skus if s]
+    if not skus:
+        return {}
+    result = await db.execute(
+        select(CartProvenance)
+        .where(CartProvenance.user_id == user_id, CartProvenance.sku.in_(skus))
+        .order_by(CartProvenance.added_at.desc())
+    )
+    by_sku: dict[str, list[CartProvenance]] = {}
+    for row in result.scalars().all():
+        by_sku.setdefault(row.sku, []).append(row)
+    return by_sku
+
+
+async def clear_cart_provenance(db: AsyncSession, user_id: int, sku: str) -> None:
+    await db.execute(
+        delete(CartProvenance).where(CartProvenance.user_id == user_id, CartProvenance.sku == sku)
+    )
+    await db.commit()
+
+
+async def clear_all_cart_provenance(db: AsyncSession, user_id: int) -> None:
+    await db.execute(delete(CartProvenance).where(CartProvenance.user_id == user_id))
+    await db.commit()

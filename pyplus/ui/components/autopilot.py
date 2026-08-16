@@ -461,6 +461,12 @@ async def _render_draft(plan, result, session, user_id: int, body, settings=None
     plan._sub_display = getattr(settings, "autopilot_sub_display", 5)
     plan._product_cache = product_cache
 
+    order_map: dict = {}
+    if getattr(settings, "category_order", "alpha") == "plus":
+        from pyplus.services.categories import get_category_order_map
+
+        order_map = await get_category_order_map()
+
     _render_infobox()
 
     # Refreshable draft content — avoids full page reload on every change
@@ -513,7 +519,14 @@ async def _render_draft(plan, result, session, user_id: int, body, settings=None
                 _render_promo_section(section_items, plan, result, _draft_content)
             else:
                 _render_section_card(
-                    t(section_title_key), icon, section_items, cat_map, plan, result, _draft_content
+                    t(section_title_key),
+                    icon,
+                    section_items,
+                    cat_map,
+                    plan,
+                    result,
+                    _draft_content,
+                    order_map,
                 )
 
     _draft_content()
@@ -651,19 +664,28 @@ def _render_action_bar_top(plan, result, session, user_id: int, settings, refres
             if clear_cart:
                 await session.cart_service.clear_all()
 
+            kind_map = {
+                "menu": "menu",
+                "staple": "staple",
+                "promo": "promotion",
+                "filler": "filler",
+            }
             cart_snapshot = []
             for item in result.items:
                 if item.needs_review:
                     continue
                 if item.is_optional:
                     continue
+                kind = kind_map.get((item.source or "").split(":")[-1], "menu")
                 ok = await session.cart_service.add(
                     item.sku,
                     item.qty,
                     product_name=item.name,
                     product_price=item.price,
                     product_image=item.image_url,
-                    source=item.source,
+                    source=kind,
+                    detail=item.context,
+                    via_autopilot=True,
                     check_stock=False,
                 )
                 if ok:
@@ -910,7 +932,14 @@ def _stat_pill(icon: str, text: str, bg: str = "var(--c-bg)", fg: str = "var(--c
 
 
 def _render_section_card(
-    title: str, icon: str, items: list, cat_map: dict, plan, result, refresh_fn
+    title: str,
+    icon: str,
+    items: list,
+    cat_map: dict,
+    plan,
+    result,
+    refresh_fn,
+    order_map: dict | None = None,
 ) -> None:
     n_items = sum(i.qty for i in items)
     total = sum(i.price * i.qty for i in items)
@@ -935,7 +964,7 @@ def _render_section_card(
             cat = cat_map.get(item.sku, "Overig")
             buckets.setdefault(cat, []).append(item)
 
-        ordered = group_order(list(buckets))
+        ordered = group_order(list(buckets), order_map)
         content = ui.element("div").style(
             "padding:.25rem .625rem .625rem;display:none;animation:sp-ap-expand .2s var(--ease)"
         )

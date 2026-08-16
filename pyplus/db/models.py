@@ -381,6 +381,19 @@ class PromotionsCache(Base):
     fetched_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=_utcnow)
 
 
+class MenuCategoryOrderCache(Base):
+    """PLUS's own top-level menu category order (Menu → Producten) — global,
+    not store- or user-scoped. Always exactly one row."""
+
+    __tablename__ = "menu_category_order_cache"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # JSON list of {"name": str, "sort_order": float, "slug": str} for the
+    # top-level categories only (only what group_order() needs).
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    fetched_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=_utcnow)
+
+
 class MlArtifact(Base):
     """Precomputed ML outputs — written by background jobs, read at open time."""
 
@@ -418,6 +431,27 @@ class AutopilotPlan(Base):
     cart_snapshot_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=_utcnow)
     confirmed_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+
+
+# ── Cart provenance ────────────────────────────────────────────────────────────
+
+
+class CartProvenance(Base):
+    """Why a SKU is in the cart — persisted so origin labels survive a cart
+    refresh (PLUS's own cart API never returns this; it's PyPLUS-only)."""
+
+    __tablename__ = "cart_provenance"
+    __table_args__ = (
+        UniqueConstraint("user_id", "sku", "kind", "detail", name="uq_cart_provenance"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    sku: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    detail: Mapped[str] = mapped_column(String(300), default="")
+    via_autopilot: Mapped[bool] = mapped_column(Boolean, default=False)
+    added_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=_utcnow)
 
 
 # ── Weather cache ─────────────────────────────────────────────────────────────

@@ -25,6 +25,7 @@ the internal `screenservices` endpoints reverse-engineered from the PLUS.nl web 
    - [Order History — Detail](#67-order-history--detail)
    - [Purchase History (Ever Bought)](#68-purchase-history-ever-bought)
    - [Product Search / Catalogue](#69-product-search--catalogue)
+   - [Menu Categories (Product Group Order)](#610-menu-categories-product-group-order)
 7. [Response Models](#7-response-models)
 8. [Store Identifiers](#8-store-identifiers)
 9. [Error Handling](#9-error-handling)
@@ -593,6 +594,63 @@ Each product (inside `PLP_Str`): `SKU`, `Brand`, `Name`, `Product_Subtitle`, `Sl
 
 ---
 
+### 6.10 Menu Categories (Product Group Order)
+
+```
+POST https://www.plus.nl/screenservices/ECP_Product_CW/Categories/CategoryList_TF/DataActionGetMenuCategories
+```
+
+Returns PLUS's own category taxonomy — the same order shown when expanding Menu → Producten on
+plus.nl. Fires automatically on a plain `https://www.plus.nl/` homepage load; no menu interaction
+is needed to trigger it. Global data — not store- or user-scoped, the taxonomy and `SortOrder` are
+identical for every shopper — so it does not need per-store refresh like product/promotion data.
+
+**viewName:** `MainFlow.Home`
+
+**Key screenData.variables:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `UserPreferredStoreId` | string | yes | Internal store record ID (`user_store_id`) |
+| `OneWelcomeUserId` | string (UUID) | yes | User identity |
+| `ParentsListLocal` | object | yes | `{ "List": [], "EmptyListItem": <category schema> }` |
+| `CategoriesListLocal` | object | yes | `{ "List": [], "EmptyListItem": { "ImgHasError": false, "ShowImage": false, "IntervalID": 0, "Category": <category schema> } }` |
+| `Screen_Categories` | object | yes | `{ "List": [], "EmptyListItem": { "Category": <category schema> } }` |
+| `Screen_AncestorRecList` | object | yes | `{ "List": [], "EmptyListItem": { "Name": "", "Slug": "", "Order": 0 } }` |
+| `IsDataPrepared` / `IsExpanded` / `IsPageSearch` | boolean | yes | `false` |
+| `OriginalCategoryId` / `CategoryId` / `ParentId` / `TimeoutId` | integer | yes | `0` |
+| `Category1` / `Category2` / `Category3` / `CategoryName` | string | yes | `""` |
+| `PromoImgURL` / `B2BExcludedCategories` | string | yes | `""` (verified live — a blank `PromoImgURL` still returns full, correct data) |
+| `ApplyShowMoreOption` | boolean | yes | `false` |
+
+The `<category schema>` `EmptyListItem` shape: `{ "Name": "", "ExternalId": 0, "ImageURL": "", "ImageLabel": "", "HasChild": false, "ParentName": "", "ParentExternalId": 0, "SortOrder": "0", "Slug": "", "IsSeasonal": false }`.
+
+**Response:**
+- `data.CategoriesJson` — a **JSON string** (not a nested object), decode with `json.loads` first.
+  Each entry is `{"Category_str": {...}}` wrapping the fields below (~589 categories).
+
+Per-category fields: `Name`, `ExternalId`, `ParentName`, `ParentExternalId` (both **absent** — not
+`null` — for top-level categories), `SortOrder` (float; absent for the synthetic "Aanbiedingen"
+entry, which is always first in the real menu), `HasChild`, `Slug`, `ImageURL`, `ImageLabel`,
+`IsSeasonal` (present in the schema but empirically never populated — seasonal categories like
+"BBQ assortiment" aren't flagged, they just appear/reorder/disappear via `SortOrder` changes over
+time, which is why any consumer of this data should treat it as a periodically-refreshed cache, not
+a static snapshot).
+
+Top-level categories (entries with no `ParentExternalId` key), sorted by `SortOrder`, reproduce
+PLUS's real Menu → Producten order exactly (verified against the live site):
+
+```
+Aanbiedingen, BBQ assortiment, Aardappelen/groente/fruit, Verse kant-en-klaarmaaltijden,
+Vlees/kip/vis/vega, Kaas/vleeswaren/tapas, Zuivel/eieren/boter, Brood/gebak/bakproducten,
+Ontbijtgranen/broodbeleg/tussendoor, Frisdrank/sappen/koffie/thee, Wijn/bier/sterke drank,
+Pasta/rijst/internationale keuken, Soepen/conserven/sauzen/smaakmakers,
+Snoep/koek/chocolade/chips/noten, Diepvries, Baby/drogisterij, Bewuste voeding, Huishouden,
+Wonen/bloemen/service, Huisdier
+```
+
+---
+
 ## 7. Response Models
 
 ### Checkout (cart write/read responses)
@@ -686,3 +744,7 @@ Playwright page.
   verbatim in `LocalPromotionList.EmptyListItem`. See `plus/client.py` for the exact constant.
 - **Product search page size is server-controlled.** The `NumberOfProductsPerPage` field in the
   search payload is ignored; the server fixes the page at 12 items.
+- **Menu category order isn't stable long-term.** `SortOrder` values (§6.10) shift as PLUS adds,
+  removes, or reorders categories (e.g. seasonal ones like "BBQ assortiment") — there's no flag
+  distinguishing seasonal from permanent categories, so this data must be refreshed periodically
+  rather than cached indefinitely or hardcoded.

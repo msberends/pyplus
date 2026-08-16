@@ -75,7 +75,7 @@ async def create_cart_page() -> None:
 
 
 async def _maybe_show_autopilot_banner(user_id: int, session) -> None:
-    has_autopilot = any(it.source and "autopilot:" in it.source for it in session.cart.items)
+    has_autopilot = any(o.via_autopilot for it in session.cart.items for o in it.origins)
     if not has_autopilot:
         return
 

@@ -39,11 +39,8 @@ _STRINGS: dict[str, str] = {
     "cart.origin.menu": "Weekmenu",
     "cart.origin.staple": "Vaste boodschap",
     "cart.origin.promotion": "Aanbieding",
-    "cart.origin.search": "Gezocht",
-    "cart.origin.autopilot:menu": "Autopilot · Weekmenu",
-    "cart.origin.autopilot:staple": "Autopilot · Vast",
-    "cart.origin.autopilot:promo": "Autopilot · Actie",
-    "cart.origin.autopilot:filler": "Autopilot · Bezorging",
+    "cart.origin.search": "Handmatig toegevoegd",
+    "cart.origin.filler": "Aangevuld",
     "cart.origin.other": "Overig",
     # ── Promos page ───────────────────────────────────────────────────────────
     "promos.section.delivery": "Gratis bezorging",

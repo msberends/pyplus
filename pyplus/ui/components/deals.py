@@ -405,6 +405,7 @@ def _render_promo_stepper(
                     product_price=price,
                     product_image=promo.image_url,
                     source="promotion",
+                    detail=promo.label,
                 )
             )
 
@@ -516,6 +517,7 @@ def _render_child_stepper(
                     product_price=p.price_new or p.price_original,
                     product_image=p.image_url,
                     source="promotion",
+                    detail=p.label,
                 )
             )
 

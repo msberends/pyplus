@@ -39,6 +39,9 @@ class SessionState:
     search_api_version: str = (
         ""  # from ProductLists/PLP_Content/DataActionGetProductListAndCategoryInfo
     )
+    category_tree_api_version: str = (
+        ""  # from Categories/CategoryList_TF/DataActionGetMenuCategories
+    )
     line_item_ids: dict = field(default_factory=dict)  # SKU → LineItemId
     checkout_id: str = ""
     checkout_version: int = 0
@@ -96,6 +99,12 @@ class SessionState:
         return {
             "moduleVersion": self.module_version,
             "apiVersion": self.search_api_version or self.api_version,
+        }
+
+    def version_info_for_category_tree(self) -> dict:
+        return {
+            "moduleVersion": self.module_version,
+            "apiVersion": self.category_tree_api_version or self.api_version,
         }
 
     def version_info_for_get_cart(self) -> dict:

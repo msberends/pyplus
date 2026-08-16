@@ -816,12 +816,39 @@ body {
 }
 .sp-cart-mobile-search { display: none; }
 
-/* Origin chips — small pills on cart items showing how they were added */
+/* Origin chips — small tags on cart items showing why they're in the cart.
+   Two-line (kind caption + detail, e.g. a dish name) when there's detail to
+   show; single-line pill (--single) for kind-only origins (staple, manual). */
 .sp-origin-chip {
   display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  line-height: 1.15;
+  max-width: 170px;
+}
+.sp-origin-chip__kind {
+  font-size: 8px;
+  font-weight: var(--w-semibold);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  opacity: .7;
+}
+.sp-origin-chip__detail {
+  font-size: 10.5px;
+  font-weight: var(--w-semibold);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sp-origin-chip--single {
+  flex-direction: row;
   align-items: center;
-  padding: 1px 6px;
   border-radius: var(--r-full);
+  padding: 1px 6px;
   font-size: 10px;
   font-weight: var(--w-semibold);
   letter-spacing: .02em;
@@ -832,10 +859,7 @@ body {
 .sp-origin-chip--staple     { background: var(--c-info-tint);    color: var(--c-info-text); }
 .sp-origin-chip--promotion  { background: var(--c-warning-tint); color: var(--c-warning-text); }
 .sp-origin-chip--search     { background: var(--c-surface-2); color: var(--c-text-3); border: 1px solid var(--c-border); }
-.sp-origin-chip--autopilot\\:menu   { background: var(--c-accent-tint);   color: var(--c-accent); }
-.sp-origin-chip--autopilot\\:staple { background: var(--c-accent-tint-2); color: var(--c-accent); }
-.sp-origin-chip--autopilot\\:promo  { background: var(--c-accent-tint-4); color: var(--c-accent); }
-.sp-origin-chip--autopilot\\:filler { background: var(--c-accent-tint-3); color: var(--c-accent); }
+.sp-origin-chip--filler     { background: var(--c-accent-tint-3); color: var(--c-accent); }
 
 /* Cart item row */
 .sp-cart-item {

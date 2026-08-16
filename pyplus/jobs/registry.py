@@ -384,6 +384,59 @@ async def refresh_product_catalogue(*, user_id: int, client, store_number: int) 
         log.error("[catalogue] user=%d FAILED: %s", user_id, exc)
         raise
 
+    # Piggyback on the catalogue sync's already-logged-in client — PLUS's menu
+    # category order is global (not store-scoped), so there's no separate schedule
+    # for it. A failure here must not fail the catalogue job.
+    try:
+        await refresh_menu_categories(user_id=user_id, client=client)
+    except Exception as exc:
+        log.warning("[catalogue] menu category sync failed (non-fatal): %s", exc)
+
+
+async def refresh_menu_categories(*, user_id: int, client, store_number: int = 0) -> None:
+    """
+    Sync PLUS's own top-level menu category order → menu_category_order_cache.
+
+    Global, not store-scoped (store_number accepted-but-unused only so this job
+    fits the shared job_fn(user_id=..., client=..., store_number=...) calling
+    convention). Runs as a step inside refresh_product_catalogue, not on its own
+    schedule — see there.
+    """
+    resource = "menu_categories"
+    if await _is_locked(user_id, resource):
+        return
+
+    t0 = datetime.datetime.now(datetime.UTC)
+    await _set_status(user_id, resource, "in_progress")
+    try:
+        categories = await client.get_menu_categories_api()
+        top_level = sorted(
+            (c for c in categories if c.parent_external_id is None),
+            key=lambda c: c.sort_order,
+        )
+        payload = json.dumps(
+            [{"name": c.name, "sort_order": c.sort_order, "slug": c.slug} for c in top_level]
+        )
+
+        from pyplus.db import repo
+        from pyplus.db.engine import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            await repo.upsert_menu_category_order_cache(db, payload)
+
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(
+            user_id, resource, "ok", f"{len(top_level)} categories", duration_seconds=elapsed
+        )
+        log.info(
+            "[menu_categories] user=%d — %d top-level categories cached", user_id, len(top_level)
+        )
+    except Exception as exc:
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(user_id, resource, "error", str(exc)[:500], duration_seconds=elapsed)
+        log.error("[menu_categories] user=%d FAILED: %s", user_id, exc)
+        raise
+
 
 # ── ML recompute ───────────────────────────────────────────────────────────────
 

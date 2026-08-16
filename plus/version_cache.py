@@ -27,6 +27,7 @@ _KEYS = (
     "order_list_api_version",
     "order_detail_api_version",
     "search_api_version",
+    "category_tree_api_version",
 )
 
 

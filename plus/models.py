@@ -5,6 +5,15 @@ from dataclasses import dataclass, field
 from pydantic import BaseModel, computed_field
 
 
+class CartOrigin(BaseModel):
+    """One reason a SKU is in the cart. A line can carry several (e.g. an
+    ingredient shared by two dishes), one CartOrigin per contribution."""
+
+    kind: str  # "menu" | "staple" | "promotion" | "search" | "filler"
+    detail: str = ""  # dish name / promo title / "" for kinds with no extra detail
+    via_autopilot: bool = False
+
+
 class CartItem(BaseModel):
     product: str
     unit: str  # subtitle, e.g. "Per 650 g"
@@ -14,7 +23,7 @@ class CartItem(BaseModel):
     sku: str = ""
     image_url: str = ""
     line_item_id: str = ""
-    source: str = ""  # "menu" | "staple" | "promotion" | "search"; comma-sep for multi-origin
+    origins: list[CartOrigin] = []  # PyPLUS-only provenance; PLUS never returns this
 
     @computed_field
     @property
@@ -200,3 +209,20 @@ class PromotionResult:
             name = p.name or p.brand
             lines.append(f"    {name:<40} {label}")
         return "\n".join(lines)
+
+
+@dataclass
+class MenuCategory:
+    """A single entry from PLUS's own menu category taxonomy (get_menu_categories_api).
+
+    sort_order is -1.0 when the API omits SortOrder (the synthetic "Aanbiedingen"
+    entry), so it always sorts first — matching its real position in the PLUS menu.
+    """
+
+    name: str
+    external_id: int  # 0 when the API omits ExternalId ("Aanbiedingen")
+    slug: str
+    sort_order: float
+    has_child: bool
+    parent_name: str = ""  # "" for top-level categories
+    parent_external_id: int | None = None  # None for top-level categories

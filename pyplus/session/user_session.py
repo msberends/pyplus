@@ -118,6 +118,14 @@ class UserSession:
     async def refresh_cart(self):
         """Fetch latest cart from PLUS and notify all listeners."""
         cart = await self.client.get_cart_api()
+        try:
+            from pyplus.db.engine import AsyncSessionLocal
+            from pyplus.services.cart import enrich_cart_with_provenance
+
+            async with AsyncSessionLocal() as db:
+                cart = await enrich_cart_with_provenance(db, self.user_id, cart)
+        except Exception:
+            log.debug("Cart provenance enrich failed", exc_info=True)
         self.set_cart(cart)
         return cart
 

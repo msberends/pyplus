@@ -341,6 +341,10 @@ async def _do_login_core(
             store_number = user.store_number or 0
             display_name = user.display_name or email.split("@")[0]
 
+            from pyplus.services.cart import enrich_cart_with_provenance
+
+            cart = await enrich_cart_with_provenance(db, user_id, cart)
+
             # Load the user's saved preferences so all lanes can read them.
             from pyplus.ml.interface import UserSettings
 

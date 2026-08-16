@@ -31,6 +31,30 @@ def test_group_order_alpha_with_overig_last():
     assert order == ["appels", "Brood", "Zuivel", OVERIG]
 
 
+def test_group_order_with_order_map_all_known():
+    order_map = {"Zuivel": 0.05, "Brood": 0.06, "Aardappelen": 0.01}
+    order = group_order(["Zuivel", "Brood", "Aardappelen"], order_map)
+    assert order == ["Aardappelen", "Zuivel", "Brood"]
+
+
+def test_group_order_with_order_map_unknown_falls_back_alpha_after_known():
+    order_map = {"Zuivel": 0.05, "Brood": 0.06}
+    order = group_order(["Zuivel", "Onbekende groep", "Brood", "Andere groep"], order_map)
+    # known categories first (by SortOrder), unknown ones after (alphabetical)
+    assert order == ["Zuivel", "Brood", "Andere groep", "Onbekende groep"]
+
+
+def test_group_order_with_order_map_overig_still_last():
+    order_map = {"Zuivel": 0.05}
+    order = group_order(["Zuivel", OVERIG], order_map)
+    assert order == ["Zuivel", OVERIG]
+
+
+def test_group_order_empty_order_map_behaves_like_alpha():
+    order = group_order(["Zuivel", "Brood", "Aardappelen"], {})
+    assert order == ["Aardappelen", "Brood", "Zuivel"]
+
+
 def _item(sku, product, price_total):
     return SimpleNamespace(sku=sku, product=product, price_total=price_total)
 

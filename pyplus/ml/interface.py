@@ -159,8 +159,9 @@ class UserSettings(BaseModel):
     sub_max_results: int = 12
 
     # ── Cart & staples organisation ────────────────────────────────────────────
-    cart_group_by_category: bool = False  # group cart items under category headers
-    cart_sort: str = "cart"  # cart | name | price
+    cart_grouping: str = "none"  # none | category | origin
+    cart_sort: str = "cart"  # cart | name | price | recent
     staples_group_by_category: bool = False  # group staples under category headers
     staples_sort: str = "smart"  # smart | name | price
     deals_group_by_category: bool = False  # group promotions under category headers
+    category_order: str = "alpha"  # alpha | plus — top-level category header order

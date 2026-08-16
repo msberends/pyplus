@@ -96,6 +96,32 @@ async def create_staples_lane(session) -> None:
                     )
                     addall_holder = ui.element("div")
 
+                    def _update_sort_btn() -> None:
+                        grouped = session.settings.staples_group_by_category
+                        sort_btn.set_text(
+                            "Alfabetisch sorteren" if grouped else "Groeperen per categorie"
+                        )
+                        sort_btn.icon = "sym_r_sort_by_alpha" if grouped else "sym_r_category"
+
+                    async def _toggle_grouping() -> None:
+                        prefs = session.settings
+                        prefs.staples_group_by_category = not prefs.staples_group_by_category
+                        async with AsyncSessionLocal() as db:
+                            await repo.save_user_settings_json(
+                                db, session.user_id, prefs.model_dump_json()
+                            )
+                        session.set_settings(prefs)
+                        _update_sort_btn()
+                        _body.refresh()
+
+                    sort_btn = (
+                        ui.button(icon="sym_r_category")
+                        .props("flat dense no-caps color=primary size=sm")
+                        .style("font-size:11px;font-weight:600")
+                    )
+                    sort_btn.on("click", lambda: asyncio.ensure_future(_toggle_grouping()))
+                    _update_sort_btn()
+
         body = ui.element("div").classes("sp-lane-body sp-staples-body")
 
         @ui.refreshable
@@ -123,6 +149,11 @@ async def create_staples_lane(session) -> None:
                 load_error = "Vaste boodschappen konden niet worden geladen."
 
             prefs = session.settings
+            order_map: dict = {}
+            if prefs.staples_group_by_category and prefs.category_order == "plus":
+                from pyplus.services.categories import get_category_order_map
+
+                order_map = await get_category_order_map()
             replenish_scores = await _load_replenish(session) if prefs.show_replenish_hints else {}
 
             # Promotions this item may be part of (cache-only, no PLUS call).
@@ -238,7 +269,7 @@ async def create_staples_lane(session) -> None:
                     buckets: dict = {}
                     for fp in sorted_products:
                         buckets.setdefault(top_category(_cats(fp)), []).append(fp)
-                    for cat in group_order(list(buckets)):
+                    for cat in group_order(list(buckets), order_map):
                         ui.label(cat).classes("sp-cat-header")
                         with ui.element("div").classes("sp-staples-grid"):
                             for fp in buckets[cat]:

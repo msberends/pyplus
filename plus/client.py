@@ -21,6 +21,7 @@ from .api import SessionState
 from .models import (
     Cart,
     CartItem,
+    MenuCategory,
     OrderDetail,
     OrderLineItem,
     OrderSummary,
@@ -456,6 +457,12 @@ class PlusClient:
                             and not self._session.search_api_version
                         ):
                             self._session.search_api_version = av
+                            version_cache.save_from_session(self._session)
+                        if (
+                            "DataActionGetMenuCategories" in url
+                            and not self._session.category_tree_api_version
+                        ):
+                            self._session.category_tree_api_version = av
                             version_cache.save_from_session(self._session)
                     # Capture the real browser PLP request body once — the ground
                     # truth for verifying our hand-built search payload.
@@ -979,6 +986,132 @@ class PlusClient:
             )
 
         return _parse_promotion_products(result["data"])
+
+    async def get_menu_categories_api(self) -> list["MenuCategory"]:
+        """
+        Fetch PLUS's own menu category taxonomy (Menu → Producten), including
+        the SortOrder that reproduces PLUS's real menu order.
+
+        Global data — not store- or user-scoped, PLUS's taxonomy is identical
+        for every shopper. This is the same request that fires automatically
+        on a plain https://www.plus.nl/ homepage load.
+        """
+        import time as _time
+
+        if not self._session.category_tree_api_version:
+            print("[*] category-tree apiVersion onbekend — navigeer naar plus.nl…")
+            await self._page.goto("https://www.plus.nl/")
+            await self._page.wait_for_load_state("networkidle", timeout=25_000)
+            await asyncio.sleep(0)
+
+        empty_category = {
+            "Name": "",
+            "ExternalId": 0,
+            "ImageURL": "",
+            "ImageLabel": "",
+            "HasChild": False,
+            "ParentName": "",
+            "ParentExternalId": 0,
+            "SortOrder": "0",
+            "Slug": "",
+            "IsSeasonal": False,
+        }
+        payload = {
+            "versionInfo": self._session.version_info_for_category_tree(),
+            "viewName": "MainFlow.Home",
+            "screenData": {
+                "variables": {
+                    "ParentsListLocal": {"List": [], "EmptyListItem": empty_category},
+                    "CategoriesListLocal": {
+                        "List": [],
+                        "EmptyListItem": {
+                            "ImgHasError": False,
+                            "ShowImage": False,
+                            "IntervalID": 0,
+                            "Category": empty_category,
+                        },
+                    },
+                    "IsDataPrepared": False,
+                    "IsExpanded": False,
+                    "OriginalCategoryId": 0,
+                    "UserPreferredStoreId": self._session.user_store_id,
+                    "Category1": "",
+                    "Category2": "",
+                    "Category3": "",
+                    "PromoImgURL": "",
+                    "B2BExcludedCategories": "",
+                    "TimeoutId": 0,
+                    "Screen_Categories": {
+                        "List": [],
+                        "EmptyListItem": {"Category": empty_category},
+                    },
+                    "Screen_AncestorRecList": {
+                        "List": [],
+                        "EmptyListItem": {"Name": "", "Slug": "", "Order": 0},
+                    },
+                    "CategoryId": 0,
+                    "_categoryIdInDataFetchStatus": 1,
+                    "CategoryName": "",
+                    "_categoryNameInDataFetchStatus": 1,
+                    "ParentId": 0,
+                    "_parentIdInDataFetchStatus": 1,
+                    "ApplyShowMoreOption": False,
+                    "_applyShowMoreOptionInDataFetchStatus": 1,
+                    "OneWelcomeUserId": self._session.onewelcome_user_id,
+                    "_oneWelcomeUserIdInDataFetchStatus": 1,
+                    "IsPageSearch": False,
+                    "_isPageSearchInDataFetchStatus": 1,
+                }
+            },
+        }
+
+        t0 = _time.perf_counter()
+        result = await self._page.evaluate(
+            """async (payload) => {
+                const cookieMap = {};
+                document.cookie.split('; ').forEach(c => {
+                    const eq = c.indexOf('=');
+                    if (eq > 0) cookieMap[c.slice(0, eq)] = c.slice(eq + 1);
+                });
+                const nr2 = decodeURIComponent(cookieMap['nr2Users'] || '');
+                const crfField = nr2.split(';').find(p => p.trim().startsWith('crf=')) || '';
+                const csrfToken = crfField.slice(crfField.indexOf('=') + 1);
+
+                const resp = await fetch(
+                    'https://www.plus.nl/screenservices/ECP_Product_CW/Categories' +
+                    '/CategoryList_TF/DataActionGetMenuCategories',
+                    {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'x-csrftoken': csrfToken,
+                            'outsystems-locale': 'nl-NL'
+                        },
+                        body: JSON.stringify(payload),
+                        credentials: 'include'
+                    }
+                );
+                if (!resp.ok) {
+                    const body = await resp.text().catch(() => '');
+                    throw new Error('HTTP ' + resp.status + ' — ' + body.slice(0, 300));
+                }
+                return await resp.json();
+            }""",
+            payload,
+        )
+        elapsed = _time.perf_counter() - t0
+        log.debug("[API] DataActionGetMenuCategories → 200 in %.0fms", elapsed * 1000)
+
+        vi = result.get("versionInfo", {})
+        if vi.get("hasApiVersionChanged"):
+            self._session.category_tree_api_version = ""
+            version_cache.save_from_session(self._session)
+            raise RuntimeError(
+                "PLUS.nl heeft een nieuwe versie uitgerold (hasApiVersionChanged). "
+                "Cache gewist — herstart de sessie om opnieuw te primen."
+            )
+
+        return _parse_menu_categories(result["data"])
 
     async def get_order_list_api(self, offset: int = 0) -> list["OrderSummary"]:
         """
@@ -2112,6 +2245,31 @@ def _parse_promotion_result(data: dict) -> "PromotionResult":
         is_next_week_published=data.get("IsNextWeekPublished", False),
         promotions=promotions,
     )
+
+
+def _parse_menu_categories(data: dict) -> list["MenuCategory"]:
+    import json as _json
+
+    raw = _json.loads(data.get("CategoriesJson", "[]"))
+    categories: list[MenuCategory] = []
+    for entry in raw:
+        c = entry.get("Category_str", entry)
+        sort_order = c.get("SortOrder")
+        parent_external_id = c.get("ParentExternalId")
+        categories.append(
+            MenuCategory(
+                name=c.get("Name", ""),
+                external_id=int(c.get("ExternalId") or 0),
+                slug=c.get("Slug", ""),
+                sort_order=float(sort_order) if sort_order not in (None, "") else -1.0,
+                has_child=bool(c.get("HasChild", False)),
+                parent_name=c.get("ParentName", "") or "",
+                parent_external_id=(
+                    int(parent_external_id) if parent_external_id is not None else None
+                ),
+            )
+        )
+    return categories
 
 
 def _parse_search_results(data: dict, store_number: int = 0) -> list["Product"]:

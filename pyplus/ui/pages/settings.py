@@ -73,15 +73,22 @@ async def create_settings_page() -> None:
                 "display:grid;grid-template-columns:repeat(auto-fit,minmax(min(380px,100%),1fr));"
                 "gap:1rem;align-items:start"
             ):
-                # ── Left column ────────────────────────────────────────────
+                # Card order, left column then right, is chosen for a non-technical
+                # user rather than a developer: on narrow screens the grid collapses
+                # to one column and stacks the left column fully above the right
+                # one, so that concatenated order is the real reading order most
+                # people (on their phone, mid-shop) will see. Everyday, frequently-
+                # touched preferences go first; smart/automation features next
+                # (still core to the app, just opt-in); niche external integrations
+                # and diagnostics — push notifications, calendar subscription, the
+                # Home Assistant API key — go dead last, since a common user will
+                # rarely if ever open them.
+
+                # ── Left column — everyday shopping preferences ─────────────
                 with ui.element("div").style("display:flex;flex-direction:column;gap:1rem"):
                     _section_card(
                         t("settings.account.title"),
                         lambda: _render_account(session, user, user_id),
-                    )
-                    _section_card(
-                        t("settings.api.title"),
-                        lambda: _render_api_key(user, user_id),
                     )
                     _section_card("Weergave & gedrag", lambda: _render_behaviour(settings, _save))
                     _section_card(
@@ -92,13 +99,8 @@ async def create_settings_page() -> None:
                         t("settings.substitute.title"),
                         lambda: _render_substitutes(settings, _save),
                     )
-                    _section_card(t("settings.ntfy.title"), lambda: _render_ntfy(settings, _save))
-                    _section_card(
-                        "Agenda-abonnement",
-                        lambda: _render_ical(settings, user_id, session, _save),
-                    )
 
-                # ── Right column ───────────────────────────────────────────
+                # ── Right column — smart features, then niche/technical last ──
                 with ui.element("div").style("display:flex;flex-direction:column;gap:1rem"):
                     _section_card_autopilot(
                         t("settings.ml.autopilot"),
@@ -119,6 +121,15 @@ async def create_settings_page() -> None:
                     _section_card(
                         "Gegevens & synchronisatie",
                         lambda: _render_sync_status(session, user_id, sync_states, next_runs),
+                    )
+                    _section_card(t("settings.ntfy.title"), lambda: _render_ntfy(settings, _save))
+                    _section_card(
+                        "Agenda-abonnement",
+                        lambda: _render_ical(settings, user_id, session, _save),
+                    )
+                    _section_card(
+                        t("settings.api.title"),
+                        lambda: _render_api_key(user, user_id),
                     )
 
             _licence_link = (
@@ -458,51 +469,101 @@ def _render_variety_control(settings: UserSettings, save_fn) -> None:
 
 
 _CART_SORT_OPTS = {
-    "cart": "Winkelwagen-volgorde",
+    "cart": "Toevoegvolgorde",
+    "name": "Naam (A–Z)",
+    "price": "Prijs (hoog–laag)",
+    "recent": "Recent toegevoegd",
+}
+_CART_GROUPING_OPTS = {
+    "none": "Niet groeperen",
+    "category": "Per categorie",
+    "origin": "Per herkomst",
+}
+_STAPLES_SORT_OPTS = {
+    "smart": "Slim (bijna op eerst)",
     "name": "Naam (A–Z)",
     "price": "Prijs (hoog–laag)",
 }
-_STAPLES_SORT_OPTS = {
-    "smart": "Slim (binnenkort op)",
-    "name": "Naam (A–Z)",
-    "price": "Prijs (hoog–laag)",
+# Shared by every "groeperen per categorie" toggle below — one select widget,
+# same two options, everywhere. Keeps the widget type consistent with cart's
+# 3-way grouping select instead of mixing in switches for the 2-way cases.
+_GROUP_BY_CATEGORY_OPTS = {
+    False: "Niet groeperen",
+    True: "Per categorie",
+}
+_CATEGORY_ORDER_OPTS = {
+    "alpha": "Alfabetisch (A–Z)",
+    "plus": "Zoals PLUS ze indeelt",
 }
 
 
 def _render_organisation(settings: UserSettings, save_fn) -> None:
-    """Grouping + sorting for the cart and staples lanes."""
-    ui.label("Bepaal hoe je winkelwagen en vaste boodschappen geordend zijn.").style(
-        "font-size:12px;color:var(--c-text-3);margin-bottom:.25rem;display:block"
-    )
+    """Grouping + sorting for the cart, staples and deals lanes."""
+    ui.label(
+        "Voor elke lijst apart: wel of niet groeperen onder categorie-kopjes, en de "
+        "sortering. Groepeer je ergens op categorie, dan bepaalt de instelling "
+        "hieronder in welke volgorde die kopjes staan."
+    ).style("font-size:12px;color:var(--c-text-3);margin-bottom:.5rem;display:block")
+
+    with ui.element("div").style(
+        "background:var(--c-bg);border:1px solid var(--c-border);border-radius:8px;"
+        "padding:.5rem .625rem;margin-bottom:.75rem"
+    ):
+        _select_setting(
+            settings,
+            "category_order",
+            "Volgorde van categorie-kopjes",
+            "Geldt overal waar ‘Per categorie’ is gekozen: winkelwagen, vaste "
+            "boodschappen, aanbiedingen en autopilot.",
+            _CATEGORY_ORDER_OPTS,
+            save_fn,
+        )
 
     _subhead = "font-size:11px;font-weight:700;color:var(--c-text-4);letter-spacing:.06em;text-transform:uppercase;margin-top:.625rem;display:block"
 
     ui.label("Winkelwagen").style(_subhead)
-    _toggle_setting(
+    _select_setting(
         settings,
-        "cart_group_by_category",
-        "Groeperen per categorie",
-        "Toon de winkelwagen onder kopjes per productgroep.",
+        "cart_grouping",
+        "Groeperen",
+        "Toon de winkelwagen onder kopjes per productgroep of herkomst.",
+        _CART_GROUPING_OPTS,
         save_fn,
     )
-    _select_setting(settings, "cart_sort", "Sortering", "", _CART_SORT_OPTS, save_fn)
+    _select_setting(
+        settings,
+        "cart_sort",
+        "Sorteren",
+        "Volgorde van producten binnen (of zonder) groepering.",
+        _CART_SORT_OPTS,
+        save_fn,
+    )
 
     ui.label("Vaste boodschappen").style(_subhead)
-    _toggle_setting(
+    _select_setting(
         settings,
         "staples_group_by_category",
-        "Groeperen per categorie",
+        "Groeperen",
         "Toon vaste boodschappen onder kopjes per productgroep.",
+        _GROUP_BY_CATEGORY_OPTS,
         save_fn,
     )
-    _select_setting(settings, "staples_sort", "Sortering", "", _STAPLES_SORT_OPTS, save_fn)
+    _select_setting(
+        settings,
+        "staples_sort",
+        "Sorteren",
+        "‘Slim’ zet boodschappen die binnenkort op zijn bovenaan.",
+        _STAPLES_SORT_OPTS,
+        save_fn,
+    )
 
     ui.label("Aanbiedingen").style(_subhead)
-    _toggle_setting(
+    _select_setting(
         settings,
         "deals_group_by_category",
-        "Groeperen per categorie",
-        "Toon aanbiedingen onder kopjes per productgroep (zoals PLUS ze indeelt).",
+        "Groeperen",
+        "Toon aanbiedingen onder kopjes per productgroep.",
+        _GROUP_BY_CATEGORY_OPTS,
         save_fn,
     )
 

@@ -1428,12 +1428,18 @@ async def _confirm_add(session, agg: AggResult, overrides: set[str], dlg) -> Non
     for line in agg.lines:
         qty = line.packs_to_add(overrides)
         if qty > 0:
-            await cart_service.add(
-                line.sku,
-                qty,
-                product_name=line.display_name,
-                product_unit=line.pack_unit or "",
-                product_price=line.pack_price or 0.0,
-                product_image="",
-                source="menu",
-            )
+            dish_names = list(dict.fromkeys(line.dish_names)) or [""]
+            for i, dish_name in enumerate(dish_names):
+                # The pack quantity is added once per line; the rest of the
+                # dish names are merged in as extra origins (delta 0).
+                await cart_service.add(
+                    line.sku,
+                    qty if i == 0 else 0,
+                    product_name=line.display_name,
+                    product_unit=line.pack_unit or "",
+                    product_price=line.pack_price or 0.0,
+                    product_image="",
+                    source="menu",
+                    detail=dish_name,
+                    check_stock=i == 0,
+                )
