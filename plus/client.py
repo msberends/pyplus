@@ -336,6 +336,9 @@ class PlusClient:
 
         # Cart primed by _parse_cart_response; consumed once by get_cart_api()
         self._primed_cart: Optional["Cart"] = None
+        # Raw checkout dict from the most recent cart-mutating response — used by
+        # prime_add_api() to hand back the result of its real add-to-cart click.
+        self._last_checkout: Optional[dict] = None
         # Task handle for the DataActionGetCartById parse — awaited in get_session_state()
         self._cart_parse_task: Optional[asyncio.Task] = None
         # Ground-truth search request body captured from the real browser PLP call.
@@ -553,6 +556,7 @@ class PlusClient:
                     )
                 self._update_line_item_ids(checkout)
                 self._primed_cart = _parse_cart_from_checkout(checkout)
+                self._last_checkout = checkout
         except Exception:
             log.debug("[cart-parse] exception", exc_info=True)
 
@@ -612,8 +616,19 @@ class PlusClient:
         no button clicks; just one HTTP round-trip (~200ms).
 
         Requires the page to currently be on a plus.nl domain (same-origin).
+        If cart_add_api_version is unknown (fresh session, or wiped after a
+        PLUS redeploy), primes it first via prime_add_api() — same recovery
+        pattern as remove_from_cart_api()/prime_remove_api().
         """
         import time
+
+        if not self._session.cart_add_api_version:
+            log.info("[*] add apiVersion onbekend — prime_add_api() uitvoeren…")
+            primed_checkout = await self.prime_add_api(sku)
+            if primed_checkout is not None:
+                quantity -= 1  # prime_add_api() already added 1 real unit of this SKU
+            if quantity <= 0:
+                return primed_checkout
 
         payload = {
             "versionInfo": self._session.version_info_for_add(),
@@ -1760,6 +1775,39 @@ class PlusClient:
                 }
             },
         }
+
+    async def prime_add_api(self, sku: str) -> dict | None:
+        """
+        Navigate to the search results for `sku` and click the real add-to-cart
+        button once. This captures cart_add_api_version (from the intercepted
+        request) — the only way to relearn it after PLUS deploys a new version,
+        since our own direct-fetch calls carry whatever (now-stale) version we
+        already have, and PLUS's error response gives no hint of the correct one.
+
+        Adds 1 real unit of `sku` to the cart as a side effect (mirrors
+        prime_remove_api removing 1). Returns the raw checkout dict captured
+        from the response (via _parse_cart_response), or None if priming failed.
+        """
+        search_url = f"https://www.plus.nl/zoekresultaten?SearchTerm={sku}"
+        await self._page.goto(search_url)
+        try:
+            await self._page.wait_for_selector("button.gtm-add-to-cart", timeout=15_000)
+        except Exception:
+            log.warning("prime_add_api: add-to-cart knop niet gevonden voor SKU %s", sku)
+            return None
+
+        await self._decline_cookies_if_present()
+        await self._page.wait_for_load_state("networkidle", timeout=8_000)
+
+        self._last_checkout = None
+        await self._page.evaluate("document.querySelector('button.gtm-add-to-cart')?.click()")
+
+        # Poll until _on_request captures the version (max 5 s)
+        deadline = asyncio.get_event_loop().time() + 5
+        while not self._session.cart_add_api_version and asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(0.2)
+
+        return self._last_checkout
 
     async def prime_remove_api(self) -> bool:
         """

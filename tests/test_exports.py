@@ -159,6 +159,9 @@ async def test_ical_includes_ingredients_when_enabled():
     ing.display_name = "Spaghetti"
     ing.amount = 500
     ing.amount_unit = "g"
+    ing.sku = None
+    ing.pack_size = None
+    ing.pack_unit = None
 
     settings_json = '{"ical_include_ingredients": true}'
 
@@ -175,10 +178,14 @@ async def test_ical_includes_ingredients_when_enabled():
             patch(
                 "pyplus.services.exports.repo.get_ingredients", new_callable=AsyncMock
             ) as mock_ing,
+            patch(
+                "pyplus.services.exports.repo.get_ingredient_skus_by_skus", new_callable=AsyncMock
+            ) as mock_skus,
         ):
             mock_wm.return_value = [row]
             mock_set.return_value = settings_json
             mock_ing.return_value = [ing]
+            mock_skus.return_value = {}
             ical_bytes = await build_ical(user_id=1, week_start=monday)
 
     cal = Calendar.from_ical(ical_bytes)
@@ -346,7 +353,14 @@ def test_format_ingredient_line():
     from pyplus.services.exports import _format_ingredient_line
 
     def ing(name, amount, unit):
-        return SimpleNamespace(display_name=name, amount=amount, amount_unit=unit)
+        return SimpleNamespace(
+            display_name=name,
+            amount=amount,
+            amount_unit=unit,
+            sku=None,
+            pack_size=None,
+            pack_unit=None,
+        )
 
     # Countable: drop the "1", use "Nx" otherwise
     assert _format_ingredient_line(ing("Melkan plakken", 1, "stuks")) == "• Melkan plakken"

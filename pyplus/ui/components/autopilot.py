@@ -1262,8 +1262,8 @@ def _render_optional_row(item, plan, result, refresh_fn) -> None:
     with ui.element("div").classes("sp-ap-optional-row"):
         cb = ui.checkbox(value=False).props("dense color=deep-purple")
 
-        def _toggle(e, it=item):
-            if e.value:
+        def _toggle(e, it=item, cb=cb):
+            if cb.value:
                 it.is_optional = False
                 result.summary.optional_count = max(0, result.summary.optional_count - 1)
                 result.summary.total_items += it.qty

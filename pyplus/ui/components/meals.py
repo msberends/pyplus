@@ -880,8 +880,8 @@ def _show_resolve_dialog(
                             ):
                                 cb = ui.checkbox(value=True).props("dense")
 
-                                def _toggle(e, oid=o.id):
-                                    if e.value:
+                                def _toggle(e, oid=o.id, cb=cb):
+                                    if cb.value:
                                         opt_excluded.discard(oid)
                                     else:
                                         opt_excluded.add(oid)

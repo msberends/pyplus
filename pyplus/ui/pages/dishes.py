@@ -991,10 +991,16 @@ def _render_meta_fields(
 
     with ui.element("div").classes("sp-meta-grid"):
         group_opts = {g: g for g in (all_group_names or [])}
+        group_val = meta.get("group_name") or ""
+        if group_val and group_val not in group_opts:
+            # The dish's own (group) name may not yet exist among other dishes'
+            # persisted group_names (e.g. a brand-new dish) — ui.select rejects
+            # an initial value that isn't in options, so seed it in.
+            group_opts[group_val] = group_val
         group_sel = (
             ui.select(
                 group_opts,
-                value=meta.get("group_name", ""),
+                value=group_val or None,
                 label=t("dishes.group_label"),
                 with_input=True,
                 new_value_mode="add-unique",
@@ -1197,9 +1203,9 @@ def _render_flexible_row(row: _IngRow, idx: int, rows: list, refresh_fn) -> None
                 .style("width:52px;flex-shrink:0")
             )
 
-            def _amount_change(e, r=row):
+            def _amount_change(e, r=row, a=amount_input):
                 try:
-                    r.amount = float((e.value or "").replace(",", "."))
+                    r.amount = float((a.value or "").replace(",", "."))
                 except (ValueError, AttributeError):
                     pass
 
@@ -1210,7 +1216,8 @@ def _render_flexible_row(row: _IngRow, idx: int, rows: list, refresh_fn) -> None
                 .style("width:90px;flex-shrink:0")
             )
             unit_select.on(
-                "update:model-value", lambda e, r=row: setattr(r, "amount_unit", e.value)
+                "update:model-value",
+                lambda e, r=row, s=unit_select: setattr(r, "amount_unit", s.value),
             )
 
             with ui.element("div").style("display:flex;gap:1px;flex-shrink:0;margin-left:auto"):
@@ -1434,9 +1441,9 @@ def _render_ingredient_row(
                 .style("width:52px;flex-shrink:0")
             )
 
-            def _amount_change(e, r=row):
+            def _amount_change(e, r=row, a=amount_input):
                 try:
-                    r.amount = float(e.value.replace(",", "."))
+                    r.amount = float(a.value.replace(",", "."))
                 except (ValueError, AttributeError):
                     pass
 
@@ -1451,7 +1458,7 @@ def _render_ingredient_row(
             opt_check.tooltip(t("dishes.optional_hint"))
             opt_check.on(
                 "update:model-value",
-                lambda e, r=row: setattr(r, "optional", bool(e.value)),
+                lambda e, r=row, cb=opt_check: setattr(r, "optional", bool(cb.value)),
             )
 
             with ui.element("div").style("display:flex;gap:1px;flex-shrink:0;margin-left:auto"):
