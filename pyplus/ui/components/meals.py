@@ -16,7 +16,7 @@ from nicegui import ui
 
 from pyplus.db import repo
 from pyplus.db.engine import AsyncSessionLocal
-from pyplus.db.models import Dish
+from pyplus.db.models import Dish, DishIngredient
 from pyplus.i18n import t
 from pyplus.services.aggregate import AggLine, AggResult, aggregate, fmt_amount
 from pyplus.ui.format import alt_text as _alt
@@ -390,6 +390,12 @@ def _slot_card(slot, day_label, date_str, temp, state, options, session, refresh
                         ).props("flat round dense size=xs color=grey-6").tooltip(
                             t("lane.meals.view_prep")
                         )
+                    ui.button(
+                        icon="sym_r_list_alt",
+                        on_click=lambda d=dish: _show_ingredients(d),
+                    ).props("flat round dense size=xs color=grey-6").tooltip(
+                        t("lane.meals.view_ingredients")
+                    )
                 ui.button(
                     icon="sym_r_add_shopping_cart",
                     on_click=lambda d=dish: asyncio.ensure_future(
@@ -425,6 +431,62 @@ def _show_prep_notes(dish: Dish) -> None:
                 ui.label(dish.prep_notes).style(
                     "font-size:14px;color:var(--c-text-2);white-space:pre-wrap;line-height:1.6"
                 )
+
+
+async def _show_ingredients(dish: Dish) -> None:
+    async with AsyncSessionLocal() as db:
+        ings = await repo.get_ingredients(db, dish.id)
+
+    regular = [i for i in ings if not i.flexible and not i.optional]
+    flexible = [i for i in ings if i.flexible]
+    optional = [i for i in ings if i.optional and not i.flexible]
+
+    def _row(ing: DishIngredient) -> None:
+        with ui.element("div").style(
+            "display:flex;justify-content:space-between;align-items:baseline;gap:.75rem;"
+            "padding:.25rem 0"
+        ):
+            ui.label(ing.display_name).style("font-size:14px;color:var(--c-text)")
+            ui.label(fmt_amount(ing.amount, ing.amount_unit)).style(
+                "font-size:13px;color:var(--c-text-3);flex-shrink:0;white-space:nowrap"
+            )
+
+    is_first_section = True
+
+    def _section(title: str, rows: list[DishIngredient]) -> None:
+        nonlocal is_first_section
+        if not rows:
+            return
+        top_margin = "0" if is_first_section else ".75rem"
+        is_first_section = False
+        ui.label(title).style(
+            "font-size:11px;font-weight:700;color:var(--c-text-3);letter-spacing:.06em;"
+            f"text-transform:uppercase;margin:{top_margin} 0 .1rem"
+        )
+        for ing in rows:
+            _row(ing)
+
+    with ui.dialog(value=True) as dlg:
+        with ui.card().style("max-width:440px;width:100%;padding:0;overflow:hidden"):
+            with ui.element("div").style(
+                "display:flex;align-items:center;justify-content:space-between;"
+                "padding:.875rem 1rem .625rem;border-bottom:1px solid var(--c-border)"
+            ):
+                ui.label(dish.name).style(
+                    "font-size:16px;font-weight:700;color:var(--c-text);letter-spacing:-.2px"
+                )
+                ui.button(icon="sym_r_close", on_click=dlg.close).props(
+                    "flat round dense size=sm color=grey"
+                )
+            with ui.element("div").style("padding:1rem;max-height:62vh;overflow-y:auto"):
+                if not ings:
+                    ui.label(t("dishes.no_ingredients")).style(
+                        "font-size:14px;color:var(--c-text-3)"
+                    )
+                else:
+                    _section(t("dishes.ingredients"), regular)
+                    _section(t("autopilot.section.flexible"), flexible)
+                    _section(t("autopilot.section.optional"), optional)
 
 
 # ── Slot mutations ─────────────────────────────────────────────────────────────
