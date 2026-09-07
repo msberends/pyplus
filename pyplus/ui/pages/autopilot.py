@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import logging
 
 from nicegui import app, ui
@@ -9,7 +10,14 @@ from nicegui import app, ui
 log = logging.getLogger(__name__)
 
 
-async def create_autopilot_page() -> None:
+async def create_autopilot_page(week: str = "") -> None:
+    week_start: datetime.date | None = None
+    if week:
+        try:
+            week_start = datetime.date.fromisoformat(week)
+        except ValueError:
+            week_start = None
+
     user_id = app.storage.user.get("user_id")
     from pyplus.session import manager
 
@@ -32,7 +40,7 @@ async def create_autopilot_page() -> None:
             try:
                 from pyplus.ui.components.autopilot import create_autopilot_lane
 
-                await create_autopilot_lane(session)
+                await create_autopilot_lane(session, week_start=week_start)
             except Exception as exc:
                 log.error("Autopilot lane crashed: %s", exc)
                 from pyplus.i18n import t

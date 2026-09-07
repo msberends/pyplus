@@ -122,7 +122,14 @@ class AutopilotResult:
         return cls(items=items, summary=summary, menu_assignments=assignments)
 
 
-async def prepare_menu_only(user_id: int, *, store_number: int = 0) -> dict[str, int]:
+def _default_week_start() -> datetime.date:
+    today = datetime.date.today()
+    return today + datetime.timedelta(days=(7 - today.weekday()))
+
+
+async def prepare_menu_only(
+    user_id: int, *, store_number: int = 0, week_start: datetime.date | None = None
+) -> dict[str, int]:
     """Run only the ML weekmenu step and return slot -> dish_id assignments."""
     from pyplus.db import repo
     from pyplus.db.engine import AsyncSessionLocal
@@ -141,11 +148,10 @@ async def prepare_menu_only(user_id: int, *, store_number: int = 0) -> dict[str,
     except Exception:
         settings = UserSettings()
 
-    today = datetime.date.today()
-    next_monday = today + datetime.timedelta(days=(7 - today.weekday()))
+    week_start = week_start or _default_week_start()
 
     async with AsyncSessionLocal() as db:
-        wm_rows = await repo.get_weekmenu(db, user_id, next_monday)
+        wm_rows = await repo.get_weekmenu(db, user_id, week_start)
         all_dishes = await repo.get_all_dish_ingredients_for_user(db, user_id)
 
     current_slots: dict[str, int | None] = {}
@@ -160,7 +166,7 @@ async def prepare_menu_only(user_id: int, *, store_number: int = 0) -> dict[str,
             n_dinner = settings.ml_autopilot_max_dinner if settings.ml_autopilot_dinner else 0
             n_lunch = settings.ml_autopilot_max_lunch if settings.ml_autopilot_lunch else 0
             dish_ids = list(all_dishes.keys())
-            weather_temps = await _load_weather_temps(user_id, settings, next_monday)
+            weather_temps = await _load_weather_temps(user_id, settings, week_start)
 
             new_assignments = plan_week(
                 artifact,
@@ -176,7 +182,11 @@ async def prepare_menu_only(user_id: int, *, store_number: int = 0) -> dict[str,
 
 
 async def prepare_plan(
-    user_id: int, *, store_number: int = 0, fixed_menu: dict[str, int] | None = None
+    user_id: int,
+    *,
+    store_number: int = 0,
+    fixed_menu: dict[str, int] | None = None,
+    week_start: datetime.date | None = None,
 ) -> AutopilotResult:
     from pyplus.db import repo
     from pyplus.db.engine import AsyncSessionLocal
@@ -220,7 +230,7 @@ async def prepare_plan(
 
     # ── 1. Plan week menu ─────────────────────────────────────────────────
     menu_assignments = await _fill_weekmenu(
-        user_id, store, settings, _add, override_assignments=fixed_menu
+        user_id, store, settings, _add, override_assignments=fixed_menu, week_start=week_start
     )
 
     # ── 2. Top up staples ─────────────────────────────────────────────────
@@ -252,15 +262,14 @@ async def _fill_weekmenu(
     settings: UserSettings,
     add_fn,
     override_assignments: dict[str, int] | None = None,
+    week_start: datetime.date | None = None,
 ) -> dict[str, int]:
     from pyplus.db import repo
     from pyplus.db.engine import AsyncSessionLocal
     from pyplus.ml.artifacts import load_artifact, recompute_recommender
     from pyplus.ml.recommender import RecommenderArtifact, plan_week
 
-    today = datetime.date.today()
-    next_monday = today + datetime.timedelta(days=(7 - today.weekday()))
-    week_start = next_monday
+    week_start = week_start or _default_week_start()
 
     async with AsyncSessionLocal() as db:
         all_dishes = await repo.get_all_dish_ingredients_for_user(db, user_id)

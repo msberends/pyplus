@@ -373,7 +373,7 @@ _STRINGS: dict[str, str] = {
     ),
     # ── Autopilot page ─────────────────────────────────────────────────────────
     "autopilot.title": "Autopilot",
-    "autopilot.no_plan": "Er is nog geen boodschappenplan voor de komende week.",
+    "autopilot.no_plan": "Er is nog geen boodschappenplan voor deze periode.",
     "autopilot.no_plan_hint": "Schakel Autopilot in bij Instellingen en genereer een plan.",
     "autopilot.no_plan_hint_generate": "Genereer een nieuw plan door op de knop te drukken.",
     "autopilot.generate": "Plan genereren",
@@ -405,7 +405,7 @@ _STRINGS: dict[str, str] = {
     "autopilot.status_rolled_back": "Teruggedraaid",
     "autopilot.not_enabled": "Schakel eerst Autopilot in bij Instellingen → Autopilot.",
     "autopilot.no_ml": "Schakel eerst Slimme suggesties in bij Instellingen.",
-    "autopilot.infobox": "Dit is je geplande boodschappenlijst voor de komende week. Controleer de producten, keur vervangingen goed en voeg alles in één keer toe aan je PLUS-winkelwagen.",
+    "autopilot.infobox": "Dit is je geplande boodschappenlijst. Controleer de producten, keur vervangingen goed en voeg alles in één keer toe aan je PLUS-winkelwagen.",
     "autopilot.review_hint": "Kies een alternatief of verwijder",
     "autopilot.pick_alternative": "Kies een alternatief",
     "autopilot.accept": "Kiezen",
@@ -423,7 +423,7 @@ _STRINGS: dict[str, str] = {
     "autopilot.flex_change": "Wijzigen",
     "autopilot.flex_pending": "{n} flexibele ingrediënten in te vullen",
     "autopilot.flex_pending_one": "1 flexibel ingrediënt in te vullen",
-    "autopilot.menu_preview_info": "Hieronder staan de voorgestelde gerechten voor de komende week. Pas ze aan of laat dagen leeg als je niet thuis bent. Druk op Akkoord om het volledige plan samen te stellen.",
+    "autopilot.menu_preview_info": "Hieronder staan de voorgestelde gerechten. Pas ze aan of laat dagen leeg als je niet thuis bent. Druk op Akkoord om het volledige plan samen te stellen.",
     "autopilot.menu_preview_confirm": "Akkoord",
     "autopilot.menu_preview_cancel": "Annuleren",
     # ── Autopilot settings ───────────────────────────────────────────────────

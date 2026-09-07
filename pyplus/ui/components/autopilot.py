@@ -132,6 +132,43 @@ def _eur(amount: float) -> str:
     return f"€ {amount:.2f}".replace(".", ",")
 
 
+# ── Week selection ───────────────────────────────────────────────────────────
+
+
+def _default_week_start() -> datetime.date:
+    """Autopilot's default week: the upcoming one, since a plan is meant to be
+    prepared ahead of time. Overridable via the header's week selector."""
+    today = datetime.date.today()
+    return today + datetime.timedelta(days=(7 - today.weekday()))
+
+
+def _week_title(week_start: datetime.date) -> str:
+    today = datetime.date.today()
+    this_monday = today - datetime.timedelta(days=today.weekday())
+    diff = (week_start - this_monday).days // 7
+    if diff == 0:
+        return "Deze week"
+    if diff == -1:
+        return "Vorige week"
+    if diff == 1:
+        return "Komende week"
+    return _format_week_range(week_start)
+
+
+def _format_week_range(week_start: datetime.date) -> str:
+    week_end = week_start + datetime.timedelta(days=6)
+    wn = week_start.isocalendar()[1]
+    ms = _MONTHS_NL[week_start.month]
+    if week_start.month == week_end.month:
+        return f"Week {wn} · {week_start.day}–{week_end.day} {ms}"
+    me = _MONTHS_NL[week_end.month]
+    return f"Week {wn} · {week_start.day} {ms}–{week_end.day} {me}"
+
+
+def _autopilot_url(week_start: datetime.date) -> str:
+    return f"/autopilot?week={week_start.isoformat()}"
+
+
 _SOURCE_SECTIONS = [
     ("autopilot:menu", "autopilot.section.weekmenu", "sym_r_calendar_month"),
     ("autopilot:staple", "autopilot.section.staples", "sym_r_shopping_basket"),
@@ -143,12 +180,13 @@ _SOURCE_SECTIONS = [
 # ── Public entry point ──────────────────────────────────────────────────────
 
 
-async def create_autopilot_lane(session) -> None:
+async def create_autopilot_lane(session, week_start: datetime.date | None = None) -> None:
     from pyplus.db import repo
     from pyplus.db.engine import AsyncSessionLocal
     from pyplus.ml.interface import UserSettings
 
     user_id = session.user_id
+    week_start = week_start or _default_week_start()
 
     async with AsyncSessionLocal() as db:
         settings_json = await repo.get_user_settings_json(db, user_id)
@@ -159,9 +197,29 @@ async def create_autopilot_lane(session) -> None:
 
     with ui.element("div").classes("sp-lane"):
         with ui.element("div").classes("sp-lane-header"):
-            with ui.element("div").style("display:flex;align-items:center;gap:.5rem"):
-                ui.icon(_ICON, size="24px").style("color:var(--c-accent)")
-                ui.label(t("autopilot.title")).classes("sp-lane-title")
+            with ui.element("div").style(
+                "display:flex;align-items:center;justify-content:space-between;gap:.5rem"
+            ):
+                with ui.element("div").style("display:flex;align-items:center;gap:.5rem"):
+                    ui.icon(_ICON, size="24px").style("color:var(--c-accent)")
+                    ui.label(_week_title(week_start)).classes("sp-lane-title")
+                with ui.element("div").style("display:flex;align-items:center;gap:0px"):
+                    ui.button(
+                        icon="sym_r_chevron_left",
+                        on_click=lambda: ui.navigate.to(
+                            _autopilot_url(week_start - datetime.timedelta(weeks=1))
+                        ),
+                    ).props("flat round dense size=sm color=grey-6")
+                    ui.label(_format_week_range(week_start)).style(
+                        "font-size:11px;color:var(--c-text-3);font-weight:500;"
+                        "white-space:nowrap;min-width:130px;text-align:center"
+                    )
+                    ui.button(
+                        icon="sym_r_chevron_right",
+                        on_click=lambda: ui.navigate.to(
+                            _autopilot_url(week_start + datetime.timedelta(weeks=1))
+                        ),
+                    ).props("flat round dense size=sm color=grey-6")
 
         with ui.element("div").classes("sp-lane-body") as body:
             if not settings.ml_enabled:
@@ -171,7 +229,7 @@ async def create_autopilot_lane(session) -> None:
                 _render_disabled(t("autopilot.not_enabled"))
                 return
 
-            await _render_plan_view(body, session, user_id, settings)
+            await _render_plan_view(body, session, user_id, settings, week_start)
 
 
 # ── Disabled / empty states ─────────────────────────────────────────────────
@@ -189,7 +247,7 @@ def _render_disabled(message: str) -> None:
         ).props("flat size=sm").style("color:var(--c-accent)")
 
 
-def _render_no_plan(session, user_id: int, settings, body) -> None:
+def _render_no_plan(session, user_id: int, settings, body, week_start: datetime.date) -> None:
     with ui.element("div").classes("sp-lane-placeholder"):
         ui.icon(_ICON).classes("sp-lane-placeholder-icon")
         ui.label(t("autopilot.no_plan")).style(
@@ -214,21 +272,21 @@ def _render_no_plan(session, user_id: int, settings, body) -> None:
         from pyplus.db.engine import AsyncSessionLocal
         from pyplus.services.autopilot import AutopilotResult, PlanSummary, prepare_menu_only
 
-        menu = await prepare_menu_only(user_id, store_number=session.store_number)
+        menu = await prepare_menu_only(
+            user_id, store_number=session.store_number, week_start=week_start
+        )
         preview = AutopilotResult(items=[], summary=PlanSummary(), menu_assignments=menu)
 
-        today = datetime.date.today()
-        next_monday = today + datetime.timedelta(days=(7 - today.weekday()))
         async with AsyncSessionLocal() as db:
             await repo.upsert_autopilot_plan(
                 db,
                 user_id,
-                next_monday,
+                week_start,
                 preview.to_json(),
                 status="menu_preview",
             )
 
-        ui.navigate.to("/autopilot")
+        ui.navigate.to(_autopilot_url(week_start))
 
     ui.button(
         t("autopilot.generate"),
@@ -242,19 +300,17 @@ def _render_no_plan(session, user_id: int, settings, body) -> None:
 # ── Plan view router ────────────────────────────────────────────────────────
 
 
-async def _render_plan_view(body, session, user_id: int, settings) -> None:
+async def _render_plan_view(
+    body, session, user_id: int, settings, week_start: datetime.date
+) -> None:
     from pyplus.db import repo
     from pyplus.db.engine import AsyncSessionLocal
-
-    today = datetime.date.today()
-    next_monday = today + datetime.timedelta(days=(7 - today.weekday()))
-    week_start = next_monday
 
     async with AsyncSessionLocal() as db:
         plan = await repo.get_autopilot_plan(db, user_id, week_start)
 
     if plan is None or plan.status == "expired":
-        _render_no_plan(session, user_id, settings, body)
+        _render_no_plan(session, user_id, settings, body, week_start)
         return
 
     from pyplus.services.autopilot import AutopilotResult
@@ -262,7 +318,7 @@ async def _render_plan_view(body, session, user_id: int, settings) -> None:
     try:
         result = AutopilotResult.from_json(plan.plan_json)
     except Exception:
-        _render_no_plan(session, user_id, settings, body)
+        _render_no_plan(session, user_id, settings, body, week_start)
         return
 
     if plan.status == "menu_preview":
@@ -273,14 +329,14 @@ async def _render_plan_view(body, session, user_id: int, settings) -> None:
         if session.cart.total_items == 0:
             async with AsyncSessionLocal() as db:
                 await repo.update_autopilot_plan_status(db, plan.id, "expired")
-            _render_no_plan(session, user_id, settings, body)
+            _render_no_plan(session, user_id, settings, body, week_start)
             return
         _render_confirmed(plan, result, session, user_id, body)
         return
 
     if plan.status == "rolled_back":
         _render_status_badge(t("autopilot.status_rolled_back"), "var(--c-text-3)")
-        _render_no_plan(session, user_id, settings, body)
+        _render_no_plan(session, user_id, settings, body, week_start)
         return
 
     # ── Draft plan — full review UI ──────────────────────────────────
@@ -337,8 +393,7 @@ async def _render_menu_preview(plan, result, session, user_id: int, settings, bo
         _WEEKEND_SLOTS,
     )
 
-    today = datetime.date.today()
-    next_monday = today + datetime.timedelta(days=(7 - today.weekday()))
+    week_start = plan.week_start
 
     async with AsyncSessionLocal() as db:
         user_dishes = await repo.get_dishes(db, user_id)
@@ -377,20 +432,20 @@ async def _render_menu_preview(plan, result, session, user_id: int, settings, bo
 
         fixed = {s: d for s, d in confirmed_menu.items() if d is not None}
         full_result = await prepare_plan(
-            user_id, store_number=session.store_number, fixed_menu=fixed
+            user_id, store_number=session.store_number, fixed_menu=fixed, week_start=week_start
         )
 
         async with AsyncSessionLocal() as db:
             await repo.upsert_autopilot_plan(
-                db, user_id, next_monday, full_result.to_json(), status="draft"
+                db, user_id, week_start, full_result.to_json(), status="draft"
             )
 
-        ui.navigate.to("/autopilot")
+        ui.navigate.to(_autopilot_url(week_start))
 
     async def _cancel_preview() -> None:
         async with AsyncSessionLocal() as db:
             await repo.update_autopilot_plan_status(db, plan.id, "expired")
-        ui.navigate.to("/autopilot")
+        ui.navigate.to(_autopilot_url(week_start))
 
     # ── Slot rows inside a single card (matches draft weekmenu overview density)
     _dinner_slots = _DINNER_SLOTS + _WEEKEND_SLOTS
@@ -406,16 +461,14 @@ async def _render_menu_preview(plan, result, session, user_id: int, settings, bo
         )
         with ui.element("div").style("display:flex;flex-direction:column;gap:.25rem"):
             for slot in _dinner_slots:
-                _render_slot_row(slot, next_monday, options, confirmed_menu, _PICKER_OPTION_SLOT)
+                _render_slot_row(slot, week_start, options, confirmed_menu, _PICKER_OPTION_SLOT)
 
         has_extras = any(confirmed_menu.get(s) for s in _EXTRA_SLOTS)
         if has_extras:
             ui.element("div").style("height:.375rem")
             for slot in _EXTRA_SLOTS:
                 if confirmed_menu.get(slot):
-                    _render_slot_row(
-                        slot, next_monday, options, confirmed_menu, _PICKER_OPTION_SLOT
-                    )
+                    _render_slot_row(slot, week_start, options, confirmed_menu, _PICKER_OPTION_SLOT)
 
     # ── Action bar ──────────────────────────────────────────────────
     with ui.element("div").style("display:flex;flex-wrap:wrap;gap:.5rem;align-items:center"):
@@ -480,7 +533,7 @@ async def _render_draft(plan, result, session, user_id: int, body, settings=None
 
                 async with AsyncSessionLocal() as db:
                     await repo.update_autopilot_plan_status(db, plan.id, "expired")
-                ui.navigate.to("/autopilot")
+                ui.navigate.to(_autopilot_url(plan.week_start))
 
             asyncio.ensure_future(_expire())
             return
@@ -490,7 +543,7 @@ async def _render_draft(plan, result, session, user_id: int, body, settings=None
 
         menu_items = [i for i in result.items if "autopilot:menu" in (i.source or "")]
         if menu_items:
-            _render_weekmenu_overview(menu_items)
+            _render_weekmenu_overview(menu_items, plan.week_start)
 
         flex_items = [i for i in result.items if i.is_flexible]
         if flex_items:
@@ -586,7 +639,7 @@ _MONTHS_NL = {
 }
 
 
-def _render_weekmenu_overview(menu_items: list) -> None:
+def _render_weekmenu_overview(menu_items: list, week_start: datetime.date) -> None:
     import re
 
     day_dishes: dict[str, set[str]] = {}
@@ -609,9 +662,6 @@ def _render_weekmenu_overview(menu_items: list) -> None:
 
     if not day_dishes and not extra_dishes:
         return
-
-    today = datetime.date.today()
-    week_start = today + datetime.timedelta(days=(7 - today.weekday()))
 
     with ui.element("div").style(
         "display:flex;flex-direction:column;gap:0;padding:.625rem .75rem;"
@@ -695,11 +745,9 @@ def _render_action_bar_top(plan, result, session, user_id: int, settings, refres
             from pyplus.db.engine import AsyncSessionLocal
 
             if result.menu_assignments:
-                today = datetime.date.today()
-                ws = today + datetime.timedelta(days=(7 - today.weekday()))
                 async with AsyncSessionLocal() as db:
                     for slot, dish_id in result.menu_assignments.items():
-                        await repo.set_weekmenu_slot(db, user_id, slot, ws, dish_id)
+                        await repo.set_weekmenu_slot(db, user_id, slot, plan.week_start, dish_id)
                     await db.commit()
 
             async with AsyncSessionLocal() as db:
@@ -722,7 +770,7 @@ def _render_action_bar_top(plan, result, session, user_id: int, settings, refres
                 t("autopilot.confirmed_summary", n=added, cost=f"{cost:.2f}"),
                 type="positive",
             )
-            ui.navigate.to("/autopilot")
+            ui.navigate.to(_autopilot_url(plan.week_start))
 
         def _confirm() -> None:
             n = sum(i.qty for i in result.items if not i.needs_review and not i.is_optional)
@@ -774,18 +822,18 @@ def _render_action_bar_top(plan, result, session, user_id: int, settings, refres
                     prepare_menu_only,
                 )
 
-                menu = await prepare_menu_only(user_id, store_number=session.store_number)
+                menu = await prepare_menu_only(
+                    user_id, store_number=session.store_number, week_start=plan.week_start
+                )
                 preview = AutopilotResult(items=[], summary=PlanSummary(), menu_assignments=menu)
-                today = datetime.date.today()
-                ws = today + datetime.timedelta(days=(7 - today.weekday()))
                 async with AsyncSessionLocal() as db:
                     await repo.upsert_autopilot_plan(
-                        db, user_id, ws, preview.to_json(), status="menu_preview"
+                        db, user_id, plan.week_start, preview.to_json(), status="menu_preview"
                     )
             except Exception:
                 log.exception("Regenerate plan failed")
                 ui.notify(t("autopilot.regenerate_error"), type="negative")
-            ui.run_javascript("window.location.href = '/autopilot'")
+            ui.run_javascript(f"window.location.href = '{_autopilot_url(plan.week_start)}'")
 
         ui.button(
             t("autopilot.regenerate"),
@@ -799,7 +847,7 @@ def _render_action_bar_top(plan, result, session, user_id: int, settings, refres
 
             async with AsyncSessionLocal() as db:
                 await repo.update_autopilot_plan_status(db, plan.id, "expired")
-            ui.navigate.to("/autopilot")
+            ui.navigate.to(_autopilot_url(plan.week_start))
 
         def _delete() -> None:
             _show_confirm_dialog(
@@ -1675,7 +1723,7 @@ def _render_confirmed(plan, result, session, user_id: int, body) -> None:
                 await repo.update_autopilot_plan_status(db, plan.id, "rolled_back")
 
             ui.notify(t("autopilot.rollback_confirm", n=len(snapshot)), type="info")
-            ui.navigate.to("/autopilot")
+            ui.navigate.to(_autopilot_url(plan.week_start))
 
         ui.button(
             t("autopilot.rollback"),

@@ -64,10 +64,10 @@ async def cart_page() -> None:
 
 
 @ui.page("/autopilot")
-async def autopilot_page() -> None:
+async def autopilot_page(week: str = "") -> None:
     from pyplus.ui.pages.autopilot import create_autopilot_page
 
-    await create_autopilot_page()
+    await create_autopilot_page(week)
 
 
 @ui.page("/dishes")
