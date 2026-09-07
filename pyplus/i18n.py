@@ -102,6 +102,8 @@ _STRINGS: dict[str, str] = {
     "cart.clear_confirm_title": "Winkelwagen leegmaken?",
     "cart.clear_confirm_body": "Alle producten worden uit je winkelwagen verwijderd.",
     "cart.clear_failed": "Winkelwagen leegmaken mislukt",
+    "cart.refresh_failed": "Winkelwagen vernieuwen mislukt",
+    "cart.refresh_session_expired": "Sessie met PLUS.nl verlopen — opnieuw uitloggen en inloggen",
     "cart.total": "Totaal",
     "cart.savings": "Korting",
     "cart.savings_from": "door aanbiedingen",

@@ -34,6 +34,12 @@ from .models import (
 
 log = logging.getLogger(__name__)
 
+
+class SessionExpiredError(RuntimeError):
+    """The PLUS session cookie has expired mid-session: an API call that should
+    return JSON got an HTML page back instead (e.g. a login redirect)."""
+
+
 _PROMOTIONS_URL = (
     "https://www.plus.nl/screenservices/ECP_Composition_CW/Promotions"
     "/Promotion_LP_Content_TF_Optimization/DataActionGetPromotionList_Optimization"
@@ -764,34 +770,43 @@ class PlusClient:
         }
 
         t0 = _time.perf_counter()
-        result = await self._page.evaluate(
-            """async (payload) => {
-                const cookieMap = {};
-                document.cookie.split('; ').forEach(c => {
-                    const eq = c.indexOf('=');
-                    if (eq > 0) cookieMap[c.slice(0, eq)] = c.slice(eq + 1);
-                });
-                const nr2 = decodeURIComponent(cookieMap['nr2Users'] || '');
-                const crf = nr2.split(';').find(p => p.trim().startsWith('crf=')) || '';
-                const csrfToken = crf.slice(crf.indexOf('=') + 1);
-                const resp = await fetch(
-                    'https://www.plus.nl/screenservices/ECP_Cart_CW/DataActionGetCartById',
-                    {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'x-csrftoken': csrfToken,
-                            'outsystems-locale': 'nl-NL',
-                        },
-                        body: JSON.stringify(payload),
-                        credentials: 'include',
-                    }
-                );
-                if (!resp.ok) throw new Error('HTTP ' + resp.status);
-                return await resp.json();
-            }""",
-            payload,
-        )
+        try:
+            result = await self._page.evaluate(
+                """async (payload) => {
+                    const cookieMap = {};
+                    document.cookie.split('; ').forEach(c => {
+                        const eq = c.indexOf('=');
+                        if (eq > 0) cookieMap[c.slice(0, eq)] = c.slice(eq + 1);
+                    });
+                    const nr2 = decodeURIComponent(cookieMap['nr2Users'] || '');
+                    const crf = nr2.split(';').find(p => p.trim().startsWith('crf=')) || '';
+                    const csrfToken = crf.slice(crf.indexOf('=') + 1);
+                    const resp = await fetch(
+                        'https://www.plus.nl/screenservices/ECP_Cart_CW/DataActionGetCartById',
+                        {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'x-csrftoken': csrfToken,
+                                'outsystems-locale': 'nl-NL',
+                            },
+                            body: JSON.stringify(payload),
+                            credentials: 'include',
+                        }
+                    );
+                    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                    const text = await resp.text();
+                    if (text.trimStart().startsWith('<')) throw new Error('SESSION_EXPIRED');
+                    return JSON.parse(text);
+                }""",
+                payload,
+            )
+        except Exception as exc:
+            if "SESSION_EXPIRED" in str(exc):
+                raise SessionExpiredError(
+                    "PLUS gaf een HTML-pagina terug in plaats van JSON — sessie verlopen"
+                ) from exc
+            raise
         elapsed = _time.perf_counter() - t0
         _log.info("get_cart_api — page.evaluate klaar in %.0f ms", elapsed * 1000)
         log.debug("[API] DataActionGetCartById → 200 in %.0fms", elapsed * 1000)

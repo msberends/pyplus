@@ -116,8 +116,34 @@ class UserSession:
     # ── Cart refresh from PLUS API ─────────────────────────────────────────────
 
     async def refresh_cart(self):
-        """Fetch latest cart from PLUS and notify all listeners."""
-        cart = await self.client.get_cart_api()
+        """Fetch latest cart from PLUS and notify all listeners.
+
+        A stale browser session (PLUS returns an HTML login page instead of
+        JSON) is recovered transparently by re-logging in with the user's
+        stored remember-me credentials and retrying once — the same recovery
+        every background job already performs at the start of its run.
+        """
+        from plus.client import SessionExpiredError
+        from pyplus.i18n import t
+
+        try:
+            cart = await self.client.get_cart_api()
+        except SessionExpiredError:
+            log.warning("PLUS-sessie verlopen voor user=%d — opnieuw inloggen…", self.user_id)
+            if not await self._relogin():
+                self.notify_error(t("cart.refresh_session_expired"))
+                return self.cart
+            try:
+                cart = await self.client.get_cart_api()
+            except Exception as exc:
+                log.warning("Cart-refresh na relogin mislukt voor user=%d: %s", self.user_id, exc)
+                self.notify_error(t("cart.refresh_failed"))
+                return self.cart
+        except Exception as exc:
+            log.warning("Cart-refresh mislukt voor user=%d: %s", self.user_id, exc)
+            self.notify_error(t("cart.refresh_failed"))
+            return self.cart
+
         try:
             from pyplus.db.engine import AsyncSessionLocal
             from pyplus.services.cart import enrich_cart_with_provenance
@@ -128,6 +154,40 @@ class UserSession:
             log.debug("Cart provenance enrich failed", exc_info=True)
         self.set_cart(cart)
         return cart
+
+    async def _relogin(self) -> bool:
+        """Re-authenticate the existing PlusClient with stored remember-me
+        credentials, mirroring pyplus/jobs/preload.py's job-startup login.
+        Returns False (never raises) when credentials are absent, undecryptable,
+        or login fails, so callers can show a clear inline error instead."""
+        from pyplus.db import repo
+        from pyplus.db.engine import AsyncSessionLocal
+        from pyplus.security.secrets import decrypt
+
+        async with AsyncSessionLocal() as db:
+            creds = await repo.get_credentials(db, self.user_id)
+            user = await repo.get_user_by_id(db, self.user_id)
+        if not creds or not user:
+            log.warning("relogin: user=%d heeft geen opgeslagen inloggegevens", self.user_id)
+            return False
+
+        email = decrypt(user.plus_email_enc)
+        password = decrypt(creds.password_enc)
+        if not email or not password:
+            log.warning(
+                "relogin: inloggegevens voor user=%d konden niet worden ontsleuteld",
+                self.user_id,
+            )
+            return False
+
+        try:
+            ok = await self.client.login(email, password)
+            if ok:
+                await self.client.get_session_state()
+            return ok
+        except Exception:
+            log.warning("relogin mislukt voor user=%d", self.user_id, exc_info=True)
+            return False
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
