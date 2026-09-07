@@ -692,8 +692,8 @@ def create_cart_panel(session) -> None:
                 "display:flex;justify-content:center;gap:.25rem;margin-top:.375rem"
             ):
                 ui.button(
-                    icon="sym_r_list_alt",
-                    on_click=lambda: _download_shopping_list(session),
+                    icon="sym_r_print",
+                    on_click=lambda: _open_shopping_list_html(session),
                 ).props("flat round dense size=sm color=grey-6").tooltip(t("exports.text"))
                 ui.button(
                     icon="sym_r_content_copy",
@@ -1258,12 +1258,21 @@ def create_mobile_cart_bar(session) -> None:
 # ── Export helpers ─────────────────────────────────────────────────────────────
 
 
-def _download_shopping_list(session) -> None:
-    from pyplus.services.exports import build_text_list
+async def _open_shopping_list_html(session) -> None:
+    from pyplus.services.exports import build_html_list
 
-    text = build_text_list(session.cart)
-    ui.download(
-        text.encode("utf-8"), "boodschappenlijst.txt", media_type="text/plain; charset=utf-8"
+    prefs = session.settings
+    document = await build_html_list(
+        session.cart,
+        session.user_id,
+        getattr(session, "store_number", 0) or 0,
+        category_order=prefs.category_order,
+    )
+    await ui.run_javascript(
+        f"""
+        const blob = new Blob([{_json.dumps(document)}], {{type: 'text/html'}});
+        window.open(URL.createObjectURL(blob), '_blank');
+        """
     )
 
 

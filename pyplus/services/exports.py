@@ -4,6 +4,7 @@ Export service — iCal and plain-text shopping list.
 build_ical(user_id, week_start)              → bytes  one-week .ics (download)
 build_ical_multi_week(user_id, week_start)   → bytes  multi-week .ics (subscription)
 build_text_list(cart)                        → str    plain shopping list
+build_html_list(cart, user_id, store_number) → str    printable HTML shopping list
 
 All functions are pure (no UI) and testable without a running app.
 """
@@ -227,3 +228,146 @@ def build_text_list(cart, week_label: str = "") -> str:
     ]
 
     return "\n".join(lines)
+
+
+# ── HTML shopping list ──────────────────────────────────────────────────────────
+
+
+def _eur(value: float) -> str:
+    return f"€ {value:.2f}".replace(".", ",")
+
+
+async def build_html_list(
+    cart,
+    user_id: int,
+    store_number: int,
+    category_order: str = "alpha",
+    week_label: str = "",
+) -> str:
+    """
+    Build a self-contained, printable HTML shopping list from the current PLUS
+    cart: grouped by top-level product category (cache-only lookup, no PLUS
+    call), sorted alphabetically within each group, with unit/weight shown
+    per line. Inline CSS so it can be opened directly in a browser tab and
+    printed with Ctrl+P.
+    """
+    import html as _html
+
+    from pyplus.services.categories import (
+        get_category_index,
+        get_category_order_map,
+        group_order,
+        top_category,
+    )
+
+    skus = [i.sku for i in cart.items if i.sku]
+    cat_by_sku = await get_category_index(store_number, user_id, skus) if skus else {}
+    order_map = await get_category_order_map() if category_order == "plus" else {}
+
+    buckets: dict[str, list] = {}
+    for item in cart.items:
+        buckets.setdefault(top_category(cat_by_sku.get(item.sku, [])), []).append(item)
+    for group_items in buckets.values():
+        group_items.sort(key=lambda i: i.product.lower())
+
+    title = f"Boodschappenlijst — {week_label}" if week_label else "Boodschappenlijst"
+    today = datetime.date.today().strftime("%d-%m-%Y")
+
+    sections: list[str] = []
+    for cat in group_order(list(buckets), order_map or None):
+        rows = "\n".join(
+            f"""        <tr>
+          <td class="qty">{item.quantity}×</td>
+          <td class="name">{_html.escape(item.product)}</td>
+          <td class="unit">{_html.escape(item.unit)}</td>
+          <td class="price">{_eur(item.price_total)}</td>
+        </tr>"""
+            for item in buckets[cat]
+        )
+        sections.append(
+            f'      <h2 class="group">{_html.escape(cat)}</h2>\n'
+            f"      <table>\n        <tbody>\n{rows}\n        </tbody>\n      </table>"
+        )
+
+    savings_row = (
+        f'      <div class="row savings"><span>Korting</span><span>{_eur(cart.savings)}</span></div>'
+        if cart.savings > 0.01
+        else ""
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<title>{_html.escape(title)}</title>
+<style>
+  :root {{ color-scheme: light; }}
+  * {{ box-sizing: border-box; }}
+  body {{
+    margin: 0;
+    padding: 2rem 1rem;
+    background: #f2f4f0;
+    color: #1c1f1c;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }}
+  .sheet {{
+    max-width: 640px;
+    margin: 0 auto;
+    background: #fff;
+    border-radius: 12px;
+    padding: 2rem 2.25rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .08);
+  }}
+  h1 {{
+    margin: 0 0 .125rem;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #007a3d;
+  }}
+  .meta {{
+    margin: 0 0 1.5rem;
+    font-size: .85rem;
+    color: #6b706b;
+  }}
+  h2.group {{
+    font-size: .8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: #4c534c;
+    border-bottom: 1px solid #e2e5e0;
+    margin: 1.5rem 0 .5rem;
+    padding-bottom: .25rem;
+  }}
+  h2.group:first-of-type {{ margin-top: 0; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  td {{ padding: .35rem 0; font-size: .95rem; vertical-align: baseline; }}
+  tbody tr + tr td {{ border-top: 1px solid #f0f1ee; }}
+  td.qty {{ width: 2.75rem; color: #6b706b; font-variant-numeric: tabular-nums; }}
+  td.unit {{ color: #8a8f8a; font-size: .8rem; padding-left: .5rem; white-space: nowrap; }}
+  td.price {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; padding-left: .5rem; }}
+  .totals {{ margin-top: 1.5rem; border-top: 2px solid #1c1f1c; padding-top: .5rem; }}
+  .totals .row {{ display: flex; justify-content: space-between; font-size: .95rem; padding: .15rem 0; }}
+  .totals .row.total {{ font-weight: 700; font-size: 1.05rem; }}
+  .totals .row.savings {{ color: #007a3d; }}
+  .footer-note {{ margin-top: 1.5rem; font-size: .75rem; color: #9a9e9a; text-align: center; }}
+  @media print {{
+    body {{ background: #fff; padding: 0; }}
+    .sheet {{ box-shadow: none; border-radius: 0; max-width: none; padding: 0; }}
+  }}
+</style>
+</head>
+<body>
+  <div class="sheet">
+    <h1>{_html.escape(title)}</h1>
+    <p class="meta">{len(cart.items)} producten · gegenereerd via PyPLUS op {today}</p>
+{chr(10).join(sections)}
+    <div class="totals">
+      <div class="row total"><span>Totaal</span><span>{_eur(cart.final_total)}</span></div>
+{savings_row}
+    </div>
+    <p class="footer-note">PyPLUS</p>
+  </div>
+</body>
+</html>
+"""

@@ -294,7 +294,7 @@ _STRINGS: dict[str, str] = {
     "settings.delete_data": "Mijn data verwijderen",
     # ── Exports ────────────────────────────────────────────────────────────────
     "exports.ical": "Kalender downloaden (.ics)",
-    "exports.text": "Boodschappenlijst downloaden",
+    "exports.text": "Boodschappenlijst printen",
     "exports.copy": "Lijst kopiëren",
     # ── General actions ────────────────────────────────────────────────────────
     "action.save": "Opslaan",
