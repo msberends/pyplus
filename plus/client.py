@@ -625,6 +625,9 @@ class PlusClient:
         If cart_add_api_version is unknown (fresh session, or wiped after a
         PLUS redeploy), primes it first via prime_add_api() — same recovery
         pattern as remove_from_cart_api()/prime_remove_api().
+
+        On a CheckoutVersion conflict (stale optimistic lock), automatically
+        updates the version from the error and retries once.
         """
         import time
 
@@ -636,66 +639,79 @@ class PlusClient:
             if quantity <= 0:
                 return primed_checkout
 
-        payload = {
-            "versionInfo": self._session.version_info_for_add(),
-            "viewName": "MainFlow.SearchPage",
-            "inputParameters": {
-                "IsOrderEditMode": False,
-                "CheckoutId": self._session.checkout_id,
-                "CheckoutVersion": self._session.checkout_version,
-                "OrderEditId": "",
-                "SKU": sku,
-                "QuantityToAdd": quantity,
-                "ChannelId": "1690b994-7511-41cc-a1bc-aacf2726f218",
-                "OneWelcomeUserId": self._session.onewelcome_user_id,
-            },
-        }
+        for attempt in range(2):
+            payload = {
+                "versionInfo": self._session.version_info_for_add(),
+                "viewName": "MainFlow.SearchPage",
+                "inputParameters": {
+                    "IsOrderEditMode": False,
+                    "CheckoutId": self._session.checkout_id,
+                    "CheckoutVersion": self._session.checkout_version,
+                    "OrderEditId": "",
+                    "SKU": sku,
+                    "QuantityToAdd": quantity,
+                    "ChannelId": "1690b994-7511-41cc-a1bc-aacf2726f218",
+                    "OneWelcomeUserId": self._session.onewelcome_user_id,
+                },
+            }
 
-        t0 = time.perf_counter()
-        result = await self._page.evaluate(
-            """async (payload) => {
-                // OutSystems CSRF: extract the 'crf=' field from the nr2Users cookie
-                // and send it as the x-csrftoken header — exactly what OS's own JS does.
-                const cookieMap = {};
-                document.cookie.split('; ').forEach(c => {
-                    const eq = c.indexOf('=');
-                    if (eq > 0) cookieMap[c.slice(0, eq)] = c.slice(eq + 1);
-                });
-                const nr2 = decodeURIComponent(cookieMap['nr2Users'] || '');
-                const crfField = nr2.split(';').find(p => p.trim().startsWith('crf=')) || '';
-                const csrfToken = crfField.slice(crfField.indexOf('=') + 1);
+            t0 = time.perf_counter()
+            result = await self._page.evaluate(
+                """async (payload) => {
+                    const cookieMap = {};
+                    document.cookie.split('; ').forEach(c => {
+                        const eq = c.indexOf('=');
+                        if (eq > 0) cookieMap[c.slice(0, eq)] = c.slice(eq + 1);
+                    });
+                    const nr2 = decodeURIComponent(cookieMap['nr2Users'] || '');
+                    const crfField = nr2.split(';').find(p => p.trim().startsWith('crf=')) || '';
+                    const csrfToken = crfField.slice(crfField.indexOf('=') + 1);
 
-                const resp = await fetch(
-                    'https://www.plus.nl/screenservices/ECP_Cart_CW/ActionCheckoutItem_Add',
-                    {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'x-csrftoken': csrfToken,
-                            'outsystems-locale': 'nl-NL'
-                        },
-                        body: JSON.stringify(payload),
-                        credentials: 'include'
+                    const resp = await fetch(
+                        'https://www.plus.nl/screenservices/ECP_Cart_CW/ActionCheckoutItem_Add',
+                        {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'x-csrftoken': csrfToken,
+                                'outsystems-locale': 'nl-NL'
+                            },
+                            body: JSON.stringify(payload),
+                            credentials: 'include'
+                        }
+                    );
+                    if (!resp.ok) {
+                        const body = await resp.text().catch(() => '');
+                        throw new Error('HTTP ' + resp.status + ' — ' + body.slice(0, 300));
                     }
-                );
-                if (!resp.ok) {
-                    const body = await resp.text().catch(() => '');
-                    throw new Error('HTTP ' + resp.status + ' — ' + body.slice(0, 300));
-                }
-                return await resp.json();
-            }""",
-            payload,
-        )
-        elapsed = time.perf_counter() - t0
-        log.debug("[API] ActionCheckoutItem_Add → 200 in %.0fms", elapsed * 1000)
+                    return await resp.json();
+                }""",
+                payload,
+            )
+            elapsed = time.perf_counter() - t0
+            log.debug("[API] ActionCheckoutItem_Add → 200 in %.0fms", elapsed * 1000)
 
-        data = result.get("data", {})
-        if "Checkout" not in data:
+            data = result.get("data", {})
+            if "Checkout" in data:
+                checkout = data["Checkout"]
+                self._session.checkout_version = checkout["Version"]
+                self._update_line_item_ids(checkout)
+                return checkout
+
+            actual = _extract_actual_version(result)
+            if actual is not None and attempt == 0:
+                log.info(
+                    "[API] CheckoutVersion conflict (sent=%d, actual=%d) — retry",
+                    self._session.checkout_version,
+                    actual,
+                )
+                self._session.checkout_version = actual
+                continue
+
             import json as _json_mod
 
             vi = result.get("versionInfo", {})
             if vi.get("hasApiVersionChanged"):
-                # PLUS.nl deployed — wipe cached versions so next session re-discovers
                 self._session.cart_add_api_version = ""
                 self._session.cart_remove_api_version = ""
                 version_cache.save_from_session(self._session)
@@ -706,10 +722,7 @@ class PlusClient:
             print(f"[API] Unexpected response: {_json_mod.dumps(result)[:500]}")
             raise RuntimeError("Geen 'Checkout' in response — zie debug output hierboven")
 
-        checkout = data["Checkout"]
-        self._session.checkout_version = checkout["Version"]
-        self._update_line_item_ids(checkout)
-        return checkout
+        raise RuntimeError("add_to_cart_api: max retries exhausted")
 
     async def get_cart_api(self) -> "Cart":
         """
@@ -1860,8 +1873,9 @@ class PlusClient:
         Requires cart_remove_api_version and a known LineItemId for this SKU.
         Call prime_remove_api() first if either is missing, or ensure
         add_to_cart_api() was called for this SKU (which populates line_item_ids).
+
+        On a CheckoutVersion conflict, updates the version and retries once.
         """
-        import json as _json
         import time as _time
 
         if not self._session.cart_remove_api_version:
@@ -1875,63 +1889,90 @@ class PlusClient:
                 "Roep prime_remove_api() aan of voeg het item toe via add_to_cart_api()."
             )
 
-        payload = {
-            "versionInfo": self._session.version_info_for_remove(),
-            "viewName": "MainFlow.Cart",
-            "inputParameters": {
-                "IsOrderEditMode": False,
-                "CheckoutId": self._session.checkout_id,
-                "CheckoutVersion": self._session.checkout_version,
-                "OrderEditId": "",
-                "LineItemId": line_item_id,
-                "QuantityToRemove": quantity,
-                "SKU": sku,
-                "ChannelId": "1690b994-7511-41cc-a1bc-aacf2726f218",
-                "OneWelcomeUserId": self._session.onewelcome_user_id,
-            },
-        }
+        for attempt in range(2):
+            payload = {
+                "versionInfo": self._session.version_info_for_remove(),
+                "viewName": "MainFlow.Cart",
+                "inputParameters": {
+                    "IsOrderEditMode": False,
+                    "CheckoutId": self._session.checkout_id,
+                    "CheckoutVersion": self._session.checkout_version,
+                    "OrderEditId": "",
+                    "LineItemId": line_item_id,
+                    "QuantityToRemove": quantity,
+                    "SKU": sku,
+                    "ChannelId": "1690b994-7511-41cc-a1bc-aacf2726f218",
+                    "OneWelcomeUserId": self._session.onewelcome_user_id,
+                },
+            }
 
-        t0 = _time.perf_counter()
-        result = await self._page.evaluate(
-            """async (payload) => {
-                const cookieMap = {};
-                document.cookie.split('; ').forEach(c => {
-                    const eq = c.indexOf('=');
-                    if (eq > 0) cookieMap[c.slice(0, eq)] = c.slice(eq + 1);
-                });
-                const nr2 = decodeURIComponent(cookieMap['nr2Users'] || '');
-                const crfField = nr2.split(';').find(p => p.trim().startsWith('crf=')) || '';
-                const csrfToken = crfField.slice(crfField.indexOf('=') + 1);
+            t0 = _time.perf_counter()
+            result = await self._page.evaluate(
+                """async (payload) => {
+                    const cookieMap = {};
+                    document.cookie.split('; ').forEach(c => {
+                        const eq = c.indexOf('=');
+                        if (eq > 0) cookieMap[c.slice(0, eq)] = c.slice(eq + 1);
+                    });
+                    const nr2 = decodeURIComponent(cookieMap['nr2Users'] || '');
+                    const crfField = nr2.split(';').find(p => p.trim().startsWith('crf=')) || '';
+                    const csrfToken = crfField.slice(crfField.indexOf('=') + 1);
 
-                const resp = await fetch(
-                    'https://www.plus.nl/screenservices/ECP_Cart_CW/ActionCheckoutItem_Remove',
-                    {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'x-csrftoken': csrfToken,
-                            'outsystems-locale': 'nl-NL'
-                        },
-                        body: JSON.stringify(payload),
-                        credentials: 'include'
+                    const resp = await fetch(
+                        'https://www.plus.nl/screenservices/ECP_Cart_CW/ActionCheckoutItem_Remove',
+                        {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'x-csrftoken': csrfToken,
+                                'outsystems-locale': 'nl-NL'
+                            },
+                            body: JSON.stringify(payload),
+                            credentials: 'include'
+                        }
+                    );
+                    if (!resp.ok) {
+                        const body = await resp.text().catch(() => '');
+                        throw new Error('HTTP ' + resp.status + ' — ' + body.slice(0, 300));
                     }
-                );
-                if (!resp.ok) {
-                    const body = await resp.text().catch(() => '');
-                    throw new Error('HTTP ' + resp.status + ' — ' + body.slice(0, 300));
-                }
-                return JSON.stringify(await resp.json());
-            }""",
-            payload,
-        )
-        elapsed = _time.perf_counter() - t0
-        print(f"[API] ActionCheckoutItem_Remove → 200 in {elapsed * 1000:.0f}ms")
+                    return await resp.json();
+                }""",
+                payload,
+            )
+            elapsed = _time.perf_counter() - t0
+            log.debug("[API] ActionCheckoutItem_Remove → 200 in %.0fms", elapsed * 1000)
 
-        data = _json.loads(result)
-        checkout = data["data"]["Checkout"]
-        self._session.checkout_version = checkout["Version"]
-        self._update_line_item_ids(checkout)
-        return checkout
+            data = result.get("data", {})
+            if "Checkout" in data:
+                checkout = data["Checkout"]
+                self._session.checkout_version = checkout["Version"]
+                self._update_line_item_ids(checkout)
+                return checkout
+
+            actual = _extract_actual_version(result)
+            if actual is not None and attempt == 0:
+                log.info(
+                    "[API] CheckoutVersion conflict (sent=%d, actual=%d) — retry",
+                    self._session.checkout_version,
+                    actual,
+                )
+                self._session.checkout_version = actual
+                continue
+
+            import json as _json_mod
+
+            vi = result.get("versionInfo", {})
+            if vi.get("hasApiVersionChanged"):
+                self._session.cart_remove_api_version = ""
+                version_cache.save_from_session(self._session)
+                raise RuntimeError(
+                    "PLUS.nl heeft een nieuwe versie uitgerold (hasApiVersionChanged). "
+                    "Cache gewist — herstart de sessie om opnieuw te primen."
+                )
+            print(f"[API] Unexpected remove response: {_json_mod.dumps(result)[:500]}")
+            raise RuntimeError("Geen 'Checkout' in remove response")
+
+        raise RuntimeError("remove_from_cart_api: max retries exhausted")
 
     async def get_session_state(self) -> SessionState:
         """
@@ -2387,6 +2428,23 @@ def _parse_search_results(data: dict, store_number: int = 0) -> list["Product"]:
             )
         )
     return products
+
+
+def _extract_actual_version(result: dict) -> int | None:
+    """Parse the server's actual CheckoutVersion from a CartUpdateException."""
+    import json as _json
+
+    exc = result.get("exception", {})
+    msg = exc.get("message", "")
+    if "CartUpdateException" not in msg:
+        return None
+    try:
+        inner = _json.loads(msg)
+        emsg = inner.get("ExceptionMessage", "")
+    except (ValueError, TypeError):
+        emsg = msg
+    m = re.search(r"Actual:\s*(\d+)", emsg)
+    return int(m.group(1)) if m else None
 
 
 def _parse_cart_from_checkout(checkout: dict) -> "Cart":

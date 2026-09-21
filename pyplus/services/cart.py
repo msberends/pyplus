@@ -24,6 +24,7 @@ class CartService:
         self._pending: dict[str, int] = {}  # sku → accumulated unsent delta
         self._tasks: dict[str, asyncio.Task] = {}  # sku → active debounce task
         self._snapshots: dict[str, object] = {}  # sku → pre-cycle Cart (for rollback)
+        self._api_lock = asyncio.Lock()  # serialise PLUS API calls (checkout_version)
 
     # ── Public ─────────────────────────────────────────────────────────────────
 
@@ -130,9 +131,15 @@ class CartService:
         self.session.set_cart(Cart(items=[], final_total=0.0, savings=0.0))
 
         try:
-            checkout = None
-            for item in items:
-                checkout = await self.session.client.remove_from_cart_api(item.sku, item.quantity)
+            async with self._api_lock:
+                checkout = None
+                for item in items:
+                    try:
+                        checkout = await self.session.client.remove_from_cart_api(
+                            item.sku, item.quantity
+                        )
+                    except (RuntimeError, ValueError):
+                        log.debug("clear_all: remove sku=%s skipped (already gone)", item.sku)
             if checkout:
                 from plus.client import _parse_cart_from_checkout
 
@@ -211,10 +218,11 @@ class CartService:
         self.session.touch()  # re-render to show sync indicator
 
         try:
-            if delta > 0:
-                checkout = await self.session.client.add_to_cart_api(sku, delta)
-            else:
-                checkout = await self.session.client.remove_from_cart_api(sku, abs(delta))
+            async with self._api_lock:
+                if delta > 0:
+                    checkout = await self.session.client.add_to_cart_api(sku, delta)
+                else:
+                    checkout = await self.session.client.remove_from_cart_api(sku, abs(delta))
 
             # Reconcile with authoritative server response.
             from plus.client import _parse_cart_from_checkout
