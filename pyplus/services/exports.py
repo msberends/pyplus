@@ -34,6 +34,16 @@ def _slot_to_date(slot: str, week_start: datetime.date) -> datetime.date | None:
     return None
 
 
+# Fixed namespace so event UIDs are stable across fetches and restarts.
+_UID_NAMESPACE = uuid.UUID("5b0f3c1e-6d2a-4c7e-9a41-2f8e7d6c5b3a")
+
+
+def _event_uid(user_id: int, week_start: datetime.date, slot: str) -> str:
+    """Stable UID per (user, week, slot): a dish change updates the same event."""
+    key = f"weekmenu:{user_id}:{week_start.isoformat()}:{slot}"
+    return f"{uuid.uuid5(_UID_NAMESPACE, key)}@pyplus"
+
+
 def _make_calendar() -> Calendar:
     cal = Calendar()
     cal.add("prodid", "-//PyPLUS//NL")
@@ -93,7 +103,14 @@ async def _build_events(user_id: int, week_start: datetime.date) -> list[Event]:
         ams = zoneinfo.ZoneInfo("Europe/Amsterdam")
 
         event = Event()
-        event.add("uid", str(uuid.uuid4()) + "@pyplus")
+        # Both UID and DTSTAMP must be identical on every fetch: calendar apps
+        # re-download the subscription when an event is opened, and a changed UID
+        # makes them drop the open event and jump back to the calendar view.
+        event.add("uid", _event_uid(user_id, week_start, row.slot))
+        event.add(
+            "dtstamp",
+            datetime.datetime.combine(week_start, datetime.time(), tzinfo=datetime.UTC),
+        )
         if is_extra:
             event.add("dtstart", event_date)
             event.add("dtend", event_date + datetime.timedelta(days=1))

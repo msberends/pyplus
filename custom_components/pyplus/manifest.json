@@ -1,7 +1,7 @@
 {
   "domain": "pyplus",
   "name": "PyPLUS",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "codeowners": ["@msberends"],
   "config_flow": true,
   "documentation": "https://github.com/msberends/pyplus",

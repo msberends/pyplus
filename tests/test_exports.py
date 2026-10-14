@@ -373,3 +373,32 @@ def test_format_ingredient_line():
     assert _format_ingredient_line(ing("Knoflook", 1, "teen")) == "• 1 teen Knoflook"
     # Empty name → dropped
     assert _format_ingredient_line(ing("", 2, "stuks")) == ""
+
+
+@pytest.mark.asyncio
+async def test_ical_event_identity_is_stable_across_fetches():
+    """Calendar apps close an open event when its UID changes on refresh."""
+    monday = datetime.date(2026, 6, 1)
+    rows = [_weekmenu_row("ma", "Pasta Bolognese", ""), _weekmenu_row("di", "Soep", "")]
+
+    async def fetch(user_id: int) -> dict[str, tuple[str, object]]:
+        with patch("pyplus.services.exports.AsyncSessionLocal") as mock_ctx:
+            mock_db = AsyncMock()
+            mock_ctx.return_value.__aenter__ = AsyncMock(return_value=mock_db)
+            mock_ctx.return_value.__aexit__ = AsyncMock(return_value=False)
+            with patch(
+                "pyplus.services.exports.repo.get_weekmenu", new_callable=AsyncMock
+            ) as mock_wm:
+                mock_wm.return_value = rows
+                cal = Calendar.from_ical(await build_ical(user_id=user_id, week_start=monday))
+        return {
+            str(ev["summary"]): (str(ev["uid"]), ev["dtstamp"].dt)
+            for ev in cal.walk()
+            if ev.name == "VEVENT"
+        }
+
+    first, second = await fetch(1), await fetch(1)
+    assert first == second
+    assert len({uid for uid, _ in first.values()}) == 2  # distinct per slot
+    other_user = await fetch(2)
+    assert first["Soep"][0] != other_user["Soep"][0]  # distinct per user
