@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass, field
 
-from nicegui import app, ui
+from nicegui import app, background_tasks, ui
 
 from pyplus import __version__
 from pyplus.i18n import t
@@ -17,9 +18,36 @@ log = logging.getLogger(__name__)
 _MAX_CONCURRENT_LOGINS = 2
 _login_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_LOGINS)
 
-# Tracks user IDs currently being auto-logged in, so reconnect-driven page
-# reloads don't pile up duplicate Playwright sessions.
-_auto_login_in_progress: set[int] = set()
+# Hard cap on one login attempt. A hung PLUS/Playwright call must never hold the
+# login semaphore or the auto-login slot forever.
+_LOGIN_TIMEOUT_S = 120
+
+
+@dataclass
+class _AutoLoginJob:
+    """A remember-me login running server-side, independent of any browser connection.
+
+    The task's own lifetime is the single source of truth for "in progress": there is
+    no separate marker to clean up, so a page load whose websocket never connects (link
+    previews, prefetch, a phone suspending the tab) cannot leave the user locked out.
+    """
+
+    task: asyncio.Task
+    progress: str = field(default_factory=lambda: t("login.progress_logging_in"))
+
+    @property
+    def running(self) -> bool:
+        return not self.task.done()
+
+    @property
+    def succeeded(self) -> bool:
+        if not self.task.done() or self.task.cancelled() or self.task.exception() is not None:
+            return False
+        return self.task.result() is not None
+
+
+# user_id → the auto-login job for that user (running or just finished).
+_auto_login_jobs: dict[int, _AutoLoginJob] = {}
 
 
 def _render_version_badge() -> None:
@@ -37,30 +65,30 @@ def _mask_email(email: str) -> str:
 # ── Public entry point ─────────────────────────────────────────────────────────
 
 
-def _post_login_destination() -> str:
-    return app.storage.browser.pop("_login_next", "/weekmenu")
-
-
 async def create_login_page() -> None:
     """
     Render the login page. Checks for a warm session or remember-me credentials
     and auto-logs in when possible; otherwise shows the login form.
     """
-    user_id = app.storage.user.get("user_id")
-    auto_login_failed = app.storage.browser.pop("_auto_login_failed", False)
+    # app.storage.browser is read-only once the response is built, so read it now,
+    # never from a timer or callback.
+    destination = app.storage.browser.pop("_login_next", "/weekmenu")
+    app.storage.browser.pop("_auto_login_failed", None)  # legacy flag in old cookies
 
-    # Reuse a still-warm server-side session (e.g. same user, second tab)
-    if user_id and not auto_login_failed:
+    user_id = app.storage.user.get("user_id")
+    if user_id:
         from pyplus.session import manager
 
+        # Reuse a still-warm server-side session (e.g. same user, second tab)
         if manager.get(user_id):
-            ui.navigate.to(_post_login_destination())
+            ui.navigate.to(destination)
             return
 
-        # Another tab/reconnect already started auto-login for this user —
-        # show a waiting screen instead of spawning a second Playwright browser.
-        if user_id in _auto_login_in_progress:
-            _render_auto_login_waiting(user_id)
+        # Join a running auto-login (another tab, a reconnect, or a page load that
+        # never connected) instead of spawning a second Playwright browser.
+        job = _auto_login_jobs.get(user_id)
+        if job is not None and job.running:
+            _render_auto_login(job, user_id, None, destination)
             return
 
         # Try remember-me auto-login
@@ -76,17 +104,40 @@ async def create_login_page() -> None:
             email = secrets.decrypt(user.plus_email_enc)
             password = secrets.decrypt(creds.password_enc)
             if email and password:
-                _render_auto_login(email, password, user.display_name or email, user_id)
+                job = _start_auto_login(user_id, email, password)
+                _render_auto_login(job, user_id, user.display_name or email, destination)
                 return
 
-    _render_login_form()
+    _render_login_form(destination)
 
 
 # ── Auto-login variant (remember-me) ──────────────────────────────────────────
 
 
-def _render_auto_login_waiting(user_id: int) -> None:
-    """Show a waiting screen when auto-login is already in progress on another connection."""
+def _start_auto_login(user_id: int, email: str, password: str) -> _AutoLoginJob:
+    """Start a server-side auto-login for this user, or return the one already running."""
+    job = _auto_login_jobs.get(user_id)
+    if job is not None and job.running:
+        return job
+
+    async def _run() -> int | None:
+        return await _do_login_core(
+            email=email,
+            password=password,
+            remember=True,
+            on_progress=lambda msg: setattr(job, "progress", msg),
+            on_error=lambda _: None,
+        )
+
+    job = _AutoLoginJob(task=background_tasks.create(_run(), name=f"auto_login_{user_id}"))
+    _auto_login_jobs[user_id] = job
+    return job
+
+
+def _render_auto_login(
+    job: _AutoLoginJob, user_id: int, name: str | None, destination: str
+) -> None:
+    """Show auto-login progress and follow the server-side job until it finishes."""
     with ui.element("div").classes("sp-login-bg"):
         _render_version_badge()
         with ui.element("div").classes("sp-login-card"):
@@ -99,74 +150,36 @@ def _render_auto_login_waiting(user_id: int) -> None:
                     ui.icon("sym_r_storefront", size="22px").style("color:white")
                 ui.label("PyPLUS").classes("sp-login-logo-name")
 
-            ui.label("Even geduld…").classes("sp-login-heading")
-            ui.label("Automatisch inloggen is al bezig.").classes("sp-login-subheading")
-
-            with ui.column().classes("sp-login-progress").style("gap:.45rem"):
-                ui.label(t("login.progress_logging_in")).classes("sp-login-progress-label")
-                ui.linear_progress(value=None, size="3px", color="primary").props("indeterminate")
-
-    async def _poll():
-        from pyplus.session import manager
-
-        if manager.get(user_id):
-            ui.navigate.to(_post_login_destination())
-        elif user_id not in _auto_login_in_progress:
-            ui.navigate.to("/login")
-
-    ui.timer(1.0, _poll)
-
-
-def _render_auto_login(email: str, password: str, name: str, user_id: int) -> None:
-    _auto_login_in_progress.add(user_id)
-
-    with ui.element("div").classes("sp-login-bg"):
-        _render_version_badge()
-        with ui.element("div").classes("sp-login-card"):
-            with ui.element("div").classes("sp-login-logo-wrap"):
-                with (
-                    ui.element("div")
-                    .classes("sp-login-logo-mark")
-                    .style("display:flex;align-items:center;justify-content:center")
-                ):
-                    ui.icon("sym_r_storefront", size="22px").style("color:white")
-                ui.label("PyPLUS").classes("sp-login-logo-name")
-
-            ui.label(f"Welkom terug, {name.split()[0] if name else 'je'}!").classes(
-                "sp-login-heading"
-            )
+            heading = f"Welkom terug, {name.split()[0]}!" if name else "Welkom terug!"
+            ui.label(heading).classes("sp-login-heading")
             ui.label("Automatisch inloggen…").classes("sp-login-subheading")
 
             with ui.column().classes("sp-login-progress").style("gap:.45rem"):
-                progress_label = ui.label(t("login.progress_logging_in")).classes(
-                    "sp-login-progress-label"
-                )
+                progress_label = ui.label(job.progress).classes("sp-login-progress-label")
                 ui.linear_progress(value=None, size="3px", color="primary").props("indeterminate")
 
-    async def _run():
-        try:
-            await _do_login_core(
-                email=email,
-                password=password,
-                remember=True,
-                on_progress=lambda msg: progress_label.set_text(msg),
-                on_error=lambda _: (
-                    app.storage.user.clear(),
-                    app.storage.browser.update({"_auto_login_failed": True}),
-                    ui.navigate.to("/login"),
-                ),
-                on_success=lambda: ui.navigate.to(_post_login_destination()),
-            )
-        finally:
-            _auto_login_in_progress.discard(user_id)
+    async def _poll() -> None:
+        progress_label.set_text(job.progress)
+        if job.running:
+            return
+        poll_timer.deactivate()
+        if job.succeeded:
+            ui.navigate.to(destination)
+            return
+        # Failed or timed out: forget the remember-me session for this browser and
+        # show the form. app.storage.user (server-side) is writable at any time.
+        if _auto_login_jobs.get(user_id) is job:
+            del _auto_login_jobs[user_id]
+        app.storage.user.clear()
+        ui.navigate.to("/login")
 
-    ui.timer(0.1, _run, once=True)
+    poll_timer = ui.timer(0.5, _poll)
 
 
 # ── Normal login form ──────────────────────────────────────────────────────────
 
 
-def _render_login_form() -> None:
+def _render_login_form(destination: str) -> None:
     with ui.element("div").classes("sp-login-bg"):
         _render_version_badge()
         with ui.element("div").classes("sp-login-card"):
@@ -234,14 +247,16 @@ def _render_login_form() -> None:
                     submit_btn.enable()
                     ui.notify(msg, type="negative", position="top", timeout=5000)
 
-                await _do_login_core(
+                user_id = await _do_login_core(
                     email=email,
                     password=password,
                     remember=remember,
                     on_progress=lambda msg: progress_label.set_text(msg),
                     on_error=_on_err,
-                    on_success=lambda: ui.navigate.to(_post_login_destination()),
                 )
+                if user_id is not None:
+                    app.storage.user["user_id"] = user_id
+                    ui.navigate.to(destination)
 
             submit_btn = (
                 ui.button(t("login.submit"), on_click=_do_login)
@@ -263,11 +278,12 @@ async def _do_login_core(
     remember: bool,
     on_progress,
     on_error,
-    on_success,
-) -> None:
+) -> int | None:
     """
     Authenticate against PLUS.nl, set up the UserSession, and persist remember-me.
-    on_progress(msg), on_error(msg), on_success() are called as appropriate.
+    Returns the user ID on success; otherwise calls on_error(msg) and returns None.
+    on_progress(msg) reports progress. Never touches browser storage, so it is safe
+    to run outside a page's request (e.g. as a server-side auto-login job).
     """
     from plus.client import PlusClient
     from pyplus.db import repo
@@ -280,7 +296,8 @@ async def _do_login_core(
     client = PlusClient(headless=True)
     try:
         # Throttle concurrent logins — each holds a headless browser for ~20s.
-        async with _login_semaphore:
+        # The timeout (incl. queueing) guarantees a hung attempt always ends.
+        async with asyncio.timeout(_LOGIN_TIMEOUT_S), _login_semaphore:
             await client.__aenter__()
             log.info("Login S1 — OAuth login starten (%s)", _mask_email(email))
             on_progress(t("login.progress_logging_in"))
@@ -288,7 +305,7 @@ async def _do_login_core(
             if not success:
                 await client.__aexit__(None, None, None)
                 on_error(t("login.error_failed"))
-                return
+                return None
 
             log.info("Login S2 — session state ophalen (cart-navigatie)")
             on_progress(t("login.progress_cart"))
@@ -354,14 +371,20 @@ async def _do_login_core(
             except Exception:
                 user_settings = UserSettings()
 
-    except Exception as exc:
-        log.exception("Login error: %s", exc)
+    except BaseException as exc:
+        # BaseException so a cancelled attempt (shutdown) still releases its browser.
+        if isinstance(exc, TimeoutError):
+            log.error("Login timed out after %ds", _LOGIN_TIMEOUT_S)
+        else:
+            log.exception("Login error: %s", exc)
         try:
             await client.__aexit__(None, None, None)
         except Exception:
             pass
+        if not isinstance(exc, Exception):
+            raise
         on_error(t("login.error_failed"))
-        return
+        return None
 
     log.info("Login S6 — sessie registreren (user_id=%d)", user_id)
     session = UserSession(
@@ -373,8 +396,7 @@ async def _do_login_core(
         _settings=user_settings,
     )
     manager.register(session)
-    app.storage.user["user_id"] = user_id
-    log.info("Login S6 done — storage bijgewerkt")
+    log.info("Login S6 done — sessie geregistreerd")
 
     log.info("Login S7 — winkelbevestiging + navigeren (first_login=%s)", is_first_login)
     if is_first_login and store_number:
@@ -383,9 +405,8 @@ async def _do_login_core(
         except Exception:
             log.warning("Login S7 — store-bevestiging overgeslagen (NiceGUI context weg)")
 
-    log.info("Login S8 — on_success aanroepen")
-
-    on_success()
+    log.info("Login S8 — klaar")
+    return user_id
 
 
 # ── Store confirmation dialog (first login only) ───────────────────────────────

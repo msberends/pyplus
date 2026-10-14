@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
 from typing import Callable
 
 log = logging.getLogger(__name__)
+
+# Hard cap per re-login attempt, so a hung PLUS page can never stall the cart.
+_RELOGIN_TIMEOUT_S = 90
 
 
 @dataclass
@@ -181,13 +185,53 @@ class UserSession:
             return False
 
         try:
-            ok = await self.client.login(email, password)
-            if ok:
-                await self.client.get_session_state()
-            return ok
+            async with asyncio.timeout(_RELOGIN_TIMEOUT_S):
+                ok = await self.client.login(email, password)
+                if ok:
+                    await self.client.get_session_state()
+                    return True
         except Exception:
-            log.warning("relogin mislukt voor user=%d", self.user_id, exc_info=True)
+            log.warning(
+                "relogin in bestaande browser mislukt voor user=%d", self.user_id, exc_info=True
+            )
+
+        # The existing browser can be left in a state where the login form never
+        # appears (seen after the cart was changed on plus.nl). Fall back to the
+        # same clean-browser login that always works on the login page.
+        log.warning("relogin: nieuwe browser starten voor user=%d", self.user_id)
+        return await self._relogin_fresh_browser(email, password)
+
+    async def _relogin_fresh_browser(self, email: str, password: str) -> bool:
+        """Log in with a brand-new PlusClient and swap it in for the stale one."""
+        from plus.client import PlusClient
+
+        fresh = PlusClient(headless=True)
+        try:
+            async with asyncio.timeout(_RELOGIN_TIMEOUT_S):
+                await fresh.__aenter__()
+                if not await fresh.login(email, password):
+                    raise RuntimeError("login returned False")
+                await fresh.get_session_state()
+        except BaseException as exc:
+            # BaseException so a cancelled attempt still releases its browser.
+            try:
+                await fresh.__aexit__(None, None, None)
+            except Exception:
+                pass
+            if not isinstance(exc, Exception):
+                raise
+            log.warning(
+                "relogin met nieuwe browser mislukt voor user=%d", self.user_id, exc_info=True
+            )
             return False
+
+        old, self.client = self.client, fresh
+        try:
+            await old.__aexit__(None, None, None)
+        except Exception:
+            log.debug("Closing stale browser failed", exc_info=True)
+        log.info("relogin: nieuwe browser actief voor user=%d", self.user_id)
+        return True
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
