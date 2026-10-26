@@ -50,7 +50,7 @@ def organic_chip(alt: Product, on_click: Callable[[], None]) -> None:
         .on("click.stop", lambda _: on_click())
         .tooltip(t("organic.chip_tip", name=alt.name))
     ):
-        ui.icon("sym_r_eco", size="12px")
+        ui.icon("sym_r_autorenew", size="12px")
         ui.label(t("organic.chip"))
 
 
