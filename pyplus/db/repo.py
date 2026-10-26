@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 import logging
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -804,6 +804,48 @@ async def upsert_product_cache(db: AsyncSession, store_number: int, products: li
         await db.execute(stmt)
     await db.commit()
     return len(rows)
+
+
+async def set_organic_skus(db: AsyncSession, store_number: int, skus: set[str]) -> int:
+    """Flag exactly `skus` as organic in a store's catalogue; clear the flag elsewhere.
+
+    Returns the number of catalogue rows now flagged.
+    """
+    await db.execute(
+        update(ProductCache)
+        .where(ProductCache.store_number == store_number)
+        .values(is_organic=ProductCache.sku.in_(skus) if skus else False)
+    )
+    await db.commit()
+    return await count_organic_products(db, store_number)
+
+
+async def count_organic_products(db: AsyncSession, store_number: int) -> int:
+    result = await db.execute(
+        select(func.count())
+        .select_from(ProductCache)
+        .where(ProductCache.store_number == store_number, ProductCache.is_organic == True)  # noqa: E712
+    )
+    return int(result.scalar_one())
+
+
+async def get_organic_products(db: AsyncSession, store_number: int) -> list[ProductCache]:
+    """Available catalogue products at a store that are, or may be, organic.
+
+    The facet flag plus a coarse name/brand net ("bio", "organic") — PLUS's facet
+    misses some organic products. `services.organic.is_organic` decides exactly.
+    """
+    text_ = func.lower(ProductCache.name + " " + func.coalesce(ProductCache.brand, ""))
+    result = await db.execute(
+        select(ProductCache).where(
+            ProductCache.store_number == store_number,
+            ProductCache.is_available == True,  # noqa: E712
+            (ProductCache.is_organic == True)  # noqa: E712
+            | text_.contains("bio")
+            | text_.contains("organic"),
+        )
+    )
+    return list(result.scalars().all())
 
 
 # ── PromotionsCache ────────────────────────────────────────────────────────────

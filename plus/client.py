@@ -206,6 +206,10 @@ _SEARCH_PAGE_URL = "https://www.plus.nl/zoekresultaten?SearchTerm="
 
 # OutSystems EmptyListItem schema for search product list.
 # Modelled on _PURCHASE_HISTORY_EMPTY_ITEM — adjust if payload discovery reveals differences.
+# PLP facet "Keurmerken: Biologisch" — the authoritative organic flag. The product
+# items themselves carry no organic marker (their Logos hold e.g. "Laagblijver").
+ORGANIC_FILTER_QUERY = "&tn_fk_ae-keurmerken=Biologisch"
+
 _SEARCH_EMPTY_ITEM = {
     "SKU": "",
     "Brand": "",
@@ -1544,7 +1548,12 @@ class PlusClient:
         }
 
     def _build_search_payload(
-        self, query: str, store_number: int, page: int = 1, page_size: int = 24
+        self,
+        query: str,
+        store_number: int,
+        page: int = 1,
+        page_size: int = 24,
+        filter_query: str = "",
     ) -> dict:
         """Build the PLP search payload, matching the live browser request exactly.
 
@@ -1552,7 +1561,8 @@ class PlusClient:
         (not ``SearchTerm``), ``IsSearch`` must be True, pagination is ``PageNumber`` /
         ``URLPageNumber``, and the full variable set must be present or the server
         returns 12 unavailable dummy skeletons. Results come back in ``ProductList_All``.
-        ``page_size`` is unused — the server fixes the page size.
+        ``page_size`` is unused — the server fixes the page size. ``filter_query`` is
+        a PLP facet in plus.nl's URL form, e.g. ``ORGANIC_FILTER_QUERY``.
         """
         return {
             "versionInfo": self._session.version_info_for_search(),
@@ -1604,7 +1614,7 @@ class PlusClient:
                     "_isSearchInDataFetchStatus": 1,
                     "URLPageNumber": page,
                     "_uRLPageNumberInDataFetchStatus": 1,
-                    "FilterQueryURL": "",
+                    "FilterQueryURL": filter_query,
                     "_filterQueryURLInDataFetchStatus": 1,
                     "IsMobile": False,
                     "_isMobileInDataFetchStatus": 1,
@@ -1622,6 +1632,7 @@ class PlusClient:
         self,
         store_number: int | None = None,
         max_pages: int = 1200,
+        filter_query: str = "",
     ) -> list["Product"]:
         """
         Download the full store catalogue via the PLP search endpoint.
@@ -1633,7 +1644,8 @@ class PlusClient:
 
         Loop length is driven by the server's TotalPages; dedupes by SKU and stops
         early on an empty page or one that adds nothing new (defensive against the
-        server clamping the page number).
+        server clamping the page number). ``filter_query`` restricts the download
+        to one facet (e.g. ``ORGANIC_FILTER_QUERY``).
         """
         import time as _time
 
@@ -1651,7 +1663,9 @@ class PlusClient:
         t_all = _time.perf_counter()
 
         while page <= min(total_pages, max_pages):
-            payload = self._build_search_payload("", effective_store, page=page)
+            payload = self._build_search_payload(
+                "", effective_store, page=page, filter_query=filter_query
+            )
             result = await self._page.evaluate(
                 """async (payload) => {
                     const cookieMap = {};

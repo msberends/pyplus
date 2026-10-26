@@ -438,6 +438,25 @@ body {
 }
 .sp-cat-header:first-child { margin-top: 0; }
 
+/* "Bio" chip — opens the organic-alternative swap (cart, staples, dishes). */
+.sp-organic-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  align-self: flex-start;
+  background: var(--c-brand-tint);
+  color: var(--c-brand-dark);
+  border: 1px solid var(--c-brand);
+  font-size: 10px;
+  font-weight: var(--w-bold);
+  padding: 1px 6px 1px 4px;
+  border-radius: var(--r-full);
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+.sp-organic-chip:hover { background: var(--c-brand-tint-2); }
+
 /* Compact "on offer" tag — for cart + staples rows. */
 .sp-promo-tag {
   display: inline-flex;

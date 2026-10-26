@@ -640,6 +640,8 @@ class _IngRow:
     search_query: str = ""
     search_results: list = field(default_factory=list)
     searching: bool = False
+    organic_alt: object = None  # plus.models.Product — organic equivalent of `sku`
+    organic_checked_sku: str = ""  # sku the organic lookup last ran for
 
 
 async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) -> None:
@@ -876,6 +878,7 @@ async def _open_editor(user_id: int, session, dish_id: int | None, reload_fn) ->
                         return
                     for idx, row in enumerate(rows):
                         _render_ingredient_row(row, idx, rows, session, user_id, _ingredient_list)
+                    asyncio.ensure_future(_load_organic_alts(rows, session, _ingredient_list))
 
                 _ingredient_list()
 
@@ -1258,30 +1261,6 @@ async def _open_substitute_for_row(row: _IngRow, session, user_id: int, refresh_
         price = cached_sku.last_price or 0.0
         subtitle = subtitle or cached_sku.subtitle or ""
 
-    def _on_pick(product):
-        from pyplus.services.dishes import _parse_pack_from_subtitle
-
-        row.sku = product.sku
-        row.display_name = product.name
-        row.image_url = product.image_url
-        row.subtitle = product.subtitle or ""
-        row.price = product.price or 0.0
-        row.discontinued = False
-        pack_size, pack_unit = _parse_pack_from_subtitle(product.subtitle)
-        if pack_unit and row.amount_unit == "stuks":
-            row.amount_unit = pack_unit
-        row.pack_size = pack_size
-        row.pack_unit = pack_unit
-
-        async def _cache():
-            from pyplus.services.dishes import cache_ingredient_sku_from_product
-
-            async with AsyncSessionLocal() as db:
-                await cache_ingredient_sku_from_product(db, user_id, product)
-
-        asyncio.ensure_future(_cache())
-        refresh_fn.refresh()
-
     show_substitute_dialog(
         session,
         sku=row.sku,
@@ -1293,8 +1272,76 @@ async def _open_substitute_for_row(row: _IngRow, session, user_id: int, refresh_
         brand=brand,
         mode="cart",
         is_unavailable=row.discontinued,
-        on_select=_on_pick,
+        on_select=lambda product: _set_row_product(row, product, user_id, refresh_fn),
     )
+
+
+def _set_row_product(row: _IngRow, product, user_id: int, refresh_fn) -> None:
+    """Point an ingredient row at another product (saved with the dish)."""
+    from pyplus.services.dishes import _parse_pack_from_subtitle
+
+    row.sku = product.sku
+    row.display_name = product.name
+    row.image_url = product.image_url
+    row.subtitle = product.subtitle or ""
+    row.price = product.price or 0.0
+    row.discontinued = False
+    row.organic_alt = None  # re-checked for the new sku by _load_organic_alts
+    pack_size, pack_unit = _parse_pack_from_subtitle(product.subtitle)
+    if pack_unit and row.amount_unit == "stuks":
+        row.amount_unit = pack_unit
+    row.pack_size = pack_size
+    row.pack_unit = pack_unit
+
+    async def _cache():
+        from pyplus.services.dishes import cache_ingredient_sku_from_product
+
+        async with AsyncSessionLocal() as db:
+            await cache_ingredient_sku_from_product(db, user_id, product)
+
+    asyncio.ensure_future(_cache())
+    refresh_fn.refresh()
+
+
+async def _load_organic_alts(rows: list[_IngRow], session, refresh_fn) -> None:
+    """Find organic equivalents for rows not yet checked (cache-only); re-render on news."""
+    todo = [r for r in rows if r.sku and not r.flexible and r.organic_checked_sku != r.sku]
+    store = session.store_number or 0
+    if not todo or not store or not session.settings.show_organic_alternatives:
+        return
+    from pyplus.services.organic import get_organic_alternatives
+
+    try:
+        alts = await get_organic_alternatives(store, [r.sku for r in todo])
+    except Exception:
+        return
+    found = False
+    for r in todo:
+        r.organic_checked_sku = r.sku
+        r.organic_alt = alts.get(r.sku)
+        found = found or r.organic_alt is not None
+    if found:
+        refresh_fn.refresh()
+
+
+def _open_organic_for_row(row: _IngRow, user_id: int, refresh_fn) -> None:
+    from pyplus.ui.components.organic import OrganicSwap, show_organic_swap_dialog
+
+    alt = row.organic_alt
+    swap = OrganicSwap(
+        sku=row.sku,
+        name=row.display_name,
+        image=row.image_url,
+        subtitle=row.subtitle,
+        price=row.price,
+        qty=1,
+        alt=alt,
+    )
+
+    async def _confirm() -> None:
+        _set_row_product(row, alt, user_id, refresh_fn)
+
+    show_organic_swap_dialog(swap, _confirm)
 
 
 def _render_ingredient_row(
@@ -1363,6 +1410,14 @@ def _render_ingredient_row(
                         ui.label(t("status.discontinued")).classes(
                             "sp-badge sp-badge-unavailable"
                         ).style("font-size:10px;margin-right:.25rem")
+
+                    if row.organic_alt is not None and session.settings.show_organic_alternatives:
+                        ui.button(
+                            icon="sym_r_eco",
+                            on_click=lambda r=row: _open_organic_for_row(r, user_id, refresh_fn),
+                        ).props("flat dense round size=sm color=primary").tooltip(
+                            t("organic.chip_tip", name=row.organic_alt.name)
+                        )
 
                     async def _open_sub(r=row):
                         await _open_substitute_for_row(r, session, user_id, refresh_fn)

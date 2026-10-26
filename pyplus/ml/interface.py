@@ -142,6 +142,7 @@ class UserSettings(BaseModel):
     show_dish_metadata: bool = True  # meat/prep/veg chips on dishes + week menu
     show_promo_tags: bool = True  # "in de aanbieding" tags in cart + staples
     show_cart_savings: bool = True  # cheaper-pack hints + optimise button
+    show_organic_alternatives: bool = True  # "Bio" swap hints in cart, staples, dishes
     show_replenish_hints: bool = True  # "binnenkort op" highlights in staples
     confirm_clear_slot: bool = False  # ask before clearing a week-menu dish
     hide_unavailable_search: bool = False  # drop unavailable products from search

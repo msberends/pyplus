@@ -36,6 +36,7 @@ _PLUS_JOBS = {
     "refresh_products",
     "refresh_product_catalogue",
     "refresh_menu_categories",
+    "refresh_organic_flags",
     "full_preload",
     "weekly_ntfy",
 }

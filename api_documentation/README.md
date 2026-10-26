@@ -592,6 +592,15 @@ Each product (inside `PLP_Str`): `SKU`, `Brand`, `Name`, `Product_Subtitle`, `Sl
 `PromotionLabel`, `PromotionStartDate`, `PromotionEndDate`, `EAN`, `MaxOrderLimit`,
 `Categories.List[].Name`.
 
+**Facet filters.** `FilterQueryURL` takes a facet in plus.nl's URL form and restricts the
+result set (works with an empty `SearchKeyword`, so a whole facet can be paged through).
+The available facets come back in `data.FilterList.List[].Filter_Str` (`Name`, and
+`FilterItem.List[]` with `Name`, `Quantity`, `URL`): Aanbiedingen, Laagblijvers, Merk,
+Categorie, Nutri-Score, Keurmerken (Fairtrade, Biologisch, Planetproof, …), Dieet.
+Organic products: `"FilterQueryURL": "&tn_fk_ae-keurmerken=Biologisch"` (~560 products).
+The product items themselves carry no organic marker (`Logos` only holds e.g.
+"Laagblijver"), and the facet misses some products named "Biologisch …"/"BIO+ …".
+
 ---
 
 ### 6.10 Menu Categories (Product Group Order)

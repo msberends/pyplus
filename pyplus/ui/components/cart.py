@@ -11,6 +11,13 @@ import re
 from nicegui import ui
 
 from pyplus.i18n import t
+from pyplus.ui.components.organic import (
+    OrganicSwap,
+    organic_chip,
+    show_organic_bulk_dialog,
+    show_organic_swap_dialog,
+)
+from pyplus.ui.components.swap import swap_product_row
 from pyplus.ui.format import alt_text as _alt
 from pyplus.ui.format import thumbnail_url
 
@@ -86,6 +93,7 @@ def create_cart_panel(session) -> None:
     """Render the cart panel and wire it to the session's live cart."""
     cart_service = getattr(session, "cart_service", None)
     savings_by_sku: dict = {}  # sku → savings.Saving for the current cart
+    organic_by_sku: dict = {}  # sku → organic equivalent (plus.models.Product)
     promo_by_sku: dict = {}  # sku → Promotion for items currently on offer
     image_by_sku: dict = {}  # sku → catalogue image (fallback when cart line has none)
     slug_by_sku: dict = {}  # sku → product slug (for canonical plus.nl URLs)
@@ -254,6 +262,41 @@ def create_cart_panel(session) -> None:
                             "text-decoration:underline"
                         )
 
+            def _fill_organic(refs, item) -> None:
+                slot = refs["organic_slot"]
+                slot.clear()
+                alt = organic_by_sku.get(item.sku)
+                if (
+                    alt is None
+                    or not prefs.show_organic_alternatives
+                    or item.sku in session.syncing_skus
+                ):
+                    return
+                with slot:
+                    organic_chip(alt, lambda: _open_organic(item.sku))
+
+            def _open_organic(sku: str) -> None:
+                swap = _organic_swap(sku)
+                if swap is not None:
+                    show_organic_swap_dialog(
+                        swap, lambda: _apply_organic(session, cart_service, swap)
+                    )
+
+            def _organic_swap(sku: str) -> OrganicSwap | None:
+                # Read the line at click time — qty/image may have changed since the chip.
+                it, alt = _cart_item(sku), organic_by_sku.get(sku)
+                if it is None or alt is None:
+                    return None
+                return OrganicSwap(
+                    sku=sku,
+                    name=it.product,
+                    image=it.image_url or image_by_sku.get(sku, ""),
+                    subtitle=it.unit,
+                    price=it.price,
+                    qty=it.quantity,
+                    alt=alt,
+                )
+
             def _fill_origin(refs, item) -> None:
                 slot = refs.get("origin_slot")
                 if slot is None:
@@ -340,6 +383,9 @@ def create_cart_panel(session) -> None:
                         )
                         refs["promo_slot"] = ui.element("div").style("display:contents")
                         refs["saving_slot"] = ui.element("div").style("display:contents")
+                        refs["organic_slot"] = ui.element("div").style(
+                            "display:flex;margin-top:2px"
+                        )
                     with ui.element("div").style(
                         "display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0"
                     ):
@@ -356,6 +402,7 @@ def create_cart_panel(session) -> None:
                 _fill_stepper(refs, item)
                 _fill_promo(refs, item)
                 _fill_saving(refs, item)
+                _fill_organic(refs, item)
                 return refs
 
             def _update_row(refs, item) -> None:
@@ -385,6 +432,7 @@ def create_cart_panel(session) -> None:
                 if now_sync != refs.get("syncing"):
                     _fill_stepper(refs, item)  # toggle stepper ⇄ spinner
                     _fill_saving(refs, item)  # hide/show hint for the new sync state
+                    _fill_organic(refs, item)
                 else:
                     q = refs.get("qty")
                     if q is not None:
@@ -477,6 +525,7 @@ def create_cart_panel(session) -> None:
                 if new_skus:
                     asyncio.ensure_future(_load_promos())
                     asyncio.ensure_future(_load_images())
+                    asyncio.ensure_future(_load_organic())
                     if prefs.cart_grouping == "category":
                         asyncio.ensure_future(_load_categories())
                     if prefs.cart_sort == "recent":
@@ -551,6 +600,27 @@ def create_cart_panel(session) -> None:
                         }
                 _on_cart()
 
+            async def _load_organic() -> None:
+                """Look up organic equivalents for cart lines (cache-only) and show chips."""
+                if not prefs.show_organic_alternatives:
+                    return
+                store = getattr(session, "store_number", 0) or 0
+                skus = [it.sku for it in session.cart.items if it.sku]
+                if not store or not skus:
+                    return
+                from pyplus.services.organic import get_organic_alternatives
+
+                try:
+                    alts = await get_organic_alternatives(store, skus)
+                except Exception:
+                    return
+                organic_by_sku.update(alts)
+                for sku, refs in list(_rows.items()):
+                    item = _cart_item(sku)
+                    if item:
+                        _fill_organic(refs, item)
+                _update_organic_btn()
+
             async def _load_images() -> None:
                 """Backfill catalogue images for cart lines lacking one — one row at a time."""
                 store = getattr(session, "store_number", 0) or 0
@@ -589,6 +659,7 @@ def create_cart_panel(session) -> None:
             _sync()
             asyncio.ensure_future(_load_promos())  # drives on-offer row emphasis + tags
             asyncio.ensure_future(_load_images())
+            asyncio.ensure_future(_load_organic())
             if prefs.cart_grouping == "category":
                 asyncio.ensure_future(_load_categories())
                 if prefs.category_order == "plus":
@@ -651,6 +722,29 @@ def create_cart_panel(session) -> None:
                 )
                 optimise_btn.set_visibility(False)
 
+                organic_btn = (
+                    ui.button(icon="sym_r_eco", on_click=lambda: _open_organic_bulk())
+                    .props("flat rounded no-caps color=primary")
+                    .classes("sp-optimise-btn")
+                )
+                organic_btn.set_visibility(False)
+
+            def _organic_swaps() -> list[OrganicSwap]:
+                swaps = [_organic_swap(it.sku) for it in session.cart.items]
+                return [sw for sw in swaps if sw is not None]
+
+            def _update_organic_btn() -> None:
+                n = len(_organic_swaps()) if prefs.show_organic_alternatives else 0
+                organic_btn.set_text(t("organic.bulk_btn", n=n))
+                organic_btn.set_visibility(n > 0)
+
+            def _open_organic_bulk() -> None:
+                swaps = _organic_swaps()
+                if swaps:
+                    show_organic_bulk_dialog(
+                        swaps, lambda sw: _apply_organic(session, cart_service, sw)
+                    )
+
             _footer_expanded = [True]
 
             def _toggle_footer_details() -> None:
@@ -691,10 +785,18 @@ def create_cart_panel(session) -> None:
             with ui.element("div").style(
                 "display:flex;justify-content:center;gap:.25rem;margin-top:.375rem"
             ):
-                ui.button(
-                    icon="sym_r_print",
-                    on_click=lambda: _open_shopping_list_html(session),
-                ).props("flat round dense size=sm color=grey-6").tooltip(t("exports.text"))
+                # Open the tab inside the tap itself: mobile browsers block a
+                # window.open() that only arrives after the server round-trip.
+                ui.button(icon="sym_r_print").props(
+                    "flat round dense size=sm color=grey-6"
+                ).tooltip(t("exports.text")).on(
+                    "click",
+                    lambda: _open_shopping_list_html(session),
+                    js_handler=(
+                        "(...args) => { window.__spListWin = window.open('', '_blank'); "
+                        "emit(...args); }"
+                    ),
+                )
                 ui.button(
                     icon="sym_r_content_copy",
                     on_click=lambda: _copy_shopping_list(session),
@@ -781,6 +883,7 @@ def create_cart_panel(session) -> None:
         # Reconcile the keyed rows: qty/sync changes update in place (images keep
         # their DOM element), only added/removed/reordered rows touch the structure.
         _sync()
+        _update_organic_btn()
 
         # Savings depend on quantities too, so recompute on any change — debounced.
         _schedule_savings()
@@ -955,53 +1058,37 @@ async def _apply_saving(session, cart_service, s) -> None:
     ui.notify(t("cart.save_amount", amount=amt).capitalize(), type="positive", position="top")
 
 
-def _swap_product_row(
-    label: str,
-    image: str,
-    name: str,
-    subtitle: str,
-    qty: int,
-    unit_price: float,
-    total: float,
-    highlight: bool,
-) -> None:
-    """One product row in the swap dialog — formatted like a staples/promo row:
-    image · name + subtitle · quantity × unit price + total."""
-    border = "var(--c-brand)" if highlight else "var(--c-border)"
-    with ui.element("div").style(
-        "display:flex;align-items:center;gap:.625rem;padding:.5rem .625rem;"
-        f"border:1px solid {border};border-radius:var(--r-sm)"
-    ):
-        if image:
-            ui.image(thumbnail_url(image, 44)).style(
-                "width:44px;height:44px;object-fit:contain;border-radius:var(--r-sm);"
-                "background:var(--c-surface-2);flex-shrink:0"
-            ).props(f'alt="{_alt(name)}"')
-        else:
-            ui.element("div").style(
-                "width:44px;height:44px;border-radius:var(--r-sm);"
-                "background:var(--c-border);flex-shrink:0"
-            )
-        with ui.element("div").style("flex:1;min-width:0;overflow:hidden"):
-            ui.label(label).style(
-                "font-size:10px;font-weight:600;text-transform:uppercase;"
-                "letter-spacing:.03em;color:var(--c-text-4)"
-            )
-            ui.label(name).style(
-                "font-size:13px;font-weight:600;color:var(--c-text);line-height:1.3;"
-                "overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-            )
-            if subtitle:
-                ui.label(subtitle).style("font-size:11px;color:var(--c-text-3);line-height:1.2")
-        with ui.element("div").style(
-            "display:flex;flex-direction:column;align-items:flex-end;flex-shrink:0"
-        ):
-            ui.label(f"{qty}× € {unit_price:.2f}".replace(".", ",")).style(
-                "font-size:10px;color:var(--c-text-4)"
-            )
-            ui.label(f"€ {total:.2f}".replace(".", ",")).style(
-                "font-size:14px;font-weight:700;color:var(--c-text)"
-            )
+async def _apply_organic(session, cart_service, s: OrganicSwap) -> None:
+    """Swap a cart line for its organic equivalent, carrying over the line's origins."""
+    if not cart_service:
+        return
+    origins: list = []
+    try:
+        from pyplus.db import repo
+        from pyplus.db.engine import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            origins = (await repo.get_cart_provenance(db, session.user_id, [s.sku])).get(s.sku, [])
+            for o in reversed(origins):  # oldest first, so the newest stays newest
+                await repo.upsert_cart_provenance(
+                    db, session.user_id, s.alt.sku, o.kind, o.detail, o.via_autopilot
+                )
+    except Exception:
+        origins = []  # origins are cosmetic; never fail the swap over them
+    newest = origins[0] if origins else None
+    added = await cart_service.add(
+        s.alt.sku,
+        s.qty,
+        product_name=s.alt.name,
+        product_unit=s.alt.subtitle,
+        product_price=s.alt.price,
+        product_image=s.alt.image_url,
+        source=newest.kind if newest else "",
+        detail=newest.detail if newest else "",
+        via_autopilot=newest.via_autopilot if newest else False,
+    )
+    if added:
+        await cart_service.set_quantity(s.sku, 0)
 
 
 def _show_swap_dialog(session, cart_service, s, cur_image: str) -> None:
@@ -1024,7 +1111,7 @@ def _show_swap_dialog(session, cart_service, s, cur_image: str) -> None:
             with ui.element("div").style(
                 "padding:.75rem 1rem;display:flex;flex-direction:column;gap:.5rem"
             ):
-                _swap_product_row(
+                swap_product_row(
                     t("cart.swap_current"),
                     cur_image,
                     s.name,
@@ -1035,7 +1122,7 @@ def _show_swap_dialog(session, cart_service, s, cur_image: str) -> None:
                     highlight=False,
                 )
                 ui.icon("sym_r_south", size="18px").style("color:var(--c-text-4);align-self:center")
-                _swap_product_row(
+                swap_product_row(
                     t("cart.swap_suggested"),
                     s.new_image,
                     s.name,
@@ -1106,7 +1193,7 @@ def _show_optimise_dialog(
                         "display:flex;flex-direction:column;gap:.375rem;padding:.625rem 0;"
                         "border-bottom:1px solid var(--c-border)"
                     ):
-                        _swap_product_row(
+                        swap_product_row(
                             t("cart.swap_current"),
                             _cur_image(s.sku),
                             s.name,
@@ -1119,7 +1206,7 @@ def _show_optimise_dialog(
                         ui.icon("sym_r_south", size="16px").style(
                             "color:var(--c-text-4);align-self:center"
                         )
-                        _swap_product_row(
+                        swap_product_row(
                             t("cart.swap_suggested"),
                             s.new_image,
                             s.name,
@@ -1268,10 +1355,20 @@ async def _open_shopping_list_html(session) -> None:
         getattr(session, "store_number", 0) or 0,
         category_order=prefs.category_order,
     )
+    # Fill the tab the click handler opened; fall back to a new one (desktop).
     await ui.run_javascript(
         f"""
-        const blob = new Blob([{_json.dumps(document)}], {{type: 'text/html'}});
-        window.open(URL.createObjectURL(blob), '_blank');
+        const html = {_json.dumps(document)};
+        const w = window.__spListWin;
+        window.__spListWin = null;
+        if (w && !w.closed) {{
+            w.document.open();
+            w.document.write(html);
+            w.document.close();
+        }} else {{
+            const blob = new Blob([html], {{type: 'text/html'}});
+            window.open(URL.createObjectURL(blob), '_blank');
+        }}
         """
     )
 

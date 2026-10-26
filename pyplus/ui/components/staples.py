@@ -163,6 +163,18 @@ async def create_staples_lane(session) -> None:
 
                 promo_index = await get_promo_index(store)
 
+            # Organic equivalents (cache-only, no PLUS call).
+            organic_alts: dict = {}
+            if store and prefs.show_organic_alternatives and not _edit_state["editing"]:
+                from pyplus.services.organic import get_organic_alternatives
+
+                try:
+                    organic_alts = await get_organic_alternatives(
+                        store, [p.sku for p in products if p.sku]
+                    )
+                except Exception:
+                    log.warning("Organic lookup failed", exc_info=True)
+
             editing = _edit_state["editing"]
 
             # ── "Alles toevoegen" lives in the header; rebuild it each load ──
@@ -249,6 +261,8 @@ async def create_staples_lane(session) -> None:
                     purchased.get(fp.sku),
                     _qty_labels,
                     editing=editing,
+                    organic_alt=organic_alts.get(fp.sku),
+                    on_organic=lambda alt, fp=fp: _swap_staple_to_organic(session, fp, alt, _body),
                 )
 
             @ui.refreshable
@@ -395,160 +409,6 @@ async def _load_replenish(session) -> dict:
     return {}
 
 
-def _render_row(
-    fp: FixedProduct,
-    cached: IngredientSku | None,
-    catalogue_row,
-    catalogue_known: bool,
-    session,
-    cart_service,
-    replenish_score=None,
-    body_refresh=None,
-    promo=None,
-    purchased=None,
-    qty_labels: dict | None = None,
-) -> "tuple[ui.label | None, object]":
-    # Prefer the store catalogue (fresh, store-accurate) over the per-user sku_cache.
-    name = (catalogue_row.name if catalogue_row else None) or (
-        cached.name if cached else fp.display_name
-    )
-    subtitle = (catalogue_row.subtitle if catalogue_row else None) or (
-        cached.subtitle if cached else ""
-    )
-    if catalogue_row:
-        price = catalogue_row.price or 0.0
-    else:
-        price = cached.last_price or 0.0 if cached else 0.0
-    # Image: catalogue → pinned sku cache → purchase history. The last source
-    # keeps a picture for "niet verkrijgbaar" products no longer in the catalogue.
-    image = (
-        (catalogue_row.image_url if catalogue_row else None)
-        or (cached.image_url if cached else None)
-        or (purchased.image_url if purchased else "")
-    )
-    slug = (catalogue_row.slug if catalogue_row else None) or (cached.slug if cached else "")
-
-    # Availability: catalogue is authoritative. Not in catalogue (once synced) =
-    # the store no longer carries it → "vervallen". In catalogue = use its flag.
-    discontinued = (
-        catalogue_known
-        and catalogue_row is None
-        and cached is not None
-        and cached.last_seen_available is False
-    )
-    if catalogue_row is not None:
-        available = catalogue_row.is_available
-    elif cached and cached.last_seen_available is not None:
-        available = cached.last_seen_available
-    else:
-        available = None
-
-    from pyplus.i18n import t
-    from pyplus.ui.format import plus_product_url
-
-    product_url = plus_product_url(slug, fp.sku)
-
-    is_due = replenish_score is not None and replenish_score.is_due
-    row_style = "background:var(--c-brand-tint);border-radius:var(--r-sm)" if is_due else ""
-
-    with ui.element("div").classes("sp-staples-item").style(row_style):
-        # Product thumbnail (with availability dot overlaid in the corner)
-        with ui.element("div").style("position:relative;width:34px;height:34px;flex-shrink:0"):
-            if image:
-                ui.image(thumbnail_url(image, 34)).style(
-                    "width:34px;height:34px;border-radius:var(--r-sm);"
-                    "object-fit:contain;background:var(--c-surface-2)"
-                ).props(f'alt="{_alt(fp.display_name)}"')
-            else:
-                ui.element("div").style(
-                    "width:34px;height:34px;border-radius:var(--r-sm);background:var(--c-border)"
-                )
-            if not discontinued and available is not None and not available:
-                ui.element("div").classes("sp-avail-dot sp-avail-dot-no").style(
-                    "position:absolute;top:-2px;right:-2px"
-                )
-
-        # Name + subtitle + replenishment reason
-        with ui.element("div").style("flex:1;min-width:0;overflow:hidden"):
-            if product_url:
-                ui.link(name, product_url, new_tab=True).style(
-                    "font-size:13px;font-weight:500;color:var(--c-text);text-decoration:none;"
-                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3;"
-                    "display:block"
-                ).tooltip("Bekijken op plus.nl")
-            else:
-                ui.label(name).style(
-                    "font-size:13px;font-weight:500;color:var(--c-text);"
-                    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3"
-                )
-            if discontinued:
-                ui.label(t("status.discontinued")).classes("sp-badge sp-badge-unavailable").style(
-                    "font-size:10px;margin-top:1px;display:inline-block"
-                )
-            else:
-                reason_line = subtitle
-                if replenish_score and replenish_score.reason:
-                    reason_line = replenish_score.reason
-                if reason_line:
-                    ui.label(reason_line).style(
-                        "font-size:11px;color:var(--c-text-3);line-height:1.2"
-                    )
-
-        # On-offer tag (type of promotion, e.g. "1+1 GRATIS")
-        if promo is not None and not discontinued:
-            from pyplus.services.promos import promo_tag_label
-
-            tag_cls = "sp-promo-tag-fd" if promo.is_free_delivery else "sp-promo-tag"
-            ui.label(promo_tag_label(promo)).classes(tag_cls).style(
-                "flex-shrink:0;margin-right:.25rem"
-            ).tooltip(t("deals.free_delivery") if promo.is_free_delivery else "In de aanbieding")
-
-        # Price
-        if price > 0 and not discontinued:
-            ui.label(f"€ {price:.2f}".replace(".", ",")).style(
-                "font-size:12px;color:var(--c-text-3);flex-shrink:0;margin-right:.25rem"
-            )
-
-        # Stepper — only for products that can actually be bought. A
-        # "Niet verkrijgbaar" product has no add control. It lives in a stable slot
-        # so a cart change can re-render *just this control* (add-button ⇄ stepper ⇄
-        # spinner) in place, leaving the row (and its image element) untouched.
-        qty_lbl = None
-        refill = None
-        if not discontinued:
-            stepper_slot = ui.element("div").style("display:contents")
-
-            def _fill_stepper(slot=stepper_slot):
-                slot.clear()
-                cq = next((it.quantity for it in session.cart.items if it.sku == fp.sku), 0)
-                sync = fp.sku in session.syncing_skus
-                with slot:
-                    lbl = _render_stepper(fp, cq, sync, name, subtitle, price, image, cart_service)
-                if qty_labels is not None and fp.sku:
-                    if lbl is not None:
-                        qty_labels[fp.sku] = lbl
-                    else:
-                        qty_labels.pop(fp.sku, None)
-                return lbl
-
-            qty_lbl = _fill_stepper()
-            refill = _fill_stepper
-
-        # Remove from staples
-        if body_refresh is not None:
-
-            async def _delete(s=fp.sku) -> None:
-                async with AsyncSessionLocal() as db:
-                    await repo.remove_fixed_product(db, session.user_id, s)
-                body_refresh.refresh()
-
-            ui.button(icon="sym_r_close", on_click=lambda: asyncio.ensure_future(_delete())).props(
-                "flat round dense size=xs color=grey-5"
-            ).tooltip("Verwijderen uit vaste boodschappen")
-
-    return qty_lbl, refill
-
-
 def _render_card(
     fp: FixedProduct,
     cached: IngredientSku | None,
@@ -562,6 +422,8 @@ def _render_card(
     purchased=None,
     qty_labels: dict | None = None,
     editing: bool = False,
+    organic_alt=None,
+    on_organic=None,
 ) -> "tuple[ui.label | None, object]":
     """Render a product as a square card. Preserves in-place stepper update pattern."""
     name = (catalogue_row.name if catalogue_row else None) or (
@@ -671,6 +533,27 @@ def _render_card(
                 ui.label(subtitle).classes("sp-staples-card__sub")
             if replenish_score and replenish_score.reason:
                 ui.label(replenish_score.reason).classes("sp-staples-card__reason")
+            if organic_alt is not None and on_organic is not None:
+                from pyplus.ui.components.organic import (
+                    OrganicSwap,
+                    organic_chip,
+                    show_organic_swap_dialog,
+                )
+
+                swap = OrganicSwap(
+                    sku=fp.sku,
+                    name=name,
+                    image=image or "",
+                    subtitle=subtitle or "",
+                    price=price,
+                    qty=1,
+                    alt=organic_alt,
+                )
+                with ui.element("div").style("align-self:center"):
+                    organic_chip(
+                        organic_alt,
+                        lambda: show_organic_swap_dialog(swap, lambda: on_organic(organic_alt)),
+                    )
 
         # Price
         if price > 0 and not discontinued and available is not False:
@@ -714,7 +597,7 @@ def _render_card(
                     "font-size:10px;color:var(--c-text-3);text-align:center;opacity:.7"
                 )
 
-        # Stepper — same in-place update pattern as _render_row
+        # Stepper — lives in a stable slot so a cart change re-renders only this control
         qty_lbl = None
         refill = None
         if not discontinued and available is not False:
@@ -739,6 +622,26 @@ def _render_card(
             refill = _fill_stepper
 
     return qty_lbl, refill
+
+
+async def _swap_staple_to_organic(session, fp: FixedProduct, alt, body_refresh) -> None:
+    """Make the organic equivalent the staple, keeping its standard qty and frequency."""
+    from pyplus.services.dishes import cache_ingredient_sku_from_product
+
+    try:
+        async with AsyncSessionLocal() as db:
+            await cache_ingredient_sku_from_product(db, session.user_id, alt)
+            existing = {p.sku for p in await repo.get_fixed_products(db, session.user_id)}
+            if alt.sku in existing:
+                await repo.remove_fixed_product(db, session.user_id, fp.sku)
+            else:
+                await repo.replace_fixed_product_sku(db, session.user_id, fp.sku, alt.sku, alt.name)
+    except Exception as exc:
+        log.error("Organic staple swap failed: %s", exc)
+        ui.notify(t("status.error"), type="negative")
+        return
+    ui.notify(t("organic.staple_done", name=alt.name), type="positive", position="top")
+    body_refresh.refresh()
 
 
 def _render_frequency_toggle(fp, current_value: int, session) -> None:

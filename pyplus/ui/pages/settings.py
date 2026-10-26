@@ -596,6 +596,13 @@ def _render_behaviour(settings: UserSettings, save_fn) -> None:
     )
     _toggle_setting(
         settings,
+        "show_organic_alternatives",
+        "Biologische alternatieven tonen",
+        "Stel de biologische variant voor in de winkelwagen, vaste boodschappen en gerechten.",
+        save_fn,
+    )
+    _toggle_setting(
+        settings,
         "show_replenish_hints",
         "Voorraad-hints tonen",
         "Markeer vaste boodschappen die waarschijnlijk binnenkort op zijn (vereist slimme suggesties).",

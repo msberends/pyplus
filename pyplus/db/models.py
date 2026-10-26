@@ -271,6 +271,9 @@ class ProductCache(Base):
     # broad → specific, e.g. ["Verse kant-en-klaarmaaltijden", "Italiaanse
     # maaltijden", "Lasagne"]. May be 1+ layers. Captured during catalogue sync.
     categories_json: Mapped[str] = mapped_column(Text, default="[]")
+    # PLUS "Keurmerken: Biologisch" facet membership. Set by refresh_organic_flags,
+    # never by the catalogue upsert (the product items carry no organic marker).
+    is_organic: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     fetched_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=_utcnow)
 
 

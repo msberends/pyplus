@@ -391,6 +391,60 @@ async def refresh_product_catalogue(*, user_id: int, client, store_number: int) 
         await refresh_menu_categories(user_id=user_id, client=client)
     except Exception as exc:
         log.warning("[catalogue] menu category sync failed (non-fatal): %s", exc)
+    # Same piggyback for the organic flags: they must follow every catalogue write
+    # (new rows start unflagged) and need no schedule of their own.
+    try:
+        await refresh_organic_flags(user_id=user_id, client=client, store_number=store_number)
+    except Exception as exc:
+        log.warning("[catalogue] organic flag sync failed (non-fatal): %s", exc)
+
+
+async def refresh_organic_flags(*, user_id: int, client, store_number: int) -> None:
+    """
+    Flag the store's organic products in product_cache.
+
+    Downloads only the PLP facet "Keurmerken: Biologisch" (~50 pages) — the product
+    items carry no organic marker of their own. Store-scoped; runs as a step inside
+    refresh_product_catalogue, and standalone via the CLI.
+    """
+    resource = "organic"
+    if await _is_locked(user_id, resource):
+        return
+
+    t0 = datetime.datetime.now(datetime.UTC)
+    await _set_status(user_id, resource, "in_progress")
+    try:
+        from plus.client import ORGANIC_FILTER_QUERY
+        from pyplus.db import repo
+        from pyplus.db.engine import AsyncSessionLocal
+
+        products = await client.get_all_products_api(
+            store_number=store_number, filter_query=ORGANIC_FILTER_QUERY
+        )
+        skus = {p.sku for p in products if p.sku}
+        # An empty facet means the filter broke, not that PLUS dropped all organic
+        # products — keep the previous flags rather than wiping them.
+        if not skus:
+            raise RuntimeError("organic facet returned no products — flags kept")
+        async with AsyncSessionLocal() as db:
+            flagged = await repo.set_organic_skus(db, store_number, skus)
+
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(
+            user_id, resource, "ok", f"{flagged} organic products", duration_seconds=elapsed
+        )
+        log.info(
+            "[organic] user=%d store=%d — %d organic products (%d in catalogue)",
+            user_id,
+            store_number,
+            len(skus),
+            flagged,
+        )
+    except Exception as exc:
+        elapsed = (datetime.datetime.now(datetime.UTC) - t0).total_seconds()
+        await _set_status(user_id, resource, "error", str(exc)[:500], duration_seconds=elapsed)
+        log.error("[organic] user=%d FAILED: %s", user_id, exc)
+        raise
 
 
 async def refresh_menu_categories(*, user_id: int, client, store_number: int = 0) -> None:
