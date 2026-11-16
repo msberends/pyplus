@@ -131,35 +131,56 @@ class CartService:
         self.session.set_cart(Cart(items=[], final_total=0.0, savings=0.0))
 
         try:
+            from plus.client import _parse_cart_from_checkout
+
+            client = self.session.client
             async with self._api_lock:
+                # One call, as plus.nl's own "empty cart" does.
                 checkout = None
-                for item in items:
+                try:
+                    checkout = await client.clear_cart_api()
+                    remaining = _parse_cart_from_checkout(checkout).items
+                except Exception as exc:
+                    log.warning("Bulk cart clear failed, removing per item: %s", exc)
+                    # Refresh LineItemIds first so no item is skipped for lack of one.
+                    remaining = (await client.get_cart_api()).items
+
+                for item in remaining:
                     try:
-                        checkout = await self.session.client.remove_from_cart_api(
-                            item.sku, item.quantity
-                        )
+                        checkout = await client.remove_from_cart_api(item.sku, item.quantity)
                     except (RuntimeError, ValueError):
-                        log.debug("clear_all: remove sku=%s skipped (already gone)", item.sku)
-            if checkout:
-                from plus.client import _parse_cart_from_checkout
+                        log.warning("clear_all: remove sku=%s failed", item.sku)
 
-                new_cart = _parse_cart_from_checkout(checkout)
-                self.session.set_cart(new_cart)
-
-            try:
-                from pyplus.db import repo as _repo
-                from pyplus.db.engine import AsyncSessionLocal as _ASL
-
-                async with _ASL() as _db:
-                    await _repo.clear_all_cart_provenance(_db, self.session.user_id)
-            except Exception:
-                log.debug("Cart provenance clear-all failed", exc_info=True)
+                # Reconcile from PLUS, so the UI never shows an empty cart PLUS still has.
+                if checkout is None or remaining:
+                    new_cart = await client.get_cart_api()
+                else:
+                    new_cart = _parse_cart_from_checkout(checkout)
         except Exception as exc:
             log.warning("Clear cart error: %s", exc)
             self.session.set_cart(snapshot)
             from pyplus.i18n import t
 
             self.session.notify_error(t("cart.clear_failed"))
+            return
+
+        # PLUS's state is authoritative from here on, even if partially cleared.
+        self.session.set_cart(new_cart)
+        if new_cart.items:
+            log.warning("Clear cart: %d items left on PLUS", len(new_cart.items))
+            from pyplus.i18n import t
+
+            self.session.notify_error(t("cart.clear_failed"))
+            return
+
+        try:
+            from pyplus.db import repo as _repo
+            from pyplus.db.engine import AsyncSessionLocal as _ASL
+
+            async with _ASL() as _db:
+                await _repo.clear_all_cart_provenance(_db, self.session.user_id)
+        except Exception:
+            log.debug("Cart provenance clear-all failed", exc_info=True)
 
     # ── Internal ───────────────────────────────────────────────────────────────
 

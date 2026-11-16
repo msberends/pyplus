@@ -1327,6 +1327,26 @@ async def get_latest_autopilot_plan(
     return result.scalar_one_or_none()
 
 
+async def get_recent_confirmed_autopilot_plan(
+    db: AsyncSession,
+    user_id: int,
+    since: datetime.datetime,
+) -> AutopilotPlan | None:
+    """Most recently confirmed plan with a cart snapshot, confirmed at/after ``since`` (UTC)."""
+    result = await db.execute(
+        select(AutopilotPlan)
+        .where(
+            AutopilotPlan.user_id == user_id,
+            AutopilotPlan.status == "confirmed",
+            AutopilotPlan.cart_snapshot_json.is_not(None),
+            AutopilotPlan.confirmed_at >= since,
+        )
+        .order_by(AutopilotPlan.confirmed_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 async def upsert_autopilot_plan(
     db: AsyncSession,
     user_id: int,

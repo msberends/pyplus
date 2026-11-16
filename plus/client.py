@@ -430,6 +430,12 @@ class PlusClient:
                         ):
                             self._session.cart_get_api_version = av
                         if (
+                            "ActionCheckout_SoftDelete" in url
+                            and not self._session.cart_soft_delete_api_version
+                        ):
+                            self._session.cart_soft_delete_api_version = av
+                            version_cache.save_from_session(self._session)
+                        if (
                             "ActionCheckoutItem_Remove" in url
                             and not self._session.cart_remove_api_version
                         ):
@@ -1987,6 +1993,133 @@ class PlusClient:
             raise RuntimeError("Geen 'Checkout' in remove response")
 
         raise RuntimeError("remove_from_cart_api: max retries exhausted")
+
+    # ------------------------------------------------------------------
+    # Clear cart — direct API (single call, as plus.nl's own "empty cart")
+    # ------------------------------------------------------------------
+
+    async def _discover_soft_delete_api_version(self) -> str:
+        """Read the ActionCheckout_SoftDelete apiVersion from PLUS.nl's compiled cart script.
+
+        Priming by intercepting a browser request is not an option here: the only
+        way to make the browser send it is to actually empty the cart. The hash is
+        a literal in CartContent.mvc.js, located via the public moduleinfo index.
+        """
+        found = await self._page.evaluate(
+            """async () => {
+                const info = await (await fetch('/moduleservices/moduleinfo',
+                    {credentials: 'include'})).json();
+                const urls = (info.manifest && info.manifest.urlVersions) || {};
+                const key = Object.keys(urls).find(
+                    u => u.endsWith('/ECP_Cart_CW.Cart.CartContent.mvc.js'));
+                if (!key) return '';
+                const js = await (await fetch(key + urls[key])).text();
+                const m = js.match(
+                    /ActionCheckout_SoftDelete",\\s*"([A-Za-z0-9_+\\/=-]+)"/);
+                return m ? m[1] : '';
+            }"""
+        )
+        if found:
+            self._session.cart_soft_delete_api_version = found
+            version_cache.save_from_session(self._session)
+            log.info("[API] SoftDelete apiVersion discovered from cart script")
+        return found
+
+    async def _sync_browser_cart_id(self, cart_id: str, version: int) -> None:
+        """Mirror plus.nl's Cart_Client_SetId after a cart is replaced server-side.
+
+        The front end keeps the active cart in the ``CartId_Web`` client variable;
+        without this, a later page load in this browser context would request the
+        old (deleted) checkout. Best-effort: failures are logged, not raised.
+        """
+        try:
+            ok = await self._page.evaluate(
+                """([id, ver]) => new Promise(resolve => {
+                    if (typeof require !== 'function') return resolve(false);
+                    require(['ECOP_FE_Core.clientVariables'], cv => {
+                        try { cv.setCartId_Web(id); cv.setCartVersion_Web(ver); resolve(true); }
+                        catch (e) { resolve(false); }
+                    }, () => resolve(false));
+                })""",
+                [cart_id, version],
+            )
+            if not ok:
+                log.warning("[API] Could not update CartId_Web in browser after cart replace")
+        except Exception:
+            log.warning("[API] CartId_Web sync failed", exc_info=True)
+
+    async def clear_cart_api(self) -> dict:
+        """Empty the whole cart in one call (``ActionCheckout_SoftDelete``).
+
+        Returns the new (empty) checkout and adopts its Id/Version. Rediscovers the
+        apiVersion once if PLUS reports it changed. Raises RuntimeError on failure.
+        """
+        if not self._session.cart_soft_delete_api_version:
+            if not await self._discover_soft_delete_api_version():
+                raise RuntimeError("SoftDelete apiVersion niet gevonden")
+
+        for attempt in range(2):
+            payload = {
+                "versionInfo": self._session.version_info_for_soft_delete(),
+                "viewName": "MainFlow.Cart",
+                "inputParameters": {
+                    "IsOrderEditMode": False,
+                    "CheckoutId": self._session.checkout_id,
+                    "OrderEditId": "",
+                    "OneWelcomeUserId": self._session.onewelcome_user_id,
+                },
+            }
+            result = await self._page.evaluate(
+                """async (payload) => {
+                    const cookieMap = {};
+                    document.cookie.split('; ').forEach(c => {
+                        const eq = c.indexOf('=');
+                        if (eq > 0) cookieMap[c.slice(0, eq)] = c.slice(eq + 1);
+                    });
+                    const nr2 = decodeURIComponent(cookieMap['nr2Users'] || '');
+                    const crfField = nr2.split(';').find(p => p.trim().startsWith('crf=')) || '';
+                    const csrfToken = crfField.slice(crfField.indexOf('=') + 1);
+                    const resp = await fetch(
+                        'https://www.plus.nl/screenservices/ECP_Cart_CW/Cart/CartContent/ActionCheckout_SoftDelete',
+                        {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'x-csrftoken': csrfToken,
+                                'outsystems-locale': 'nl-NL'
+                            },
+                            body: JSON.stringify(payload),
+                            credentials: 'include'
+                        }
+                    );
+                    if (!resp.ok) {
+                        const body = await resp.text().catch(() => '');
+                        throw new Error('HTTP ' + resp.status + ' — ' + body.slice(0, 300));
+                    }
+                    return await resp.json();
+                }""",
+                payload,
+            )
+
+            checkout = (result.get("data") or {}).get("Checkout")
+            if checkout and checkout.get("Id"):
+                if checkout["Id"] != self._session.checkout_id:
+                    await self._sync_browser_cart_id(checkout["Id"], checkout.get("Version", 0))
+                self._session.checkout_id = checkout["Id"]
+                self._session.checkout_version = checkout.get("Version", 0)
+                self._session.line_item_ids.clear()
+                self._update_line_item_ids(checkout)
+                return checkout
+
+            vi = result.get("versionInfo", {})
+            if vi.get("hasApiVersionChanged") and attempt == 0:
+                self._session.cart_soft_delete_api_version = ""
+                if await self._discover_soft_delete_api_version():
+                    continue
+            log.warning("[API] Unexpected SoftDelete response: %s", str(result)[:300])
+            raise RuntimeError("Geen 'Checkout' in SoftDelete response")
+
+        raise RuntimeError("clear_cart_api: max retries exhausted")
 
     async def get_session_state(self) -> SessionState:
         """

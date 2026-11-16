@@ -9,6 +9,9 @@ from nicegui import app, ui
 
 log = logging.getLogger(__name__)
 
+# How long after confirming an autopilot plan the cart offers to undo it.
+AUTOPILOT_UNDO_WINDOW = datetime.timedelta(hours=24)
+
 
 async def create_cart_page() -> None:
     user_id = app.storage.user.get("user_id")
@@ -83,12 +86,13 @@ async def _maybe_show_autopilot_banner(user_id: int, session) -> None:
     from pyplus.db.engine import AsyncSessionLocal
     from pyplus.i18n import t
 
-    today = datetime.date.today()
-    week_start = today - datetime.timedelta(days=today.weekday())
+    # Offer undo only shortly after confirming: later the cart has moved on (e.g. the
+    # list was printed and bought in-store) and removing the snapshot would be wrong.
+    since = datetime.datetime.now(datetime.UTC).replace(tzinfo=None) - AUTOPILOT_UNDO_WINDOW
     async with AsyncSessionLocal() as db:
-        plan = await repo.get_autopilot_plan(db, user_id, week_start)
+        plan = await repo.get_recent_confirmed_autopilot_plan(db, user_id, since)
 
-    if plan is None or plan.status != "confirmed" or not plan.cart_snapshot_json:
+    if plan is None:
         return
 
     import json

@@ -31,6 +31,7 @@ class SessionState:
     cart_add_api_version: str = ""  # specifically from ActionCheckoutItem_Add
     cart_remove_api_version: str = ""  # from ActionCheckoutItem_Remove
     cart_get_api_version: str = ""  # from DataActionGetCartById
+    cart_soft_delete_api_version: str = ""  # from CartContent/ActionCheckout_SoftDelete
     promotions_api_version: str = ""  # from DataActionGetPromotionList_Optimization
     promo_detail_api_version: str = ""  # from DataActionPromotionOfferDetail_Get
     purchase_history_api_version: str = ""  # from RecentlyBoughtProducts/DataActionGetProducts
@@ -61,6 +62,12 @@ class SessionState:
         return {
             "moduleVersion": self.cart_module_version or self.module_version,
             "apiVersion": self.cart_remove_api_version or self.cart_api_version or self.api_version,
+        }
+
+    def version_info_for_soft_delete(self) -> dict:
+        return {
+            "moduleVersion": self.cart_module_version or self.module_version,
+            "apiVersion": self.cart_soft_delete_api_version,
         }
 
     def version_info_for_add(self) -> dict:

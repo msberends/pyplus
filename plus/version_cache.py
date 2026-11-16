@@ -19,6 +19,7 @@ _KEYS = (
     "cart_add_api_version",
     "cart_remove_api_version",
     "cart_get_api_version",
+    "cart_soft_delete_api_version",
     "cart_module_version",
     "cart_api_version",
     "promotions_api_version",

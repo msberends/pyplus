@@ -5,9 +5,10 @@ from __future__ import annotations
 import datetime
 import logging
 import secrets
+from pathlib import Path
 
 from fastapi import Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from nicegui import app, ui
 
 from pyplus.api.router import api_router
@@ -82,6 +83,48 @@ async def settings_page() -> None:
     from pyplus.ui.pages.settings import create_settings_page
 
     await create_settings_page()
+
+
+# ── Home-screen web app ──────────────────────────────────────────────────────
+
+_STATIC_DIR = Path(__file__).parent / "static"
+app.add_static_files("/static", _STATIC_DIR)
+
+
+@app.get("/manifest.webmanifest")
+async def serve_manifest() -> JSONResponse:
+    """Web app manifest: lets iOS/Android run PyPLUS as a standalone home-screen app.
+
+    ``scope`` must be explicit; without it older iOS versions open every link in Safari.
+    """
+    from pyplus.ui.theme import background_color, theme_color
+
+    icons = [
+        {"src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
+        {"src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png"},
+        {
+            "src": "/static/icons/icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable",
+        },
+    ]
+    return JSONResponse(
+        {
+            "id": "/",
+            "name": "PyPLUS",
+            "short_name": "PyPLUS",
+            "lang": "nl",
+            "start_url": "/",
+            "scope": "/",
+            "display": "standalone",
+            "orientation": "any",
+            "theme_color": theme_color(),
+            "background_color": background_color(),
+            "icons": icons,
+        },
+        media_type="application/manifest+json",
+    )
 
 
 # ── iCal subscription endpoint ───────────────────────────────────────────────
@@ -207,6 +250,8 @@ if __name__ in {"__main__", "__mp_main__"}:
         port=settings.port,
         title="PyPLUS",
         favicon="🧺",
+        # viewport-fit=cover exposes the iOS safe-area insets used in theme.py
+        viewport="width=device-width, initial-scale=1, viewport-fit=cover",
         dark=False,
         storage_secret=_storage_secret,
         show=False,

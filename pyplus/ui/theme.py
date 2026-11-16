@@ -115,6 +115,13 @@ def _colors_css() -> str:
 _CSS = """
 /* ─── Non-colour design tokens ───────────────────────────────────────────── */
 :root {
+  /* Mobile bottom nav: content height, plus extra space below it for the iOS home
+     indicator (0 outside a standalone web app; needs viewport-fit=cover, set in
+     ui.run). The full 34px inset looks oversized; 16px keeps the buttons clear of
+     the indicator, which is ~13px tall from the screen edge. */
+  --sp-nav-h: 52px;
+  --sp-safe-bottom: max(calc(env(safe-area-inset-bottom, 0px) - 18px), 0px);
+
   /* Shadows — eliminated; depth comes from borders */
   --shadow-xs: none;
   --shadow-sm: none;
@@ -703,13 +710,15 @@ body {
 }
 .sp-nav-logo {
   width: 34px; height: 34px;
-  background: var(--c-brand-dark);
-  border-radius: var(--r-lg);
-  display: flex; align-items: center; justify-content: center;
+  display: block;
   margin: .75rem auto .75rem;
   flex-shrink: 0;
   align-self: center;
+  border-radius: 22%;  /* app-icon corner, matching the home-screen icon */
+  overflow: hidden;
+  cursor: pointer;
 }
+.sp-nav-logo img { width: 100%; height: 100%; display: block; }
 .sp-nav-btn {
   padding: .625rem 0;
   border-radius: 0;
@@ -1744,25 +1753,33 @@ body {
   .sp-cockpit-root { flex-direction: column; width: 100%; }
 
   .sp-nav-rail {
-    width: 100%; height: 58px; flex-direction: row;
+    width: 100%; height: calc(var(--sp-nav-h) + var(--sp-safe-bottom)); flex-direction: row;
+    align-items: stretch;
     justify-content: space-around; border-right: none;
-    border-top: 1px solid var(--c-border); order: 3; padding: 0 .5rem;
+    border-top: 1px solid var(--c-border); order: 3;
+    padding: 0 .5rem var(--sp-safe-bottom);
     position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
-    background: var(--c-surface); gap: 0;
+    gap: 0;
   }
-  .sp-nav-logo { display: none; }
+  .sp-nav-logo { width: 30px; height: 30px; margin: 0 7px; align-self: center; }
   .sp-nav-spacer { display: none; }
   .sp-nav-logout { display: none; }
   .sp-nav-label { display: none; }
-  .sp-nav-btn { width: 44px; height: 44px; padding: 0; flex-direction: row; }
+  .sp-nav-btn { width: 44px; height: auto; padding: 0; flex-direction: row; }
   .sp-nav-btn.active { box-shadow: inset 0 2px 0 0 var(--c-brand-dark); }
   .sp-nav-btn--autopilot.active { box-shadow: inset 0 2px 0 0 var(--c-accent); }
+  /* Tinted bar so it stands apart from the white cards; the selected page is the
+     white "cut-out". Hover is neutralised: on touch screens it sticks after a tap. */
+  .sp-nav-rail { background: var(--c-brand-tint); border-top-color: var(--c-brand-tint-2); }
+  .sp-nav-btn:hover { background: transparent; }
+  .sp-nav-btn.active, .sp-nav-btn.active:hover,
+  .sp-nav-btn--autopilot.active { background: var(--c-surface); }
 
   /* Page-based views (weekmenu / promos / staples / cart / dishes / settings):
      sp-page-content is the only child, fills 100vh, scrolls natively. */
   .sp-page-content {
     width: 100%;
-    padding: .875rem .875rem calc(58px + 1.25rem);
+    padding: .875rem .875rem calc(var(--sp-nav-h) + 1.25rem + var(--sp-safe-bottom));
     overflow-y: auto;
     overflow-x: hidden;  /* prevent wide children from creating horizontal scroll */
     flex: 1 1 0;
@@ -1780,13 +1797,13 @@ body {
   /* Sticky total footer — floats above the bottom nav bar so price+checkout are always visible */
   .sp-cart-footer {
     position: sticky;
-    bottom: 58px;
+    bottom: calc(var(--sp-nav-h) + var(--sp-safe-bottom));
     z-index: 20;
     background: var(--c-surface);
     border-top: 1px solid var(--c-border);
     border-radius: 0 0 var(--r-xl) var(--r-xl);
   }
-  .sp-mobile-cart-bar { display: flex; bottom: 58px; }
+  .sp-mobile-cart-bar { display: flex; bottom: calc(var(--sp-nav-h) + var(--sp-safe-bottom)); }
 
   /* Weekmenu grids: 1 col on mobile */
   .sp-weekmenu-grid { grid-template-columns: 1fr; }
@@ -1817,12 +1834,51 @@ document.addEventListener('click', function(e) {
 """
 
 
-def apply_theme() -> None:
-    """Inject Inter font, design tokens, and all component CSS into the current page."""
+# Home-screen web app metadata (manifest served by pyplus.__main__). The
+# status-bar style "default" keeps page content below the iOS status bar.
+_WEB_APP_HEAD = (
+    '<link rel="manifest" href="/manifest.webmanifest">'
+    '<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">'
+    f'<meta name="theme-color" content="{_P["surface"]}">'
+    '<meta name="mobile-web-app-capable" content="yes">'
+    '<meta name="apple-mobile-web-app-capable" content="yes">'
+    '<meta name="apple-mobile-web-app-status-bar-style" content="default">'
+    '<meta name="apple-mobile-web-app-title" content="PyPLUS">'
+)
+
+_shared_assets_added = False
+
+
+def _add_shared_assets() -> None:
+    """Register fonts, scripts and CSS for all pages, exactly once per process.
+
+    ``shared=True`` appends to a process-wide list, so calling it on every page
+    load would duplicate the whole stylesheet in each subsequent response.
+    """
+    global _shared_assets_added
+    if _shared_assets_added:
+        return
+    _shared_assets_added = True
+    ui.add_head_html(_WEB_APP_HEAD, shared=True)
     ui.add_head_html(_GOOGLE_FONTS, shared=True)
     ui.add_head_html(_COLLAPSE_JS, shared=True)
     ui.add_css(_colors_css(), shared=True)
     ui.add_css(_CSS, shared=True)
+
+
+def theme_color() -> str:
+    """Browser/status-bar colour, also used by the web app manifest."""
+    return _P["surface"]
+
+
+def background_color() -> str:
+    """Page background colour, used as the manifest splash background."""
+    return _P["bg"]
+
+
+def apply_theme() -> None:
+    """Inject fonts, design tokens, and all component CSS into the current page."""
+    _add_shared_assets()
     ui.colors(
         primary=_P["brand_dark"],
         secondary=_P["brand"],

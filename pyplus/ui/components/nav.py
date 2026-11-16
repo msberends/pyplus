@@ -20,14 +20,9 @@ _NAV_ITEMS = [
 def create_nav_rail(active: str = "weekmenu", user_display_name: str = "", session=None) -> None:
     """Render the left navigation rail."""
     with ui.element("div").classes("sp-nav-rail"):
-        # Logo mark
-        with (
-            ui.element("div")
-            .classes("sp-nav-logo")
-            .style("display:flex;align-items:center;justify-content:center;cursor:pointer")
-            .on("click", lambda: ui.navigate.to("/weekmenu"))
-        ):
-            ui.icon("sym_r_storefront", size="20px").style("color:white")
+        # Logo mark: the home-screen app icon, linking to the week menu
+        with ui.element("a").props('href="/weekmenu" title="PyPLUS"').classes("sp-nav-logo"):
+            ui.element("img").props('src="/static/icons/icon.svg" alt=""')
 
         # Nav buttons
         cart_badge = None

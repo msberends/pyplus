@@ -216,3 +216,47 @@ async def test_dish_availability_counts(sf):
 
         avail, unavail, unknown = await repo.get_dish_availability(db, USER, dish.id)
     assert (avail, unavail, unknown) == (1, 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_recent_confirmed_autopilot_plan_respects_window(sf):
+    from pyplus.db.models import AutopilotPlan
+
+    now = datetime.datetime(2026, 11, 16, 12, 0)
+    async with sf() as db:
+        db.add_all(
+            [
+                AutopilotPlan(
+                    user_id=USER,
+                    week_start=datetime.date(2026, 11, 9),
+                    status="confirmed",
+                    plan_json="{}",
+                    cart_snapshot_json="[]",
+                    confirmed_at=now - datetime.timedelta(days=8),
+                ),
+                AutopilotPlan(
+                    user_id=USER,
+                    week_start=datetime.date(2026, 11, 16),
+                    status="expired",
+                    plan_json="{}",
+                ),
+            ]
+        )
+        await db.commit()
+
+        since = now - datetime.timedelta(hours=24)
+        assert await repo.get_recent_confirmed_autopilot_plan(db, USER, since) is None
+
+        fresh = AutopilotPlan(
+            user_id=USER,
+            week_start=datetime.date(2026, 11, 23),
+            status="confirmed",
+            plan_json="{}",
+            cart_snapshot_json="[]",
+            confirmed_at=now - datetime.timedelta(hours=2),
+        )
+        db.add(fresh)
+        await db.commit()
+        got = await repo.get_recent_confirmed_autopilot_plan(db, USER, since)
+        assert got is not None and got.id == fresh.id
+        assert await repo.get_recent_confirmed_autopilot_plan(db, USER + 1, since) is None
